@@ -44,8 +44,8 @@ python3 lutristosunshine.py
 Alternatively, you can download the binary available in the "Actions" section of the GitHub repository. Download the binary from the latest workflow run artifacts, make it executable, and run it:
 
 ```bash
-chmod +x add_lutris_to_sunshine
-./add_lutris_to_sunshine
+chmod +x lutristosunshine
+./lutristosunshine
 ```
 
 ## License
