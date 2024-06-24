@@ -31,13 +31,15 @@ This tool is designed to work with Sunshine installed on the host and Lutris. I'
 ```
 ## Usage
 
-1. Run the script:
+1. Ensure that Lutris is closed before running the script.
+
+2. Run the script:
 
 ```sh
 python3 lutristosunshine.py
 ```
 
-2. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
+3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)
