@@ -34,7 +34,7 @@ This tool is designed to work with Sunshine installed on the host and Lutris. I'
 1. Run the script:
 
 ```sh
-python3 add_lutris_to_sunshine.py
+python3 lutristosunshine.py
 ```
 
 2. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
