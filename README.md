@@ -27,7 +27,7 @@ This tool is designed to work with Sunshine installed on the host and Lutris. I'
 2. Install required Python libraries:
 
 ```bash
-  pip install requests Pillow requests
+  pip install requests Pillow
 ```
 ## Usage
 
