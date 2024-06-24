@@ -25,5 +25,5 @@ jobs:
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: lutris-to-sunshine-binary
+        name: lutristosunshine
         path: dist/lutristosunshine
