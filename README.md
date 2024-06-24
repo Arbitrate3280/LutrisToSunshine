@@ -35,11 +35,19 @@ This tool is designed to work with Sunshine installed on the host and Lutris. I'
 
 2. Run the script:
 
-```sh
+```bash
 python3 lutristosunshine.py
 ```
 
 3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
+
+Alternatively, you can download the binary available in the "Actions" section of the GitHub repository. Download the binary from the latest workflow run artifacts, make it executable, and run it:
+
+```bash
+chmod +x add_lutris_to_sunshine
+./add_lutris_to_sunshine
+```
+
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit/)
