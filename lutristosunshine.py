@@ -23,6 +23,16 @@ def is_lutris_installed():
     result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return result.returncode == 0
 
+def is_lutris_running():
+    # Get the name of our script
+    our_script_name = os.path.basename(__file__)
+
+    # Construct a command that excludes our script and grep from the search
+    cmd = f"ps aux | grep -v grep | grep -v {our_script_name} | grep -E " + r"'(^|\s)lutris($|\s)|net\.lutris\.Lutris'"
+
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return result.returncode == 0 and result.stdout.strip() != b''
+
 def list_lutris_games():
     if is_flatpak_installed():
         cmd = "flatpak run net.lutris.Lutris -lo --json"
@@ -109,6 +119,10 @@ def save_api_key(api_key):
         file.write(api_key)
 
 def main():
+    if is_lutris_running():
+        print("Error: Lutris is currently running. Please close Lutris and try again.")
+        return
+
     download_images = input("Do you want to download images from SteamGridDB? (y/n): ").strip().lower()
     api_key = None
     if download_images == 'y':
