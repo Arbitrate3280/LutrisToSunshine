@@ -41,7 +41,7 @@ python3 lutristosunshine.py
 
 3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
 
-Alternatively, you can download the binary available in the "Actions" section of the GitHub repository. Download the binary from the latest workflow run artifacts, make it executable, and run it:
+Alternatively, you can download the binary available in the "Releases" section of the GitHub repository. Download the binary from the latest release, make it executable, and run it:
 
 ```bash
 chmod +x lutristosunshine
