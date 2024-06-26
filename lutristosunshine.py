@@ -119,67 +119,74 @@ def save_api_key(api_key):
         file.write(api_key)
 
 def main():
-    if is_lutris_running():
-        print("Error: Lutris is currently running. Please close Lutris and try again.")
-        return
+    try:
+        if is_lutris_running():
+            print("Error: Lutris is currently running. Please close Lutris and try again.")
+            return
 
-    download_images = input("Do you want to download images from SteamGridDB? (y/n): ").strip().lower()
-    api_key = None
-    if download_images == 'y':
-        api_key = load_api_key()
-        if not api_key:
-            api_key = input("Please enter your SteamGridDB API key: ").strip()
-            save_api_key(api_key)
+        download_images = input("Do you want to download images from SteamGridDB? (y/n): ").strip().lower()
+        api_key = None
+        if download_images == 'y':
+            api_key = load_api_key()
+            if not api_key:
+                api_key = input("Please enter your SteamGridDB API key: ").strip()
+                save_api_key(api_key)
 
-    games = list_lutris_games()
-    if not games:
-        return
+        games = list_lutris_games()
+        if not games:
+            return
 
-    sunshine_data = load_sunshine_apps()
-    existing_game_names = [app["name"] for app in sunshine_data["apps"]]
+        sunshine_data = load_sunshine_apps()
+        existing_game_names = [app["name"] for app in sunshine_data["apps"]]
 
-    print("Games found in Lutris:")
-    for idx, (_, game_name) in enumerate(games):
-        status = "(already in Sunshine)" if game_name in existing_game_names else ""
-        print(f"{idx + 1}. {game_name} {status}")
+        print("Games found in Lutris:")
+        for idx, (_, game_name) in enumerate(games):
+            status = "(already in Sunshine)" if game_name in existing_game_names else ""
+            print(f"{idx + 1}. {game_name} {status}")
 
-    print(f"{len(games) + 1}. Add all games")
+        print(f"{len(games) + 1}. Add all games")
 
-    selection = input("Enter the number of the game you want to add to Sunshine (comma-separated for multiple, or add all): ")
-    if selection.strip() == str(len(games) + 1):
-        selected_indices = list(range(len(games)))
-    else:
-        selected_indices = [int(i.strip()) - 1 for i in selection.split(",") if i.strip().isdigit()]
-
-    selected_games = [games[i] for i in selected_indices if 0 <= i < len(games)]
-
-    for game_id, game_name in selected_games:
-        if game_name in existing_game_names:
-            print(f"{game_name} is already in Sunshine. Skipping.")
-            continue
-
-        if download_images == 'y' and api_key:
-            image_path = download_image_from_steamgriddb(game_name, api_key)
+        selection = input("Enter the number of the game you want to add to Sunshine (comma-separated for multiple, or add all): ")
+        if selection.strip() == str(len(games) + 1):
+            selected_indices = list(range(len(games)))
         else:
-            image_path = "default.png"
+            selected_indices = [int(i.strip()) - 1 for i in selection.split(",") if i.strip().isdigit()]
 
-        if is_flatpak_installed():
-            cmd = f"env LUTRIS_SKIP_INIT=1 flatpak run net.lutris.Lutris lutris:rungameid/{game_id}"
-        else:
-            cmd = f"env LUTRIS_SKIP_INIT=1 lutris lutris:rungameid/{game_id}"
+        selected_games = [games[i] for i in selected_indices if 0 <= i < len(games)]
 
-        new_app = {
-            "name": game_name,
-            "cmd": cmd,
-            "image-path": image_path,
-            "auto-detach": "true",
-            "wait-all": "true",
-            "exit-timeout": "5"
-        }
-        sunshine_data["apps"].append(new_app)
-        print(f"Added {game_name} to Sunshine with image {image_path}.")
+        for game_id, game_name in selected_games:
+            if game_name in existing_game_names:
+                print(f"{game_name} is already in Sunshine. Skipping.")
+                continue
 
-    save_sunshine_apps(sunshine_data)
+            if download_images == 'y' and api_key:
+                image_path = download_image_from_steamgriddb(game_name, api_key)
+            else:
+                image_path = "default.png"
+
+            if is_flatpak_installed():
+                cmd = f"env LUTRIS_SKIP_INIT=1 flatpak run net.lutris.Lutris lutris:rungameid/{game_id}"
+            else:
+                cmd = f"env LUTRIS_SKIP_INIT=1 lutris lutris:rungameid/{game_id}"
+
+            new_app = {
+                "name": game_name,
+                "cmd": cmd,
+                "image-path": image_path,
+                "auto-detach": "true",
+                "wait-all": "true",
+                "exit-timeout": "5"
+            }
+            sunshine_data["apps"].append(new_app)
+            print(f"Added {game_name} to Sunshine with image {image_path}.")
+
+        save_sunshine_apps(sunshine_data)
+    except KeyboardInterrupt:
+        print("\nScript interrupted by user. Exiting...")
+        return
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nScript interrupted by user. Exiting...")
