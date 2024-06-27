@@ -5,6 +5,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 from typing import List, Tuple, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Constants
 SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
@@ -180,26 +181,31 @@ def main():
         selected_games = [games[i] for i in selected_indices]
 
         games_added = False
-        for game_id, game_name in selected_games:
-            if game_name in existing_game_names:
-                print(f"{game_name} is already in Sunshine. Skipping.")
-                continue
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(download_image_from_steamgriddb, game_name, api_key): game_name for _, game_name in selected_games if download_images and api_key}
+            for future in as_completed(futures):
+                game_name = futures[future]
+                try:
+                    image_path = future.result()
+                except Exception as e:
+                    print(f"Error downloading image for {game_name}: {e}")
+                    image_path = DEFAULT_IMAGE
 
-            image_path = download_image_from_steamgriddb(game_name, api_key) if download_images and api_key else DEFAULT_IMAGE
+                for game_id, name in selected_games:
+                    if name == game_name and name not in existing_game_names:
+                        cmd = f"env LUTRIS_SKIP_INIT=1 {'flatpak run net.lutris.Lutris' if is_flatpak_installed() else 'lutris'} lutris:rungameid/{game_id}"
 
-            cmd = f"env LUTRIS_SKIP_INIT=1 {'flatpak run net.lutris.Lutris' if is_flatpak_installed() else 'lutris'} lutris:rungameid/{game_id}"
-
-            new_app = {
-                "name": game_name,
-                "cmd": cmd,
-                "image-path": image_path,
-                "auto-detach": "true",
-                "wait-all": "true",
-                "exit-timeout": "5"
-            }
-            sunshine_data["apps"].append(new_app)
-            print(f"Added {game_name} to Sunshine with image {image_path}.")
-            games_added = True
+                        new_app = {
+                            "name": name,
+                            "cmd": cmd,
+                            "image-path": image_path,
+                            "auto-detach": "true",
+                            "wait-all": "true",
+                            "exit-timeout": "5"
+                        }
+                        sunshine_data["apps"].append(new_app)
+                        print(f"Added {name} to Sunshine with image {image_path}.")
+                        games_added = True
 
         if games_added:
             save_sunshine_apps(sunshine_data)
