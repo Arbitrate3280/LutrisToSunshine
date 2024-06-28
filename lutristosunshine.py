@@ -129,16 +129,26 @@ def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
     """Get user selection of games to add."""
     print(f"{len(games) + 1}. Add all games")
     while True:
-        selection = input("Enter the number of the game you want to add to Sunshine (comma-separated for multiple): ")
+        selection = input("Enter the number(s) of the game(s) you want to add to Sunshine (comma-separated for multiple, or ranges like 2-9): ")
         if selection.strip() == str(len(games) + 1):
             return list(range(len(games)))
         try:
-            indices = [int(i.strip()) - 1 for i in selection.split(",") if i.strip()]
+            indices = []
+            for part in selection.split(','):
+                part = part.strip()
+                if '-' in part:
+                    start, end = map(int, part.split('-'))
+                    indices.extend(range(start - 1, end))
+                else:
+                    indices.append(int(part) - 1)
+
             if all(0 <= i < len(games) for i in indices):
-                return indices
+                return list(set(indices))  # Remove duplicates
             print("Invalid selection. Please try again.")
         except ValueError:
-            print("Invalid input. Please enter numbers separated by commas.")
+            print("Invalid input. Please enter numbers or ranges separated by commas.")
+
+
 
 def get_yes_no_input(prompt: str) -> bool:
     """Get a yes or no input from the user."""
