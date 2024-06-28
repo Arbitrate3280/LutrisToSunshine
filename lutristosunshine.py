@@ -59,7 +59,13 @@ def list_lutris_games() -> List[Tuple[str, str]]:
         return []
 
 def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
-    """Download game cover image from SteamGridDB."""
+    """Download game cover image from SteamGridDB or return cached image if available."""
+    image_path = os.path.join(COVERS_PATH, f"{game_name.lower().replace(' ', '-')}.png")
+
+    # Check if image is already cached
+    if os.path.exists(image_path):
+        return image_path
+
     headers = {"Authorization": f"Bearer {api_key}"}
     search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{game_name}"
 
@@ -87,7 +93,6 @@ def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
         image_response.raise_for_status()
 
         image = Image.open(BytesIO(image_response.content))
-        image_path = os.path.join(COVERS_PATH, f"{game_name.lower().replace(' ', '-')}.png")
         image.save(image_path, "PNG")
 
         return image_path
@@ -148,8 +153,6 @@ def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
         except ValueError:
             print("Invalid input. Please enter numbers or ranges separated by commas.")
 
-
-
 def get_yes_no_input(prompt: str) -> bool:
     """Get a yes or no input from the user."""
     while True:
@@ -193,6 +196,7 @@ def main():
         games_added = False
         with ThreadPoolExecutor() as executor:
             futures = {executor.submit(download_image_from_steamgriddb, game_name, api_key): game_name for _, game_name in selected_games if download_images and api_key}
+
             for future in as_completed(futures):
                 game_name = futures[future]
                 try:
