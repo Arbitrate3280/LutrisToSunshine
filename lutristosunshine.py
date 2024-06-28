@@ -45,11 +45,13 @@ def parse_json_output(result: subprocess.CompletedProcess) -> Any:
 def get_user_input(prompt: str, validator: callable, error_message: str) -> Any:
     """Get and validate user input."""
     while True:
-        user_input = input(prompt)
         try:
+            user_input = input(prompt)
             return validator(user_input)
         except ValueError:
             print(error_message)
+        except KeyboardInterrupt:
+            raise
 
 def yes_no_validator(value: str) -> bool:
     """Validate yes/no input."""
