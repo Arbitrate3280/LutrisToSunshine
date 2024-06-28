@@ -6,12 +6,14 @@ from PIL import Image
 from io import BytesIO
 from typing import List, Tuple, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import keyring
 
 # Constants
 SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
 COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
-API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
 DEFAULT_IMAGE = "default.png"
+SERVICE_NAME = "LutrisToSunshine"
+USERNAME = "SteamGridDB"
 
 # Ensure the covers directory exists
 os.makedirs(COVERS_PATH, exist_ok=True)
@@ -119,16 +121,12 @@ def save_sunshine_apps(data: Dict) -> None:
         json.dump(data, file, indent=4)
 
 def load_api_key() -> Optional[str]:
-    """Load SteamGridDB API key."""
-    if os.path.exists(API_KEY_PATH):
-        with open(API_KEY_PATH, 'r') as file:
-            return file.read().strip()
-    return None
+    """Load SteamGridDB API key from the system keyring."""
+    return keyring.get_password(SERVICE_NAME, USERNAME)
 
 def save_api_key(api_key: str) -> None:
-    """Save SteamGridDB API key."""
-    with open(API_KEY_PATH, 'w') as file:
-        file.write(api_key)
+    """Save SteamGridDB API key to the system keyring."""
+    keyring.set_password(SERVICE_NAME, USERNAME, api_key)
 
 def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
     """Get user selection of games to add."""
@@ -177,6 +175,11 @@ def main():
             if not api_key:
                 api_key = input("Please enter your SteamGridDB API key: ").strip()
                 save_api_key(api_key)
+            else:
+                use_existing = get_yes_no_input("An existing API key was found. Do you want to use it? (y/n): ")
+                if not use_existing:
+                    api_key = input("Please enter your new SteamGridDB API key: ").strip()
+                    save_api_key(api_key)
 
         games = list_lutris_games()
         if not games:
