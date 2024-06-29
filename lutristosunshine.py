@@ -74,16 +74,34 @@ def get_yes_no_input(prompt: str) -> bool:
         "Invalid input. Please enter 'y' for yes or 'n' for no."
     )
 
+def validate_api_key(api_key: str) -> bool:
+    """Validate the SteamGridDB API key."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        response = requests.get("https://www.steamgriddb.com/api/v2/grids/game/1", headers=headers)
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
 def manage_api_key() -> Optional[str]:
     """Manage the SteamGridDB API key."""
     try:
         if os.path.exists(API_KEY_PATH):
             with open(API_KEY_PATH, 'r') as file:
-                return file.read().strip()
-        new_key = input("Please enter your SteamGridDB API key: ").strip()
-        with open(API_KEY_PATH, 'w') as file:
-            file.write(new_key)
-        return new_key
+                api_key = file.read().strip()
+                if validate_api_key(api_key):
+                    return api_key
+                else:
+                    print("Existing API key is invalid. Please enter a new one.")
+
+        while True:
+            new_key = input("Please enter your SteamGridDB API key: ").strip()
+            if validate_api_key(new_key):
+                with open(API_KEY_PATH, 'w') as file:
+                    file.write(new_key)
+                return new_key
+            else:
+                print("Invalid API key. Please try again.")
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()
 
