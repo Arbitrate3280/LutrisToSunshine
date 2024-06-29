@@ -7,6 +7,7 @@ from io import BytesIO
 from typing import List, Tuple, Dict, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import keyring
+import sys
 
 # Constants
 SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
@@ -17,6 +18,11 @@ USERNAME = "SteamGridDB"
 
 # Ensure the covers directory exists
 os.makedirs(COVERS_PATH, exist_ok=True)
+
+def handle_interrupt():
+    """Handle script interruption consistently."""
+    print("\nScript interrupted by user. Exiting...")
+    sys.exit(0)
 
 def run_command(cmd: str) -> subprocess.CompletedProcess:
     """Run a shell command and return the result."""
@@ -50,8 +56,8 @@ def get_user_input(prompt: str, validator: callable, error_message: str) -> Any:
             return validator(user_input)
         except ValueError:
             print(error_message)
-        except KeyboardInterrupt:
-            raise
+        except (KeyboardInterrupt, EOFError):
+            handle_interrupt()
 
 def yes_no_validator(value: str) -> bool:
     """Validate yes/no input."""
@@ -72,14 +78,17 @@ def get_yes_no_input(prompt: str) -> bool:
 
 def manage_api_key() -> Optional[str]:
     """Manage the SteamGridDB API key."""
-    api_key = keyring.get_password(SERVICE_NAME, USERNAME)
-    if api_key:
-        use_existing = get_yes_no_input("An existing API key was found. Do you want to use it? (y/n): ")
-        if use_existing:
-            return api_key
-    new_key = input("Please enter your SteamGridDB API key: ").strip()
-    keyring.set_password(SERVICE_NAME, USERNAME, new_key)
-    return new_key
+    try:
+        api_key = keyring.get_password(SERVICE_NAME, USERNAME)
+        if api_key:
+            use_existing = get_yes_no_input("An existing API key was found. Do you want to use it? (y/n): ")
+            if use_existing:
+                return api_key
+        new_key = input("Please enter your SteamGridDB API key: ").strip()
+        keyring.set_password(SERVICE_NAME, USERNAME, new_key)
+        return new_key
+    except (KeyboardInterrupt, EOFError):
+        handle_interrupt()
 
 def is_lutris_running() -> bool:
     """Check if Lutris is currently running."""
@@ -252,8 +261,8 @@ def main():
         else:
             print("No new games were added to Sunshine configuration.")
 
-    except KeyboardInterrupt:
-        print("\nScript interrupted by user. Exiting...")
+    except (KeyboardInterrupt, EOFError):
+        handle_interrupt()
 
 if __name__ == "__main__":
     main()
