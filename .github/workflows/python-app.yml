@@ -18,7 +18,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests Pillow keyring pyinstaller 
+        pip install requests Pillow pyinstaller
     - name: Create binary with PyInstaller
       run: |
         pyinstaller --onefile lutristosunshine.py

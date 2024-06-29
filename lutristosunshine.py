@@ -6,15 +6,13 @@ from PIL import Image
 from io import BytesIO
 from typing import List, Tuple, Dict, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import keyring
 import sys
 
 # Constants
 SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
 COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
 DEFAULT_IMAGE = "default.png"
-SERVICE_NAME = "LutrisToSunshine"
-USERNAME = "SteamGridDB"
+API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
 
 # Ensure the covers directory exists
 os.makedirs(COVERS_PATH, exist_ok=True)
@@ -79,13 +77,12 @@ def get_yes_no_input(prompt: str) -> bool:
 def manage_api_key() -> Optional[str]:
     """Manage the SteamGridDB API key."""
     try:
-        api_key = keyring.get_password(SERVICE_NAME, USERNAME)
-        if api_key:
-            use_existing = get_yes_no_input("An existing API key was found. Do you want to use it? (y/n): ")
-            if use_existing:
-                return api_key
+        if os.path.exists(API_KEY_PATH):
+            with open(API_KEY_PATH, 'r') as file:
+                return file.read().strip()
         new_key = input("Please enter your SteamGridDB API key: ").strip()
-        keyring.set_password(SERVICE_NAME, USERNAME, new_key)
+        with open(API_KEY_PATH, 'w') as file:
+            file.write(new_key)
         return new_key
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()
