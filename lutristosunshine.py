@@ -13,6 +13,14 @@ SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
 COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
 DEFAULT_IMAGE = "default.png"
 API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
+HEROIC_PATHS = [
+    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json"),
+    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/gog_store/installed.json"),
+    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/nile_config/nile/installed.json"),
+    os.path.expanduser("~/.config/heroic/legendaryConfig/legendary/installed.json"),
+    os.path.expanduser("~/.config/heroic/gog_store/installed.json"),
+    os.path.expanduser("~/.config/heroic/nile_config/nile/installed.json")
+]
 
 # Ensure the covers directory exists
 os.makedirs(COVERS_PATH, exist_ok=True)
@@ -119,6 +127,66 @@ def list_lutris_games() -> List[Tuple[str, str]]:
     games = parse_json_output(result)
     return [(game['id'], game['name']) for game in games] if games else []
 
+def list_heroic_games() -> List[Tuple[str, str, str, str]]:
+    """List all games in Heroic."""
+    games = []
+    for path in HEROIC_PATHS:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as file:
+                    data = json.load(file)
+                    runner = get_runner_type(path)
+                    if isinstance(data, dict):
+                        if "installed" in data:
+                            # Handling GOG games
+                            for game in data["installed"]:
+                                if isinstance(game, dict):
+                                    app_id = game.get("appName") or game.get("app_name")
+                                    install_path = game.get("install_path")
+                                    if install_path:
+                                        title = install_path.split('/')[-1]
+                                    else:
+                                        title = app_id
+                                    if app_id and title:
+                                        games.append((app_id, title, "Heroic", runner))
+                        else:
+                            # Handling Legendary games
+                            for app_id, game in data.items():
+                                if isinstance(game, dict):
+                                    title = game.get("title") or game.get("app_name")
+                                    if app_id and title:
+                                        games.append((app_id, title, "Heroic", runner))
+                    elif isinstance(data, list):
+                        # In case there are other list-based structures in future
+                        for game in data:
+                            if isinstance(game, dict):
+                                app_id = game.get("appName") or game.get("app_name")
+                                install_path = game.get("install_path")
+                                if install_path:
+                                    title = install_path.split('/')[-1]
+                                else:
+                                    title = app_id
+                                if app_id and title:
+                                    games.append((app_id, title, "Heroic", runner))
+            except json.JSONDecodeError:
+                print(f"Error parsing JSON file at {path}")
+    return games
+
+def is_heroic_flatpak() -> bool:
+    """Check if Heroic is installed via flatpak."""
+    result = run_command("flatpak list | grep com.heroicgameslauncher.hgl")
+    return result.returncode == 0
+
+def get_runner_type(path: str) -> str:
+    """Map the runner to its correct type based on the path."""
+    if "legendaryConfig" in path:
+        return "legendary"
+    elif "gog_store" in path:
+        return "gog"
+    elif "nile_config" in path:
+        return "nile"
+    return "heroic"
+
 def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
     """Download game cover image from SteamGridDB or return cached image if available."""
     image_path = os.path.join(COVERS_PATH, f"{game_name.lower().replace(' ', '-')}.png")
@@ -213,9 +281,16 @@ def save_sunshine_apps(data: Dict) -> None:
     with open(SUNSHINE_APPS_JSON_PATH, 'w') as file:
         json.dump(data, file, indent=4)
 
-def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str) -> None:
+def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
-    cmd = get_lutris_command(f"lutris:rungameid/{game_id}")
+    if runner == "Lutris":
+        cmd = get_lutris_command(f"lutris:rungameid/{game_id}")
+    else:
+        if is_heroic_flatpak():
+            cmd = f"flatpak run com.heroicgameslauncher.hgl heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+        else:
+            cmd = f"heroic heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+
     new_app = {
         "name": game_name,
         "cmd": cmd,
@@ -233,21 +308,47 @@ def main():
             print("Error: Lutris is currently running. Please close Lutris and try again.")
             return
 
-        games = list_lutris_games()
-        if not games:
-            print("No games found in Lutris.")
+        lutris_games = list_lutris_games()
+        heroic_games = list_heroic_games()
+
+        if not lutris_games and not heroic_games:
+            print("No games found in Lutris or Heroic.")
             return
 
         sunshine_data = load_sunshine_apps()
         existing_game_names = {app["name"] for app in sunshine_data["apps"]}
 
-        print("Games found in Lutris:")
-        for idx, (_, game_name) in enumerate(games):
-            status = "(already in Sunshine)" if game_name in existing_game_names else ""
-            print(f"{idx + 1}. {game_name} {status}")
+        all_games = [(game_id, game_name, "Lutris", "Lutris") for game_id, game_name in lutris_games]
+        all_games += [(game_id, game_name, "Heroic", runner) for game_id, game_name, display_source, runner in heroic_games]
 
-        selected_indices = get_user_selection(games)
-        selected_games = [games[i] for i in selected_indices if games[i][1] not in existing_game_names]
+        # Sort the games alphabetically by name
+        all_games.sort(key=lambda x: x[1])
+
+        # Define color codes
+        heroic_color = "\033[38;5;39m"  # #3CA6F9
+        lutris_color = "\033[38;5;214m"  # #FFAF00
+        reset_color = "\033[0m"
+
+        # Determine the appropriate message
+        if lutris_games and heroic_games:
+            games_found_message = "Games found in Lutris and Heroic:"
+        elif lutris_games:
+            games_found_message = "Games found in Lutris:"
+        else:
+            games_found_message = "Games found in Heroic:"
+
+        print(games_found_message)
+        for idx, (_, game_name, display_source, source) in enumerate(all_games):
+            status = "(already in Sunshine)" if game_name in existing_game_names else ""
+            if lutris_games and heroic_games:
+                source_color = heroic_color if display_source == "Heroic" else lutris_color
+                source_info = f"{source_color} ({display_source}){reset_color}"
+                print(f"{idx + 1}. {game_name}{source_info} {status}")
+            else:
+                print(f"{idx + 1}. {game_name} {status}")
+
+        selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+        selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
 
         if not selected_games:
             print("No new games to add to Sunshine configuration.")
@@ -259,23 +360,23 @@ def main():
         games_added = False
         with ThreadPoolExecutor() as executor:
             futures = {}
-            for game_id, game_name in selected_games:
+            for game_id, game_name, display_source, source in selected_games:
                 if download_images and api_key:
                     future = executor.submit(download_image_from_steamgriddb, game_name, api_key)
-                    futures[future] = (game_id, game_name)
+                    futures[future] = (game_id, game_name, source)
                 else:
-                    add_game_to_sunshine(sunshine_data, game_id, game_name, DEFAULT_IMAGE)
+                    add_game_to_sunshine(sunshine_data, game_id, game_name, DEFAULT_IMAGE, source)
                     games_added = True
 
             for future in as_completed(futures):
-                game_id, game_name = futures[future]
+                game_id, game_name, source = futures[future]
                 try:
                     image_path = future.result()
                 except Exception as e:
                     print(f"Error downloading image for {game_name}: {e}")
                     image_path = DEFAULT_IMAGE
 
-                add_game_to_sunshine(sunshine_data, game_id, game_name, image_path)
+                add_game_to_sunshine(sunshine_data, game_id, game_name, image_path, source)
                 games_added = True
 
         if games_added:
