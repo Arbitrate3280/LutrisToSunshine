@@ -1,20 +1,20 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris and Heroic, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 
 
 ## Features
 
-- Lists all games from Lutris (supports both Flatpak and native installations)
+- Lists all games from Lutris and/or Heroic (supports both Flatpak and native installations)
 - Adds selected games to Sunshine
 - Option to add all listed games at once
 - Downloads game covers from SteamGridDB (optional)
 - Avoids duplicate entries in Sunshine
 
 ## Main Goal
-This tool is designed to work with Sunshine installed on the host and Lutris. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+This tool is designed to work with Sunshine installed on the along with Lutris and/or Heroic. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
 
 ## Installation
 
