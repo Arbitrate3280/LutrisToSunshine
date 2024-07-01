@@ -14,12 +14,16 @@ COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
 DEFAULT_IMAGE = "default.png"
 API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
 HEROIC_PATHS = [
+    # Flatpak paths
     os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json"),
     os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/gog_store/installed.json"),
     os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/nile_config/nile/installed.json"),
+    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/sideload_apps/library.json"),
+    # Native paths
     os.path.expanduser("~/.config/heroic/legendaryConfig/legendary/installed.json"),
     os.path.expanduser("~/.config/heroic/gog_store/installed.json"),
-    os.path.expanduser("~/.config/heroic/nile_config/nile/installed.json")
+    os.path.expanduser("~/.config/heroic/nile_config/nile/installed.json"),
+    os.path.expanduser("~/.config/heroic/sideload_apps/library.json")
 ]
 
 # Ensure the covers directory exists
@@ -149,6 +153,14 @@ def list_heroic_games() -> List[Tuple[str, str, str, str]]:
                                         title = app_id
                                     if app_id and title:
                                         games.append((app_id, title, "Heroic", runner))
+                        elif "games" in data:
+                            # Handling sideloaded games
+                            for game in data["games"]:
+                                if isinstance(game, dict):
+                                    app_id = game.get("app_name")
+                                    title = game.get("title")
+                                    if app_id and title:
+                                        games.append((app_id, title, "Heroic", "sideload"))
                         else:
                             # Handling Legendary games
                             for app_id, game in data.items():
