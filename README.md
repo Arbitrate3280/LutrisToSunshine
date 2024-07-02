@@ -1,7 +1,7 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris and Heroic, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris and/or Heroic, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 
 
@@ -56,6 +56,7 @@ chmod +x lutristosunshine
 ## Acknowledgements
 
  - [Lutris](https://lutris.net/)
+ - [Heroic Games Launcher](https://heroicgameslauncher.com/)
  - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
  - [SteamGridDB](https://www.steamgriddb.com/)
 
