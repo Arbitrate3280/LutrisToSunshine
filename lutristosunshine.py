@@ -38,14 +38,18 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
     """Run a shell command and return the result."""
     return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def get_lutris_command(command: str) -> str:
+def get_lutris_command(args: str = "") -> Optional[str]:
     """Get the appropriate Lutris command based on installation type."""
+    # Check for Flatpak installation
     if run_command("flatpak list | grep net.lutris.Lutris").returncode == 0:
-        return f"flatpak run net.lutris.Lutris {command}"
-    elif run_command("command -v lutris").returncode == 0:
-        return f"lutris {command}"
+        base_cmd = "flatpak run net.lutris.Lutris"
+    # Check for native installation
+    elif run_command("which lutris").returncode == 0:
+        base_cmd = "lutris"
     else:
-        raise Exception("Lutris is not installed.")
+        return None
+
+    return f"{base_cmd} {args}".strip()
 
 def parse_json_output(result: subprocess.CompletedProcess) -> Any:
     """Parse JSON output from a command, handling errors."""
@@ -126,7 +130,8 @@ def is_lutris_running() -> bool:
 
 def list_lutris_games() -> List[Tuple[str, str]]:
     """List all games in Lutris."""
-    cmd = get_lutris_command("-lo --json")
+    lutris_cmd = get_lutris_command()
+    cmd = f"{lutris_cmd} -lo --json"
     result = run_command(cmd)
     games = parse_json_output(result)
     return [(game['id'], game['name']) for game in games] if games else []
@@ -184,10 +189,20 @@ def list_heroic_games() -> List[Tuple[str, str, str, str]]:
                 print(f"Error parsing JSON file at {path}")
     return games
 
-def is_heroic_flatpak() -> bool:
-    """Check if Heroic is installed via flatpak."""
-    result = run_command("flatpak list | grep com.heroicgameslauncher.hgl")
-    return result.returncode == 0
+def detect_heroic():
+    """
+    Detect if Heroic is installed and determine its installation type.
+    Returns: (is_installed, installation_type)
+    """
+    # Check for Flatpak installation
+    if run_command("flatpak list | grep com.heroicgameslauncher.hgl").returncode == 0:
+        return True, "flatpak"
+
+    # Check for native installation
+    if run_command("which heroic").returncode == 0:
+        return True, "native"
+
+    return False, ""
 
 def get_runner_type(path: str) -> str:
     """Map the runner to its correct type based on the path."""
@@ -293,15 +308,27 @@ def save_sunshine_apps(data: Dict) -> None:
     with open(SUNSHINE_APPS_JSON_PATH, 'w') as file:
         json.dump(data, file, indent=4)
 
+def get_heroic_command() -> Optional[str]:
+    """Get the appropriate Heroic command based on installation type."""
+    is_installed, install_type = detect_heroic()
+    if not is_installed:
+        return None
+
+    if install_type == "flatpak":
+        return "flatpak run com.heroicgameslauncher.hgl"
+    elif install_type == "native":
+        return "heroic"
+
+    return None
+
 def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
     if runner == "Lutris":
-        cmd = get_lutris_command(f"lutris:rungameid/{game_id}")
+        lutris_cmd = get_lutris_command()
+        cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
     else:
-        if is_heroic_flatpak():
-            cmd = f"flatpak run com.heroicgameslauncher.hgl heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
-        else:
-            cmd = f"heroic heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+        heroic_cmd = get_heroic_command()
+        cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
 
     new_app = {
         "name": game_name,
@@ -316,12 +343,19 @@ def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, imag
 
 def main():
     try:
-        if is_lutris_running():
+        lutris_command = get_lutris_command()
+        heroic_command = get_heroic_command()
+
+        if not lutris_command and not heroic_command:
+            print("No Lutris or Heroic installation detected.")
+            return
+
+        if lutris_command and is_lutris_running():
             print("Error: Lutris is currently running. Please close Lutris and try again.")
             return
 
-        lutris_games = list_lutris_games()
-        heroic_games = list_heroic_games()
+        lutris_games = list_lutris_games() if lutris_command else []
+        heroic_games = list_heroic_games() if heroic_command else []
 
         if not lutris_games and not heroic_games:
             print("No games found in Lutris or Heroic.")
@@ -342,9 +376,9 @@ def main():
         reset_color = "\033[0m"
 
         # Determine the appropriate message
-        if lutris_games and heroic_games:
+        if lutris_command and heroic_command:
             games_found_message = "Games found in Lutris and Heroic:"
-        elif lutris_games:
+        elif lutris_command:
             games_found_message = "Games found in Lutris:"
         else:
             games_found_message = "Games found in Heroic:"
@@ -352,10 +386,10 @@ def main():
         print(games_found_message)
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
             status = "(already in Sunshine)" if game_name in existing_game_names else ""
-            if lutris_games and heroic_games:
+            if lutris_command and heroic_command:
                 source_color = heroic_color if display_source == "Heroic" else lutris_color
-                source_info = f"{source_color} ({display_source}){reset_color}"
-                print(f"{idx + 1}. {game_name}{source_info} {status}")
+                source_info = f"{source_color}({display_source}){reset_color}"
+                print(f"{idx + 1}. {game_name} {source_info} {status}")
             else:
                 print(f"{idx + 1}. {game_name} {status}")
 
