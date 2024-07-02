@@ -56,6 +56,7 @@ chmod +x lutristosunshine
 ## Acknowledgements
 
  - [Lutris](https://lutris.net/)
+ - [Heroic Games Launcher](https://heroicgameslauncher.com/)
  - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
  - [SteamGridDB](https://www.steamgriddb.com/)
 
