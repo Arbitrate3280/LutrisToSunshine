@@ -189,21 +189,6 @@ def list_heroic_games() -> List[Tuple[str, str, str, str]]:
                 print(f"Error parsing JSON file at {path}")
     return games
 
-def detect_heroic():
-    """
-    Detect if Heroic is installed and determine its installation type.
-    Returns: (is_installed, installation_type)
-    """
-    # Check for Flatpak installation
-    if run_command("flatpak list | grep com.heroicgameslauncher.hgl").returncode == 0:
-        return True, "flatpak"
-
-    # Check for native installation
-    if run_command("which heroic").returncode == 0:
-        return True, "native"
-
-    return False, ""
-
 def get_runner_type(path: str) -> str:
     """Map the runner to its correct type based on the path."""
     if "legendaryConfig" in path:
@@ -308,18 +293,19 @@ def save_sunshine_apps(data: Dict) -> None:
     with open(SUNSHINE_APPS_JSON_PATH, 'w') as file:
         json.dump(data, file, indent=4)
 
-def get_heroic_command() -> Optional[str]:
+def get_heroic_command(args: str = "") -> Optional[str]:
     """Get the appropriate Heroic command based on installation type."""
-    is_installed, install_type = detect_heroic()
-    if not is_installed:
+    # Check for Flatpak installation
+    if run_command("flatpak list | grep com.heroicgameslauncher.hgl").returncode == 0:
+        base_cmd = "flatpak run com.heroicgameslauncher.hgl"
+    # Check for native installation
+    elif run_command("which heroic").returncode == 0:
+        base_cmd = "heroic"
+    else:
         return None
 
-    if install_type == "flatpak":
-        return "flatpak run com.heroicgameslauncher.hgl"
-    elif install_type == "native":
-        return "heroic"
+    return f"{base_cmd} {args}".strip()
 
-    return None
 
 def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
