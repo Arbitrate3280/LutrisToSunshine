@@ -1,7 +1,7 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris and Heroic, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris and/or Heroic, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 
 
