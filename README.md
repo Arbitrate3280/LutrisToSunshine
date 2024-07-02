@@ -14,7 +14,7 @@ This script lists games from Lutris and/or Heroic, adds them to Sunshine, and op
 - Avoids duplicate entries in Sunshine
 
 ## Main Goal
-This tool is designed to work with Sunshine installed on the along with Lutris and/or Heroic. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+This tool is designed to work with Sunshine installed on the host along with Lutris and/or Heroic. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
 
 ## Installation
 
