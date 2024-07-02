@@ -13,18 +13,20 @@ SUNSHINE_APPS_JSON_PATH = os.path.expanduser("~/.config/sunshine/apps.json")
 COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
 DEFAULT_IMAGE = "default.png"
 API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
-HEROIC_PATHS = [
-    # Flatpak paths
-    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json"),
-    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/gog_store/installed.json"),
-    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/nile_config/nile/installed.json"),
-    os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/sideload_apps/library.json"),
-    # Native paths
-    os.path.expanduser("~/.config/heroic/legendaryConfig/legendary/installed.json"),
-    os.path.expanduser("~/.config/heroic/gog_store/installed.json"),
-    os.path.expanduser("~/.config/heroic/nile_config/nile/installed.json"),
-    os.path.expanduser("~/.config/heroic/sideload_apps/library.json")
-]
+HEROIC_PATHS = {
+    "flatpak": {
+        "legendary": os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json"),
+        "gog": os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/gog_store/installed.json"),
+        "nile": os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/nile_config/nile/installed.json"),
+        "sideload": os.path.expanduser("~/.var/app/com.heroicgameslauncher.hgl/config/heroic/sideload_apps/library.json")
+    },
+    "native": {
+        "legendary": os.path.expanduser("~/.config/heroic/legendaryConfig/legendary/installed.json"),
+        "gog": os.path.expanduser("~/.config/heroic/gog_store/installed.json"),
+        "nile": os.path.expanduser("~/.config/heroic/nile_config/nile/installed.json"),
+        "sideload": os.path.expanduser("~/.config/heroic/sideload_apps/library.json")
+    }
+}
 
 # Ensure the covers directory exists
 os.makedirs(COVERS_PATH, exist_ok=True)
@@ -139,12 +141,16 @@ def list_lutris_games() -> List[Tuple[str, str]]:
 def list_heroic_games() -> List[Tuple[str, str, str, str]]:
     """List all games in Heroic."""
     games = []
-    for path in HEROIC_PATHS:
+    heroic_cmd, installation_type = get_heroic_command()
+
+    if not heroic_cmd or not installation_type:
+        return games
+
+    for runner, path in HEROIC_PATHS[installation_type].items():
         if os.path.exists(path):
             try:
                 with open(path, 'r') as file:
                     data = json.load(file)
-                    runner = get_runner_type(path)
                     if isinstance(data, dict):
                         if "installed" in data:
                             # Handling GOG games
@@ -293,19 +299,18 @@ def save_sunshine_apps(data: Dict) -> None:
     with open(SUNSHINE_APPS_JSON_PATH, 'w') as file:
         json.dump(data, file, indent=4)
 
-def get_heroic_command(args: str = "") -> Optional[str]:
+def get_heroic_command() -> Tuple[Optional[str], Optional[str]]:
     """Get the appropriate Heroic command based on installation type."""
     # Check for Flatpak installation
     if run_command("flatpak list | grep com.heroicgameslauncher.hgl").returncode == 0:
-        base_cmd = "flatpak run com.heroicgameslauncher.hgl"
+        return "flatpak run com.heroicgameslauncher.hgl", "flatpak"
     # Check for native installation
     elif run_command("which heroic").returncode == 0:
-        base_cmd = "heroic"
+        return "heroic", "native"
     else:
-        return None
+        return None, None
 
-    return f"{base_cmd} {args}".strip()
-
+    return f"{base_cmd} {args}".strip(), installation_type
 
 def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
@@ -313,7 +318,7 @@ def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, imag
         lutris_cmd = get_lutris_command()
         cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
     else:
-        heroic_cmd = get_heroic_command()
+        heroic_cmd, _ = get_heroic_command()
         cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
 
     new_app = {
@@ -330,7 +335,7 @@ def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, imag
 def main():
     try:
         lutris_command = get_lutris_command()
-        heroic_command = get_heroic_command()
+        heroic_command, _ = get_heroic_command()
 
         if not lutris_command and not heroic_command:
             print("No Lutris or Heroic installation detected.")
