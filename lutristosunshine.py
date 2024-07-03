@@ -40,6 +40,17 @@ def run_command(cmd: str) -> subprocess.CompletedProcess:
     """Run a shell command and return the result."""
     return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+def detect_sunshine_installation() -> Tuple[bool, str]:
+    """Detect if Sunshine is installed and how."""
+    # Check for Flatpak installation
+    if run_command("flatpak list | grep dev.lizardbyte.app.Sunshine").returncode == 0:
+        return True, "flatpak"
+    # Check for native installation
+    elif run_command("which sunshine").returncode == 0:
+        return True, "native"
+    else:
+        return False, ""
+
 def get_lutris_command(args: str = "") -> Optional[str]:
     """Get the appropriate Lutris command based on installation type."""
     # Check for Flatpak installation
@@ -334,6 +345,14 @@ def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, imag
 
 def main():
     try:
+        sunshine_installed, installation_type = detect_sunshine_installation()
+        if not sunshine_installed:
+            print("Error: No Sunshine installation detected.")
+            return
+        if installation_type == "flatpak":
+            print("Warning: Sunshine Flatpak is not supported. Please use the native installation of Sunshine.")
+            return
+
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()
 
