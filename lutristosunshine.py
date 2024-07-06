@@ -409,7 +409,7 @@ def main():
             print("Error: No Sunshine installation detected.")
             return
         if installation_type == "flatpak":
-            print("Warning: Sunshine Flatpak is not supported. Please use the native installation of Sunshine.")
+            print("Error: Sunshine Flatpak is not supported. Please use the native installation of Sunshine.")
             return
 
         lutris_command = get_lutris_command()
