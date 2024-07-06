@@ -236,7 +236,7 @@ def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
             return DEFAULT_IMAGE
 
         game_id = data['data'][0]['id']
-        cover_url = f"https://www.steamgriddb.com/api/v2/grids/game/{game_id}"
+        cover_url = f"https://www.steamgriddb.com/api/v2/grids/game/{game_id}?dimensions=600x900&types=static"
         response = requests.get(cover_url, headers=headers)
         response.raise_for_status()
         cover_data = response.json()
