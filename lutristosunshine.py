@@ -134,6 +134,26 @@ def manage_api_key() -> Optional[str]:
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()
 
+def get_games_found_message(lutris_command, heroic_command, bottles_installed):
+    sources = set()
+    if lutris_command:
+        sources.add("Lutris")
+    if heroic_command:
+        sources.add("Heroic")
+    if bottles_installed:
+        sources.add("Bottles")
+
+    if not sources:
+        return "No game sources detected."
+
+    sources_list = list(sources)
+    if len(sources) == 1:
+        return f"Games found in {sources_list[0]}:"
+    elif len(sources) == 2:
+        return f"Games found in {sources_list[0]} and {sources_list[1]}:"
+    else:
+        return f"Games found in {', '.join(sources_list[:-1])} and {sources_list[-1]}:"
+
 def is_lutris_running() -> bool:
     """Check if Lutris is currently running."""
     our_script_name = os.path.basename(__file__)
@@ -323,14 +343,53 @@ def get_heroic_command() -> Tuple[Optional[str], Optional[str]]:
 
     return f"{base_cmd} {args}".strip(), installation_type
 
+def detect_bottles_installation() -> bool:
+    """Detect if Bottles is installed via Flatpak."""
+    return run_command("flatpak list | grep com.usebottles.bottles").returncode == 0
+
+def list_bottles_games() -> List[Tuple[str, str, str, str]]:
+    """List all games in Bottles."""
+    games = []
+    cmd = "flatpak run --command=bottles-cli com.usebottles.bottles list bottles -f environment:gaming"
+    result = run_command(cmd)
+    bottles = parse_bottles_output(result)
+
+    for bottle in bottles:
+        cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles programs -b "{bottle}"'
+        result = run_command(cmd)
+        programs = parse_bottles_programs(result)
+        for program in programs:
+            games.append((program, program, "Bottles", bottle))
+
+    return games
+
+def parse_bottles_output(result: subprocess.CompletedProcess) -> List[str]:
+    """Parse the output of the Bottles list command."""
+    if result.returncode != 0:
+        print(f"Error executing Bottles command: {result.stderr.decode()}")
+        return []
+    lines = result.stdout.decode().split('\n')
+    return [line.strip('- ') for line in lines if line.startswith('-')]
+
+def parse_bottles_programs(result: subprocess.CompletedProcess) -> List[str]:
+    """Parse the output of the Bottles programs command."""
+    if result.returncode != 0:
+        print(f"Error executing Bottles command: {result.stderr.decode()}")
+        return []
+    lines = result.stdout.decode().split('\n')
+    # Skip the "Found X programs:" line, empty lines, and remove leading "- "
+    return [line.strip("- ").strip() for line in lines if line.strip() and not line.startswith("Found")]
+
 def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
     if runner == "Lutris":
         lutris_cmd = get_lutris_command()
         cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
-    else:
+    elif runner in ["legendary", "gog", "nile", "sideload"]:
         heroic_cmd, _ = get_heroic_command()
         cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+    else:  # Bottles
+        cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
     new_app = {
         "name": game_name,
@@ -355,50 +414,59 @@ def main():
 
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()
+        bottles_installed = detect_bottles_installation()
 
-        if not lutris_command and not heroic_command:
-            print("No Lutris or Heroic installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed:
+            print("No Lutris, Heroic, or Bottles installation detected.")
             return
 
         if lutris_command and is_lutris_running():
             print("Error: Lutris is currently running. Please close Lutris and try again.")
             return
 
-        lutris_games = list_lutris_games() if lutris_command else []
-        heroic_games = list_heroic_games() if heroic_command else []
+        with ThreadPoolExecutor() as executor:
+            futures = {}
+            if lutris_command:
+                futures['Lutris'] = executor.submit(list_lutris_games)
+            if heroic_command:
+                futures['Heroic'] = executor.submit(list_heroic_games)
+            if bottles_installed:
+                futures['Bottles'] = executor.submit(list_bottles_games)
 
-        if not lutris_games and not heroic_games:
-            print("No games found in Lutris or Heroic.")
+            all_games = []
+            for source, future in futures.items():
+                result = future.result()
+                if source == 'Lutris':
+                    all_games.extend([(game_id, game_name, "Lutris", "Lutris") for game_id, game_name in result])
+                elif source == 'Heroic':
+                    all_games.extend([(game_id, game_name, "Heroic", runner) for game_id, game_name, _, runner in result])
+                elif source == 'Bottles':
+                    all_games.extend(result)  # Bottles results are already in the correct format
+
+        if not all_games:
+            print("No games found in Lutris, Heroic, or Bottles.")
             return
 
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed)
+        print(games_found_message)
         sunshine_data = load_sunshine_apps()
         existing_game_names = {app["name"] for app in sunshine_data["apps"]}
-
-        all_games = [(game_id, game_name, "Lutris", "Lutris") for game_id, game_name in lutris_games]
-        all_games += [(game_id, game_name, "Heroic", runner) for game_id, game_name, display_source, runner in heroic_games]
 
         # Sort the games alphabetically by name
         all_games.sort(key=lambda x: x[1])
 
-        # Define color codes
-        heroic_color = "\033[38;5;39m"  # #3CA6F9
-        lutris_color = "\033[38;5;214m"  # #FFAF00
-        reset_color = "\033[0m"
+        SOURCE_COLORS = {
+            "Heroic": "\033[38;5;39m",  # #3CA6F9
+            "Lutris": "\033[38;5;214m",  # #FFAF00
+            "Bottles": "\033[38;5;203m"  # #F3544B
+        }
+        RESET_COLOR = "\033[0m"
 
-        # Determine the appropriate message
-        if lutris_command and heroic_command:
-            games_found_message = "Games found in Lutris and Heroic:"
-        elif lutris_command:
-            games_found_message = "Games found in Lutris:"
-        else:
-            games_found_message = "Games found in Heroic:"
-
-        print(games_found_message)
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
             status = "(already in Sunshine)" if game_name in existing_game_names else ""
-            if lutris_command and heroic_command:
-                source_color = heroic_color if display_source == "Heroic" else lutris_color
-                source_info = f"{source_color}({display_source}){reset_color}"
+            if len(futures) > 1:  # Only show colors if there's more than one source
+                source_color = SOURCE_COLORS.get(display_source, "")
+                source_info = f"{source_color}({display_source}){RESET_COLOR}"
                 print(f"{idx + 1}. {game_name} {source_info} {status}")
             else:
                 print(f"{idx + 1}. {game_name} {status}")
