@@ -25,11 +25,26 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install requests Pillow pyinstaller
+
     - name: Create binary with PyInstaller
       run: |
         pyinstaller --onefile lutristosunshine.py
-    - name: Upload binary
+
+    - name: Upload binary as artifact
       uses: actions/upload-artifact@v4
       with:
         name: lutristosunshine
         path: dist/lutristosunshine
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: dist/lutristosunshine
+        tag_name: ${{ github.ref }}
+        name: Release ${{ github.ref }}
+        body: |
+          Automated release for commit ${{ github.sha }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
