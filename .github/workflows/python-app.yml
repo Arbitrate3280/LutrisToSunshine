@@ -2,11 +2,8 @@ name: Create Binary
 
 on:
   push:
-    paths-ignore:
-      - 'README.md'
-  pull_request:
-    paths-ignore:
-      - 'README.md'
+    tags:
+      - '*'
 
 jobs:
   build:
