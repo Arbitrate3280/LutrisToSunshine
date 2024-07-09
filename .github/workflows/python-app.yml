@@ -39,9 +39,14 @@ jobs:
       with:
         files: dist/lutristosunshine
         tag_name: ${{ github.ref }}
-        name: Release ${{ github.ref }}
+        name: ${{ github.ref_name }}
         body: |
-          Automated release for commit ${{ github.sha }}
-        generate_release_notes: true
+          ## What's Changed
+          ${{ steps.generate_release.outputs.notes }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update release notes
+      uses: release-drafter/release-drafter@v6
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
