@@ -123,6 +123,7 @@ def manage_api_key() -> Optional[str]:
                 else:
                     print("Existing API key is invalid. Please enter a new one.")
 
+        print("To get your SteamGridDB API key, visit: https://www.steamgriddb.com/profile/preferences/api")
         while True:
             new_key = input("Please enter your SteamGridDB API key: ").strip()
             if validate_api_key(new_key):
