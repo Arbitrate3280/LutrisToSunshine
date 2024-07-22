@@ -136,6 +136,9 @@ def manage_api_key() -> Optional[str]:
         handle_interrupt()
 
 def get_games_found_message(lutris_command, heroic_command, bottles_installed):
+    """
+    Get a message indicating the sources of the games found based on the provided inputs.
+    """
     sources = set()
     if lutris_command:
         sources.add("Lutris")
