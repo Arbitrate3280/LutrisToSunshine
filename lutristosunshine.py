@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.constants import COVERS_PATH, DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
 from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
 from utils.input import get_yes_no_input, get_user_selection
-from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine
+from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -62,28 +62,26 @@ def main():
         games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed)
         print(games_found_message)
 
-        # Removed loading sunshine_data as it's not needed anymore
-        # sunshine_data = load_sunshine_apps()
-        # existing_game_names = {app["name"] for app in sunshine_data["apps"]}
+        existing_apps = get_existing_apps()
+        existing_game_names = {app["name"] for app in existing_apps}
 
         # Sort the games alphabetically by name
         all_games.sort(key=lambda x: x[1])
 
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
-            # Removed check for existing games as it's not reliable anymore
-            # status = "(already in Sunshine)" if game_name in existing_game_names else ""
+            status = "(already in Sunshine)" if game_name in existing_game_names else ""
             if len(futures) > 1:  # Only show colors if there's more than one source
                 source_color = SOURCE_COLORS.get(display_source, "")
                 source_info = f"{source_color}({display_source}){RESET_COLOR}"
-                print(f"{idx + 1}. {game_name} {source_info}")  # Removed status
+                print(f"{idx + 1}. {game_name} {source_info} {status}")
             else:
-                print(f"{idx + 1}. {game_name}")  # Removed status
+                print(f"{idx + 1}. {game_name} {status}")
 
         selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
-        selected_games = [all_games[i] for i in selected_indices]  # Removed check for existing games
+        selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
 
         if not selected_games:
-            print("No games selected to add to Sunshine configuration.")
+            print("No new games to add to Sunshine configuration.")
             return
 
         download_images = get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")

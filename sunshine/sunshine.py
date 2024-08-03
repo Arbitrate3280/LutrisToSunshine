@@ -3,7 +3,7 @@ import json
 import base64
 import requests
 import getpass
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, List
 from config.constants import DEFAULT_IMAGE, SUNSHINE_STATE_JSON_PATH, CREDENTIALS_PATH
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
@@ -132,3 +132,34 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: 
 
     # Use the API instead of directly modifying apps.json
     add_game_to_sunshine_api(game_name, cmd, image_path)
+
+def get_existing_apps() -> List[Dict]:
+    """Retrieves the list of existing apps from the Sunshine API."""
+    token = get_auth_token()
+    if not token:
+        print("Error: Could not obtain authentication token.")
+        return []
+
+    headers = {
+        "Authorization": token
+    }
+
+    try:
+        response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
+        response.raise_for_status()
+        data = response.json()
+
+        existing_apps = []
+        apps_list = data.get("apps", [])
+        if isinstance(apps_list, list):
+            for app_data in apps_list:
+                if isinstance(app_data, dict) and "name" in app_data:
+                    existing_apps.append({"name": app_data["name"]})
+        else:
+            print("Warning: Unexpected data structure in API response.")
+
+        return existing_apps
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error retrieving existing apps from Sunshine API: {e}")
+        return []
