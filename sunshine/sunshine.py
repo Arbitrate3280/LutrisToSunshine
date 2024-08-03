@@ -1,10 +1,14 @@
 import os
 import json
+import base64
+import requests
+import getpass
 from typing import Tuple, Optional, Dict
-from config.constants import SUNSHINE_APPS_JSON_PATH, DEFAULT_IMAGE
+from config.constants import DEFAULT_IMAGE, SUNSHINE_STATE_JSON_PATH, CREDENTIALS_PATH
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
+
 
 def detect_sunshine_installation() -> Tuple[bool, str]:
     """Detect if Sunshine is installed and how."""
@@ -17,24 +21,105 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
     else:
         return False, ""
 
-def load_sunshine_apps() -> Dict:
-    """Load Sunshine apps configuration."""
-    if not os.path.exists(SUNSHINE_APPS_JSON_PATH):
-        return {"env": {"PATH": "$(PATH):$(HOME)/.local/bin"}, "apps": []}
+def get_sunshine_credentials() -> Tuple[str, str]:
+    """Retrieves username and password hash from sunshine_state.json."""
+    sunshine_state_path = os.path.expanduser("~/.config/sunshine/sunshine_state.json")
+    try:
+        with open(sunshine_state_path, 'r') as f:
+            sunshine_state = json.load(f)
+        username = sunshine_state["username"]
+        password_hash = sunshine_state["password"]
+        return username, password_hash
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        print(f"Error reading credentials from {sunshine_state_path}: {e}")
+        return "", ""
+
+def get_auth_token() -> Optional[str]:
+    """Retrieves or generates an authentication token."""
+    token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
+    if os.path.exists(token_path):
+        with open(token_path, 'r') as f:
+            return f.read().strip()
+
+    username, password_hash = get_sunshine_credentials()
+    if not username or not password_hash:
+        return None
+
+    auth_header = f"{username}:{password_hash}"
+    encoded_auth = base64.b64encode(auth_header.encode()).decode()
+    token = f"Basic {encoded_auth}"
+
+    # Save the token for future use
+    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
+    with open(token_path, 'w') as f:
+        f.write(token)
+    return token
+
+def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
+    """Add a game to the Sunshine configuration using the API."""
+    token = get_auth_token()
+    if not token:
+        print("Error: Could not obtain authentication token.")
+        return
+
+    headers = {
+        "Authorization": token,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "name": game_name,
+        "output": "",                # Added missing field
+        "cmd": cmd,
+        "index": -1,
+        "exclude-global-prep-cmd": False,  # Changed to boolean
+        "elevated": False,            # Added missing field
+        "auto-detach": True,
+        "wait-all": True,
+        "exit-timeout": 5,
+        "prep-cmd": [],              # Added missing field
+        "detached": [],              # Added missing field
+        "image-path": image_path
+    }
+
+    cert_path = os.path.expanduser("~/.config/sunshine/credentials/cacert.pem")
 
     try:
-        with open(SUNSHINE_APPS_JSON_PATH, 'r') as file:
-            return json.load(file)
-    except json.JSONDecodeError:
-        print("Error parsing Sunshine apps JSON. Using default configuration.")
-        return {"env": {"PATH": "$(PATH):$(HOME)/.local/bin"}, "apps": []}
+        response = requests.post("https://localhost:47990/api/apps", headers=headers, json=payload, verify=False)
+        response.raise_for_status()
+        print(f"Added {game_name} to Sunshine using API.")
+    except requests.exceptions.RequestException as e:
+        print(f"Error adding {game_name} to Sunshine via API: {e}")
 
-def save_sunshine_apps(data: Dict) -> None:
-    """Save Sunshine apps configuration."""
-    with open(SUNSHINE_APPS_JSON_PATH, 'w') as file:
-        json.dump(data, file, indent=4)
+def get_sunshine_credentials() -> Tuple[str, str]:
+    """Prompts the user for their Sunshine username and password."""
+    username = input("Enter your Sunshine username: ")
+    password = getpass.getpass("Enter your Sunshine password: ")
+    return username, password
 
-def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, image_path: str, runner: str) -> None:
+def get_auth_token() -> Optional[str]:
+    """Retrieves or generates an authentication token."""
+    token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
+    if os.path.exists(token_path):
+        with open(token_path, 'r') as f:
+            return f.read().strip()
+
+    username, password = get_sunshine_credentials()
+    if not username or not password:
+        return None
+
+    # Directly use password instead of password hash
+    auth_header = f"{username}:{password}"
+    encoded_auth = base64.b64encode(auth_header.encode()).decode()
+    token = f"Basic {encoded_auth}"
+
+    # Save the token for future use
+    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
+    with open(token_path, 'w') as f:
+        f.write(token)
+    return token
+
+def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
     if runner == "Lutris":
         lutris_cmd = get_lutris_command()
@@ -45,13 +130,5 @@ def add_game_to_sunshine(sunshine_data: Dict, game_id: str, game_name: str, imag
     else:  # Bottles
         cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
-    new_app = {
-        "name": game_name,
-        "cmd": cmd,
-        "image-path": image_path,
-        "auto-detach": "true",
-        "wait-all": "true",
-        "exit-timeout": "5"
-    }
-    sunshine_data["apps"].append(new_app)
-    print(f"Added {game_name} to Sunshine with image {image_path}.")
+    # Use the API instead of directly modifying apps.json
+    add_game_to_sunshine_api(game_name, cmd, image_path)

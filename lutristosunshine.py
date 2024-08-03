@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.constants import COVERS_PATH, DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
 from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
 from utils.input import get_yes_no_input, get_user_selection
-from sunshine.sunshine import detect_sunshine_installation, load_sunshine_apps, save_sunshine_apps, add_game_to_sunshine
+from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -61,26 +61,29 @@ def main():
 
         games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed)
         print(games_found_message)
-        sunshine_data = load_sunshine_apps()
-        existing_game_names = {app["name"] for app in sunshine_data["apps"]}
+
+        # Removed loading sunshine_data as it's not needed anymore
+        # sunshine_data = load_sunshine_apps()
+        # existing_game_names = {app["name"] for app in sunshine_data["apps"]}
 
         # Sort the games alphabetically by name
         all_games.sort(key=lambda x: x[1])
 
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
-            status = "(already in Sunshine)" if game_name in existing_game_names else ""
+            # Removed check for existing games as it's not reliable anymore
+            # status = "(already in Sunshine)" if game_name in existing_game_names else ""
             if len(futures) > 1:  # Only show colors if there's more than one source
                 source_color = SOURCE_COLORS.get(display_source, "")
                 source_info = f"{source_color}({display_source}){RESET_COLOR}"
-                print(f"{idx + 1}. {game_name} {source_info} {status}")
+                print(f"{idx + 1}. {game_name} {source_info}")  # Removed status
             else:
-                print(f"{idx + 1}. {game_name} {status}")
+                print(f"{idx + 1}. {game_name}")  # Removed status
 
         selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
-        selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
+        selected_games = [all_games[i] for i in selected_indices]  # Removed check for existing games
 
         if not selected_games:
-            print("No new games to add to Sunshine configuration.")
+            print("No games selected to add to Sunshine configuration.")
             return
 
         download_images = get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
@@ -94,7 +97,7 @@ def main():
                     future = executor.submit(download_image_from_steamgriddb, game_name, api_key)
                     futures[future] = (game_id, game_name, source)
                 else:
-                    add_game_to_sunshine(sunshine_data, game_id, game_name, DEFAULT_IMAGE, source)
+                    add_game_to_sunshine(game_id, game_name, DEFAULT_IMAGE, source)
                     games_added = True
 
             for future in as_completed(futures):
@@ -105,14 +108,13 @@ def main():
                     print(f"Error downloading image for {game_name}: {e}")
                     image_path = DEFAULT_IMAGE
 
-                add_game_to_sunshine(sunshine_data, game_id, game_name, image_path, source)
+                add_game_to_sunshine(game_id, game_name, image_path, source)
                 games_added = True
 
         if games_added:
-            save_sunshine_apps(sunshine_data)
-            print("Sunshine configuration updated successfully.")
+            print("Games added to Sunshine successfully.")
         else:
-            print("No new games were added to Sunshine configuration.")
+            print("No new games were added to Sunshine.")
 
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()
