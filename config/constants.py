@@ -4,7 +4,6 @@ import os
 COVERS_PATH = os.path.expanduser("~/.config/sunshine/covers")
 DEFAULT_IMAGE = "default.png"
 API_KEY_PATH = os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
-SUNSHINE_STATE_JSON_PATH = os.path.expanduser("~/.config/sunshine/sunshine_state.json")
 CREDENTIALS_PATH = os.path.expanduser("~/.config/sunshine/credentials")
 
 SOURCE_COLORS = {

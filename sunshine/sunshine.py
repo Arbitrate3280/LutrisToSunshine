@@ -4,7 +4,7 @@ import base64
 import requests
 import getpass
 from typing import Tuple, Optional, Dict, List
-from config.constants import DEFAULT_IMAGE, SUNSHINE_STATE_JSON_PATH, CREDENTIALS_PATH
+from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
