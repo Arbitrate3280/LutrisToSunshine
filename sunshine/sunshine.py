@@ -24,19 +24,6 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
     else:
         return False, ""
 
-def get_sunshine_credentials() -> Tuple[str, str]:
-    """Retrieves username and password hash from sunshine_state.json."""
-    sunshine_state_path = os.path.expanduser("~/.config/sunshine/sunshine_state.json")
-    try:
-        with open(sunshine_state_path, 'r') as f:
-            sunshine_state = json.load(f)
-        username = sunshine_state["username"]
-        password_hash = sunshine_state["password"]
-        return username, password_hash
-    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-        print(f"Error reading credentials from {sunshine_state_path}: {e}")
-        return "", ""
-
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
     token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
