@@ -3,12 +3,15 @@ import json
 import base64
 import requests
 import getpass
+import urllib3
 from typing import Tuple, Optional, Dict, List
 from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
 
+#Remove SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def detect_sunshine_installation() -> Tuple[bool, str]:
     """Detect if Sunshine is installed and how."""
@@ -69,16 +72,16 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
 
     payload = {
         "name": game_name,
-        "output": "",                # Added missing field
+        "output": "",
         "cmd": cmd,
         "index": -1,
-        "exclude-global-prep-cmd": False,  # Changed to boolean
-        "elevated": False,            # Added missing field
+        "exclude-global-prep-cmd": False,
+        "elevated": False,
         "auto-detach": True,
         "wait-all": True,
         "exit-timeout": 5,
-        "prep-cmd": [],              # Added missing field
-        "detached": [],              # Added missing field
+        "prep-cmd": [],
+        "detached": [],
         "image-path": image_path
     }
 
