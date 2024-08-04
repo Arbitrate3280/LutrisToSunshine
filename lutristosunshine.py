@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config.constants import COVERS_PATH, DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
 from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
 from utils.input import get_yes_no_input, get_user_selection
-from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps
+from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps, get_auth_token
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -23,6 +23,10 @@ def main():
         if installation_type == "flatpak":
             print("Error: Sunshine Flatpak is not supported. Please use the native installation of Sunshine.")
             return
+
+        token = None
+        while token is None:
+            token = get_auth_token()
 
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()

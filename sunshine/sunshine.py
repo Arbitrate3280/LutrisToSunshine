@@ -90,24 +90,52 @@ def get_sunshine_credentials() -> Tuple[str, str]:
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
     token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
+
+    # Check for an existing token
     if os.path.exists(token_path):
         with open(token_path, 'r') as f:
-            return f.read().strip()
+            token = f.read().strip()
 
+        # Validate the existing token
+        headers = {
+            "Authorization": token
+        }
+        try:
+            response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
+            response.raise_for_status()  # Will raise an exception if authentication fails
+            return token  # Return the existing token if it's valid
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error: Existing token is invalid. Please re-enter your credentials.")
+            os.remove(token_path)  # Remove the invalid token file
+
+    # If no valid token exists, prompt for credentials
     username, password = get_sunshine_credentials()
     if not username or not password:
         return None
 
-    # Directly use password instead of password hash
     auth_header = f"{username}:{password}"
     encoded_auth = base64.b64encode(auth_header.encode()).decode()
     token = f"Basic {encoded_auth}"
 
-    # Save the token for future use
-    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
-    with open(token_path, 'w') as f:
-        f.write(token)
-    return token
+    # Validate the new token
+    headers = {
+        "Authorization": token
+    }
+    try:
+        response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
+        response.raise_for_status()
+
+        # Save the new token if it's valid
+        os.makedirs(CREDENTIALS_PATH, exist_ok=True)
+        with open(token_path, 'w') as f:
+            f.write(token)
+
+        return token
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error: Authentication failed. Please check your credentials.")
+        return None
 
 def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
