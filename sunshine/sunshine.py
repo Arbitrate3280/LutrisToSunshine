@@ -45,7 +45,7 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
     if error:
         print(f"Error adding {game_name} to Sunshine via API: {error}")
     else:
-        print(f"Added {game_name} to Sunshine using API.")
+        print(f"Added {game_name} to Sunshine.")
 
 def get_sunshine_credentials() -> Tuple[str, str]:
     """Prompts the user for their Sunshine username and password."""
