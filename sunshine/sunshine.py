@@ -24,27 +24,6 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
     else:
         return False, ""
 
-def get_auth_token() -> Optional[str]:
-    """Retrieves or generates an authentication token."""
-    token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
-    if os.path.exists(token_path):
-        with open(token_path, 'r') as f:
-            return f.read().strip()
-
-    username, password_hash = get_sunshine_credentials()
-    if not username or not password_hash:
-        return None
-
-    auth_header = f"{username}:{password_hash}"
-    encoded_auth = base64.b64encode(auth_header.encode()).decode()
-    token = f"Basic {encoded_auth}"
-
-    # Save the token for future use
-    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
-    with open(token_path, 'w') as f:
-        f.write(token)
-    return token
-
 def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
     """Add a game to the Sunshine configuration using the API."""
     token = get_auth_token()
