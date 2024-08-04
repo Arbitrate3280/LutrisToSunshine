@@ -30,7 +30,7 @@ This tool is designed to work with Sunshine installed on the host along with Lut
 2. Install required Python libraries:
 
 ```bash
-  pip install requests Pillow
+  pip install -r requirements.txt
 ```
 ## Usage
 
