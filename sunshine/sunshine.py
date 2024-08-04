@@ -4,6 +4,7 @@ import base64
 import requests
 import getpass
 import urllib3
+import subprocess
 from typing import Tuple, Optional, Dict, List
 from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH, SUNSHINE_API_URL
 from utils.utils import run_command
@@ -53,11 +54,25 @@ def get_sunshine_credentials() -> Tuple[str, str]:
     password = getpass.getpass("Enter your Sunshine password: ")
     return username, password
 
+def is_sunshine_running() -> bool:
+    """Checks if Sunshine is currently running."""
+    try:
+        # Run the ps command to check for the Sunshine process
+        output = subprocess.check_output(["ps", "-A"], stderr=subprocess.STDOUT).decode()
+        return "sunshine" in output.lower()  # Check if "sunshine" is present in the process list
+    except subprocess.CalledProcessError:
+        return False
+
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
     token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
 
-    # Check for an existing token
+    # Check if Sunshine is running BEFORE attempting any authentication
+    if not is_sunshine_running():
+        print("Error: Sunshine is not running. Please start Sunshine and try again.")
+        return None
+
+    # Check for an existing token (only if Sunshine is running)
     if os.path.exists(token_path):
         with open(token_path, 'r') as f:
             token = f.read().strip()
@@ -70,7 +85,7 @@ def get_auth_token() -> Optional[str]:
         else:
             return token
 
-    # If no valid token exists, prompt for credentials
+    # If no valid token exists, prompt for credentials (only if Sunshine is running)
     username, password = get_sunshine_credentials()
     if not username or not password:
         return None
