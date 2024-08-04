@@ -26,16 +26,6 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
 
 def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
     """Add a game to the Sunshine configuration using the API."""
-    token = get_auth_token()
-    if not token:
-        print("Error: Could not obtain authentication token.")
-        return
-
-    headers = {
-        "Authorization": token,
-        "Content-Type": "application/json"
-    }
-
     payload = {
         "name": game_name,
         "output": "",
@@ -51,12 +41,11 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
         "image-path": image_path
     }
 
-    try:
-        response = requests.post(f"{SUNSHINE_API_URL}/api/apps", headers=headers, json=payload, verify=False)
-        response.raise_for_status()
+    _, error = sunshine_api_request("POST", "/api/apps", json=payload)
+    if error:
+        print(f"Error adding {game_name} to Sunshine via API: {error}")
+    else:
         print(f"Added {game_name} to Sunshine using API.")
-    except requests.exceptions.RequestException as e:
-        print(f"Error adding {game_name} to Sunshine via API: {e}")
 
 def get_sunshine_credentials() -> Tuple[str, str]:
     """Prompts the user for their Sunshine username and password."""
@@ -74,17 +63,12 @@ def get_auth_token() -> Optional[str]:
             token = f.read().strip()
 
         # Validate the existing token
-        headers = {
-            "Authorization": token
-        }
-        try:
-            response = requests.get(f"{SUNSHINE_API_URL}/api/apps", headers=headers, verify=False)
-            response.raise_for_status()  # Will raise an exception if authentication fails
-            return token  # Return the existing token if it's valid
-
-        except requests.exceptions.RequestException as e:
+        _, error = sunshine_api_request("GET", "/api/apps", token=token)
+        if error:
             print(f"Error: Existing token is invalid. Please re-enter your credentials.")
             os.remove(token_path)  # Remove the invalid token file
+        else:
+            return token
 
     # If no valid token exists, prompt for credentials
     username, password = get_sunshine_credentials()
@@ -96,23 +80,17 @@ def get_auth_token() -> Optional[str]:
     token = f"Basic {encoded_auth}"
 
     # Validate the new token
-    headers = {
-        "Authorization": token
-    }
-    try:
-        response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
-        response.raise_for_status()
-
-        # Save the new token if it's valid
-        os.makedirs(CREDENTIALS_PATH, exist_ok=True)
-        with open(token_path, 'w') as f:
-            f.write(token)
-
-        return token
-
-    except requests.exceptions.RequestException as e:
+    _, error = sunshine_api_request("GET", "/api/apps", token=token)
+    if error:
         print(f"Error: Authentication failed. Please check your credentials.")
         return None
+
+    # Save the new token if it's valid
+    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
+    with open(token_path, 'w') as f:
+        f.write(token)
+
+    return token
 
 def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: str) -> None:
     """Add a game to the Sunshine configuration."""
@@ -130,31 +108,51 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: 
 
 def get_existing_apps() -> List[Dict]:
     """Retrieves the list of existing apps from the Sunshine API."""
-    token = get_auth_token()
-    if not token:
-        print("Error: Could not obtain authentication token.")
+    data, error = sunshine_api_request("GET", "/api/apps")
+    if error:
+        print(f"Error retrieving existing apps from Sunshine API: {error}")
         return []
+
+    existing_apps = []
+    apps_list = data.get("apps", [])
+    if isinstance(apps_list, list):
+        for app_data in apps_list:
+            if isinstance(app_data, dict) and "name" in app_data:
+                existing_apps.append({"name": app_data["name"]})
+    else:
+        print("Warning: Unexpected data structure in API response.")
+
+    return existing_apps
+
+def sunshine_api_request(method, endpoint, **kwargs):
+    """Makes an API request to Sunshine.
+
+    Args:
+        method (str): The HTTP method (GET, POST, etc.)
+        endpoint (str): The API endpoint.
+        **kwargs: Additional keyword arguments for the requests.request() function.
+
+    Returns:
+        Tuple[Optional[Dict], Optional[str]]: A tuple containing the JSON response data 
+                                              (if successful) and an error message (if any).
+    """
+    token = kwargs.pop("token", None)  # Get token from kwargs, if provided
+    if token is None:
+        token = get_auth_token()  # Get the token only if not provided
+
+    if not token:
+        return None, "Error: Could not obtain authentication token."
 
     headers = {
         "Authorization": token
     }
 
+    url = f"{SUNSHINE_API_URL}{endpoint}"
+
     try:
-        response = requests.get(f"{SUNSHINE_API_URL}/api/apps", headers=headers, verify=False)
+        response = requests.request(method, url, headers=headers, verify=False, **kwargs)
         response.raise_for_status()
-        data = response.json()
-
-        existing_apps = []
-        apps_list = data.get("apps", [])
-        if isinstance(apps_list, list):
-            for app_data in apps_list:
-                if isinstance(app_data, dict) and "name" in app_data:
-                    existing_apps.append({"name": app_data["name"]})
-        else:
-            print("Warning: Unexpected data structure in API response.")
-
-        return existing_apps
+        return response.json(), None
 
     except requests.exceptions.RequestException as e:
-        print(f"Error retrieving existing apps from Sunshine API: {e}")
-        return []
+        return None, str(e)
