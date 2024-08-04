@@ -25,7 +25,7 @@ jobs:
 
     - name: Create binary with PyInstaller
       run: |
-        pyinstaller --onefile lutristosunshine.py
+        pyinstaller --onefile --add-data "config:config" --add-data "launchers:launchers" --add-data "sunshine:sunshine" --add-data "utils:utils" lutristosunshine.py
 
     - name: Upload binary as artifact
       uses: actions/upload-artifact@v4
