@@ -5,7 +5,7 @@ import requests
 import getpass
 import urllib3
 from typing import Tuple, Optional, Dict, List
-from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH
+from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH, SUNSHINE_API_URL
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
@@ -72,10 +72,8 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
         "image-path": image_path
     }
 
-    cert_path = os.path.expanduser("~/.config/sunshine/credentials/cacert.pem")
-
     try:
-        response = requests.post("https://localhost:47990/api/apps", headers=headers, json=payload, verify=False)
+        response = requests.post(f"{SUNSHINE_API_URL}/api/apps", headers=headers, json=payload, verify=False)
         response.raise_for_status()
         print(f"Added {game_name} to Sunshine using API.")
     except requests.exceptions.RequestException as e:
@@ -101,7 +99,7 @@ def get_auth_token() -> Optional[str]:
             "Authorization": token
         }
         try:
-            response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
+            response = requests.get(f"{SUNSHINE_API_URL}/api/apps", headers=headers, verify=False)
             response.raise_for_status()  # Will raise an exception if authentication fails
             return token  # Return the existing token if it's valid
 
@@ -163,7 +161,7 @@ def get_existing_apps() -> List[Dict]:
     }
 
     try:
-        response = requests.get("https://localhost:47990/api/apps", headers=headers, verify=False)
+        response = requests.get(f"{SUNSHINE_API_URL}/api/apps", headers=headers, verify=False)
         response.raise_for_status()
         data = response.json()
 
