@@ -72,14 +72,9 @@ def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
         image_response.raise_for_status()
 
         # Check if the image is already a PNG
-        content_type = image_response.headers.get('Content-Type', '')
-        if content_type.lower() == 'image/png':
-            with open(image_path, 'wb') as f:
-                f.write(image_response.content)
-        else:
-            image = Image.open(BytesIO(image_response.content))
-            image = image.convert("P", palette=Image.ADAPTIVE, colors=256)
-            image.save(image_path, "PNG", optimize=True)
+        image = Image.open(BytesIO(image_response.content))
+        image = image.convert("P", palette=Image.ADAPTIVE, colors=256)
+        image.save(image_path, "PNG", optimize=True)
 
         return image_path
 
