@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,26 +13,72 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.x'
+        python-version: '3.11'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y patchelf python3.11-dev gcc build-essential
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests Pillow pyinstaller
+        python -m pip install --upgrade setuptools wheel
+        pip install requests Pillow
+        pip install nuitka
 
-    - name: Create binary with PyInstaller
+    - name: Create binary with Nuitka
       run: |
-        pyinstaller --onefile --add-data "config:config" --add-data "launchers:launchers" --add-data "sunshine:sunshine" --add-data "utils:utils" lutristosunshine.py
+        python -m nuitka \
+          --onefile \
+          --assume-yes-for-downloads \
+          --jobs=$(nproc) \
+          --static-libpython=no \
+          --output-filename=lutristosunshine
+          lutristosunshine.py
 
     - name: Upload binary as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: lutristosunshine
-        path: dist/lutristosunshine
+        name: lutristosunshine-${{ github.sha }}
+        path: lutristosunshine
+        retention-days: 5
+
+    - name: Generate Release Notes
+      if: startsWith(github.ref, 'refs/tags/')
+      id: release_notes
+      run: |
+        # Get latest tag
+        CURRENT_TAG=${GITHUB_REF#refs/tags/}
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        # Start building release notes
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+        echo "# LutrisToSunshine ${CURRENT_TAG}" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
+        
+        echo "## What's Changed" >> $GITHUB_ENV
+        if [ -n "$PREVIOUS_TAG" ]; then
+          git log --pretty=format:"* %s (%h)" ${PREVIOUS_TAG}..${CURRENT_TAG} >> $GITHUB_ENV
+        else
+          git log --pretty=format:"* %s (%h)" ${CURRENT_TAG} >> $GITHUB_ENV
+        fi
+        echo "" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
+        
+        echo "## Installation" >> $GITHUB_ENV
+        echo "1. Download the binary" >> $GITHUB_ENV
+        echo "2. Make it executable: \`chmod +x lutristosunshine\`" >> $GITHUB_ENV
+        echo "3. Run it: \`./lutristosunshine\`" >> $GITHUB_ENV
+        echo "" >> $GITHUB_ENV
+        
+        echo "EOF" >> $GITHUB_ENV
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -40,8 +87,7 @@ jobs:
         files: dist/lutristosunshine
         tag_name: ${{ github.ref }}
         name: Release ${{ github.ref }}
-        body: |
-          Automated release for commit ${{ github.sha }}
-        generate_release_notes: true
+        body: ${{ env.RELEASE_NOTES }}
+        generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
