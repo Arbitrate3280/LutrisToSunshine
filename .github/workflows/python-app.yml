@@ -40,7 +40,7 @@ jobs:
           --assume-yes-for-downloads \
           --jobs=$(nproc) \
           --static-libpython=no \
-          --output-filename=lutristosunshine
+          --output-filename=lutristosunshine \
           lutristosunshine.py
 
     - name: Upload binary as artifact
