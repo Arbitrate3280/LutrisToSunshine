@@ -76,8 +76,8 @@ def list_heroic_games() -> List[Tuple[str, str, str, str]]:
                         # In case there are other list-based structures in future
                         for game in data:
                             if isinstance(game, dict):
-                                app_id = game.get("appName") or game.get("app_name")
-                                install_path = game.get("install_path")
+                                app_id = game.get("appName") or game.get("app_name") or game.get("id")
+                                install_path = game.get("install_path") or game.get("path")
                                 if install_path:
                                     title = install_path.split('/')[-1]
                                 else:
