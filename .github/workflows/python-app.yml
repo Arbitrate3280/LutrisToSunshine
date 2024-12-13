@@ -24,7 +24,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y patchelf python3.11-dev gcc build-essential
+        sudo apt-get install -y patchelf python3-dev gcc build-essential
 
     - name: Install dependencies
       run: |
