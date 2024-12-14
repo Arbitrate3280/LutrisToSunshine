@@ -54,20 +54,53 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       id: release_notes
       run: |
-        # Get latest tag
+        # Get latest tag and clean it
         CURRENT_TAG=${GITHUB_REF#refs/tags/}
         PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
         
-        # Start building release notes
         echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        echo "# LutrisToSunshine ${CURRENT_TAG}" >> $GITHUB_ENV
-        echo "" >> $GITHUB_ENV
         
         echo "## What's Changed" >> $GITHUB_ENV
         if [ -n "$PREVIOUS_TAG" ]; then
-          git log --pretty=format:"* %s (%h)" ${PREVIOUS_TAG}..${CURRENT_TAG} >> $GITHUB_ENV
+          # Get commits between tags, excluding merge commits and workflow changes
+          git log --pretty=format:"%H" ${PREVIOUS_TAG}..${CURRENT_TAG} | \
+          while read -r commit_hash; do
+            # Get the commit message
+            commit_msg=$(git log -1 --pretty=format:"%s (%h)" $commit_hash)
+            
+            # Skip if it matches our filter patterns
+            if echo "$commit_msg" | grep -qE "^Merge |workflow|\.github|gitignore|requirements.txt|README|typo"; then
+              continue
+            fi
+            
+            # Check if this commit is associated with a PR
+            pr_info=$(git log -1 --pretty=format:"%b" $commit_hash | grep -o "^PR: #[0-9]* from \S*" || true)
+            if [ -n "$pr_info" ]; then
+              # Extract username from PR info
+              contributor=$(echo $pr_info | grep -o "from \S*" | cut -d' ' -f2)
+              echo "* ${commit_msg} - Thank you @${contributor} for your contribution! 🎉" >> $GITHUB_ENV
+            else
+              echo "* ${commit_msg}" >> $GITHUB_ENV
+            fi
+          done
         else
-          git log --pretty=format:"* %s (%h)" ${CURRENT_TAG} >> $GITHUB_ENV
+          # Same logic for first release
+          git log --pretty=format:"%H" ${CURRENT_TAG} | \
+          while read -r commit_hash; do
+            commit_msg=$(git log -1 --pretty=format:"%s (%h)" $commit_hash)
+            
+            if echo "$commit_msg" | grep -qE "^Merge |workflow|\.github|gitignore|requirements.txt|README|typo"; then
+              continue
+            fi
+            
+            pr_info=$(git log -1 --pretty=format:"%b" $commit_hash | grep -o "^PR: #[0-9]* from \S*" || true)
+            if [ -n "$pr_info" ]; then
+              contributor=$(echo $pr_info | grep -o "from \S*" | cut -d' ' -f2)
+              echo "* ${commit_msg} - Thank you @${contributor} for your contribution! 🎉" >> $GITHUB_ENV
+            else
+              echo "* ${commit_msg}" >> $GITHUB_ENV
+            fi
+          done
         fi
         echo "" >> $GITHUB_ENV
         echo "" >> $GITHUB_ENV
@@ -84,9 +117,9 @@ jobs:
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: dist/lutristosunshine
+        files: lutristosunshine
         tag_name: ${{ github.ref }}
-        name: Release ${{ github.ref }}
+        name: ${{ github.ref }}
         body: ${{ env.RELEASE_NOTES }}
         generate_release_notes: false
       env:
