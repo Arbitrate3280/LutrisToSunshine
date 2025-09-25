@@ -1,4 +1,5 @@
 from typing import List, Tuple
+import os
 from utils.utils import run_command, parse_bottles_output, parse_bottles_programs
 
 def detect_bottles_installation() -> bool:
@@ -8,6 +9,9 @@ def detect_bottles_installation() -> bool:
 def list_bottles_games() -> List[Tuple[str, str, str, str]]:
     """List all games in Bottles."""
     games = []
+    bottles_dir = os.path.expanduser("~/.var/app/com.usebottles.bottles/data/bottles/bottles")
+    if not os.path.exists(bottles_dir):
+        return []
     cmd = "flatpak run --command=bottles-cli com.usebottles.bottles list bottles -f environment:gaming"
     result = run_command(cmd)
     bottles = parse_bottles_output(result)
