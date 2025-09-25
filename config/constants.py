@@ -5,10 +5,11 @@ DEFAULT_IMAGE = "default.png"
 SUNSHINE_API_URL = "https://localhost:47990"  # Change this if needed
 
 SOURCE_COLORS = {
-    "Heroic": "\033[38;5;39m",  # #3CA6F9
-    "Lutris": "\033[38;5;214m",  # #FFAF00
-    "Bottles": "\033[38;5;203m",  # #F3544B
-    "Steam": "\033[38;5;28m"  # #00FF00 or green
+    "Heroic": "\033[38;5;39m",  # Blue 
+    "Lutris": "\033[38;5;214m",  # Orange 
+    "Bottles": "\033[38;5;203m",  # Red - wine/bottles theme
+    "Steam": "\033[38;5;26m",  # Dark blue - Steam branding
+    "Ryubing": "\033[38;5;196m"  # Bright red - Nintendo Switch theme
 }
 RESET_COLOR = "\033[0m"
 

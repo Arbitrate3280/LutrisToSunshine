@@ -12,6 +12,7 @@ from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
 from launchers.bottles import detect_bottles_installation, list_bottles_games
 from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
+from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
 
 def main():
     try:
@@ -39,9 +40,10 @@ def main():
         bottles_installed = detect_bottles_installation()
         steam_installed, _ = detect_steam_installation()
         steam_command = get_steam_command() if steam_installed else ""
+        ryubing_installed = detect_ryubing_installation()
 
-        if not lutris_command and not heroic_command and not bottles_installed and not steam_command:
-            print("No Lutris, Heroic, Bottles, or Steam installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed:
+            print("No Lutris, Heroic, Bottles, Steam, or Ryubing installation detected.")
             return
 
         if lutris_command and is_lutris_running():
@@ -58,6 +60,8 @@ def main():
                 futures['Bottles'] = executor.submit(list_bottles_games)
             if steam_command:
                 futures['Steam'] = executor.submit(list_steam_games)
+            if ryubing_installed:
+                futures['Ryubing'] = executor.submit(list_ryubing_games)
 
             all_games = []
             for source, future in futures.items():
@@ -70,12 +74,14 @@ def main():
                     all_games.extend(result)  # Bottles results are already in the correct format
                 elif source == 'Steam':
                     all_games.extend([(game_id, game_name, "Steam", "Steam") for game_id, game_name in result])
+                elif source == 'Ryubing':
+                    all_games.extend([(game_id, game_name, "Ryubing", "Ryubing") for game_id, game_name in result])
 
         if not all_games:
             print("No games found in Lutris, Heroic, Bottles, or Steam.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command)
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed)
         print(games_found_message)
 
         existing_apps = get_existing_apps()

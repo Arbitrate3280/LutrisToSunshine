@@ -143,6 +143,8 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: 
     elif runner == "Steam":
         steam_cmd = get_steam_command()
         cmd = f"{steam_cmd} steam://run/{game_id}"
+    elif runner == "Ryubing":
+        cmd = f"flatpak run io.github.ryubing.Ryujinx \"{game_id}\""
     else:  # Bottles
         cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
