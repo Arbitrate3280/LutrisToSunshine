@@ -129,7 +129,12 @@ def get_existing_apps() -> List[Dict]:
         return []
 
     existing_apps = []
-    apps_list = data.get("apps", [])
+    apps_list = []
+    if data is not None:
+        apps_list = data.get("apps", [])
+    else:
+        print("Warning: No data received from Sunshine API.")
+
     if isinstance(apps_list, list):
         for app_data in apps_list:
             if isinstance(app_data, dict) and "name" in app_data:
