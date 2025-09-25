@@ -6,13 +6,37 @@ import getpass
 import urllib3
 import subprocess
 from typing import Tuple, Optional, Dict, List
-from config.constants import DEFAULT_IMAGE, CREDENTIALS_PATH, SUNSHINE_API_URL
+from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
 
 #Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+INSTALLATION_TYPE = None
+
+def set_installation_type(type_: str):
+    global INSTALLATION_TYPE
+    INSTALLATION_TYPE = type_
+
+def get_covers_path():
+    if INSTALLATION_TYPE == "flatpak":
+        return os.path.expanduser("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/covers")
+    else:
+        return os.path.expanduser("~/.config/sunshine/covers")
+
+def get_api_key_path():
+    if INSTALLATION_TYPE == "flatpak":
+        return os.path.expanduser("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/steamgriddb_api_key.txt")
+    else:
+        return os.path.expanduser("~/.config/sunshine/steamgriddb_api_key.txt")
+
+def get_credentials_path():
+    if INSTALLATION_TYPE == "flatpak":
+        return os.path.expanduser("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/credentials")
+    else:
+        return os.path.expanduser("~/.config/sunshine/credentials")
 
 def detect_sunshine_installation() -> Tuple[bool, str]:
     """Detect if Sunshine is installed and how."""
@@ -65,7 +89,7 @@ def is_sunshine_running() -> bool:
 
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
-    token_path = os.path.join(CREDENTIALS_PATH, "auth_token.txt")
+    token_path = os.path.join(get_credentials_path(), "auth_token.txt")
 
     # Check if Sunshine is running BEFORE attempting any authentication
     if not is_sunshine_running():
@@ -101,7 +125,7 @@ def get_auth_token() -> Optional[str]:
         return None
 
     # Save the new token if it's valid
-    os.makedirs(CREDENTIALS_PATH, exist_ok=True)
+    os.makedirs(get_credentials_path(), exist_ok=True)
     with open(token_path, 'w') as f:
         f.write(token)
 

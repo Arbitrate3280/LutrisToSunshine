@@ -2,7 +2,8 @@ import sys
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config.constants import COVERS_PATH, DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
+from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
+from sunshine.sunshine import get_covers_path, set_installation_type
 from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
 from utils.input import get_yes_no_input, get_user_selection
 from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps, get_auth_token, is_sunshine_running
@@ -11,18 +12,17 @@ from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
 from launchers.bottles import detect_bottles_installation, list_bottles_games
 
-# Ensure the covers directory exists
-os.makedirs(COVERS_PATH, exist_ok=True)
-
 def main():
     try:
         sunshine_installed, installation_type = detect_sunshine_installation()
         if not sunshine_installed:
             print("Error: No Sunshine installation detected.")
             return
-        if installation_type == "flatpak":
-            print("Error: Sunshine Flatpak is not supported. Please use the native installation of Sunshine.")
-            return
+
+        set_installation_type(installation_type)
+        COVERS_PATH = get_covers_path()
+
+        os.makedirs(COVERS_PATH, exist_ok=True)
 
         if not is_sunshine_running():
             print("Error: Sunshine is not running. Please start Sunshine and try again.")
@@ -62,7 +62,7 @@ def main():
                 elif source == 'Heroic':
                     all_games.extend([(game_id, game_name, "Heroic", runner) for game_id, game_name, _, runner in result])
                 elif source == 'Bottles':
-                    all_games.extend(result)  # Bottles results are already in the correct format
+                    all_games.extend(result) 
 
         if not all_games:
             print("No games found in Lutris, Heroic, or Bottles.")
@@ -74,12 +74,11 @@ def main():
         existing_apps = get_existing_apps()
         existing_game_names = {app["name"] for app in existing_apps}
 
-        # Sort the games alphabetically by name
         all_games.sort(key=lambda x: x[1])
 
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
             status = "(already in Sunshine)" if game_name in existing_game_names else ""
-            if len(futures) > 1:  # Only show colors if there's more than one source
+            if len(futures) > 1: 
                 source_color = SOURCE_COLORS.get(display_source, "")
                 source_info = f"{source_color}({display_source}){RESET_COLOR}"
                 print(f"{idx + 1}. {game_name} {source_info} {status}")
