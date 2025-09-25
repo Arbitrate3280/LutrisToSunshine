@@ -119,7 +119,7 @@ jobs:
       with:
         files: lutristosunshine
         tag_name: ${{ github.ref }}
-        name: ${{ github.ref }}
+        name: ${{ github.ref_name }}
         body: ${{ env.RELEASE_NOTES }}
         generate_release_notes: false
       env:
