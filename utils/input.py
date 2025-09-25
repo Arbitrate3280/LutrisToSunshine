@@ -1,7 +1,7 @@
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Callable
 from utils.utils import handle_interrupt
 
-def get_user_input(prompt: str, validator: callable, error_message: str) -> Any:
+def get_user_input(prompt: str, validator: Callable[[str], Any], error_message: str) -> Any:
     """Get and validate user input."""
     while True:
         try:
