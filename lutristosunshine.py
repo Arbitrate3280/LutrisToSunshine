@@ -11,6 +11,7 @@ from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
 from launchers.bottles import detect_bottles_installation, list_bottles_games
+from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
 
 def main():
     try:
@@ -36,9 +37,11 @@ def main():
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()
         bottles_installed = detect_bottles_installation()
+        steam_installed, _ = detect_steam_installation()
+        steam_command = get_steam_command() if steam_installed else ""
 
-        if not lutris_command and not heroic_command and not bottles_installed:
-            print("No Lutris, Heroic, or Bottles installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed and not steam_command:
+            print("No Lutris, Heroic, Bottles, or Steam installation detected.")
             return
 
         if lutris_command and is_lutris_running():
@@ -53,6 +56,8 @@ def main():
                 futures['Heroic'] = executor.submit(list_heroic_games)
             if bottles_installed:
                 futures['Bottles'] = executor.submit(list_bottles_games)
+            if steam_command:
+                futures['Steam'] = executor.submit(list_steam_games)
 
             all_games = []
             for source, future in futures.items():
@@ -62,13 +67,15 @@ def main():
                 elif source == 'Heroic':
                     all_games.extend([(game_id, game_name, "Heroic", runner) for game_id, game_name, _, runner in result])
                 elif source == 'Bottles':
-                    all_games.extend(result) 
+                    all_games.extend(result)  # Bottles results are already in the correct format
+                elif source == 'Steam':
+                    all_games.extend([(game_id, game_name, "Steam", "Steam") for game_id, game_name in result])
 
         if not all_games:
-            print("No games found in Lutris, Heroic, or Bottles.")
+            print("No games found in Lutris, Heroic, Bottles, or Steam.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed)
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command)
         print(games_found_message)
 
         existing_apps = get_existing_apps()

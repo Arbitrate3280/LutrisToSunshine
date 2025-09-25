@@ -10,6 +10,7 @@ from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
+from launchers.steam import get_steam_command
 
 #Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -139,6 +140,9 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: 
     elif runner in ["legendary", "gog", "nile", "sideload"]:
         heroic_cmd, _ = get_heroic_command()
         cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+    elif runner == "Steam":
+        steam_cmd = get_steam_command()
+        cmd = f"{steam_cmd} steam://run/{game_id}"
     else:  # Bottles
         cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
