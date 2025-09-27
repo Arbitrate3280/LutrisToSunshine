@@ -40,7 +40,7 @@ def parse_bottles_programs(result: subprocess.CompletedProcess) -> List[str]:
     # Skip the "Found X programs:" line, empty lines, and remove leading "- "
     return [line.strip("- ").strip() for line in lines if line.strip() and not line.startswith("Found")]
 
-def get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed):
+def get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed, retroarch_installed):
     sources = set()
     if lutris_command:
         sources.add("Lutris")
@@ -52,6 +52,8 @@ def get_games_found_message(lutris_command, heroic_command, bottles_installed, s
         sources.add("Steam")
     if ryubing_installed:
         sources.add("Ryubing")
+    if retroarch_installed:
+        sources.add("RetroArch")
 
     if not sources:
         return "No game sources detected."

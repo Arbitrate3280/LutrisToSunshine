@@ -12,6 +12,7 @@ from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
 from launchers.steam import get_steam_command
+from launchers.retroarch import get_retroarch_command
 
 #Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -143,7 +144,7 @@ def get_auth_token() -> Optional[str]:
 
     return token
 
-def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: str) -> None:
+def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
     """Add a game to the Sunshine configuration."""
     if runner == "Lutris":
         lutris_cmd = get_lutris_command()
@@ -156,6 +157,14 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner: 
         cmd = f"{steam_cmd} steam://run/{game_id}"
     elif runner == "Ryubing":
         cmd = f"flatpak run io.github.ryubing.Ryujinx \"{game_id}\""
+    elif isinstance(runner, dict) and runner.get("type") == "RetroArch":
+        core_path = runner.get("core_path", "")
+        core_path = os.path.expanduser(core_path) if core_path else core_path
+        retroarch_cmd = get_retroarch_command()
+        if not retroarch_cmd or not core_path:
+            print(f"Warning: Unable to determine RetroArch launch command for {game_name}. Skipping.")
+            return
+        cmd = f'{retroarch_cmd} -L "{core_path}" "{game_id}"'
     else:  # Bottles
         cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 

@@ -13,6 +13,7 @@ from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_ru
 from launchers.bottles import detect_bottles_installation, list_bottles_games
 from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
 from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
+from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
 
 def main():
     try:
@@ -41,9 +42,10 @@ def main():
         steam_installed, _ = detect_steam_installation()
         steam_command = get_steam_command() if steam_installed else ""
         ryubing_installed = detect_ryubing_installation()
+        retroarch_installed = detect_retroarch_installation()
 
-        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed:
-            print("No Lutris, Heroic, Bottles, Steam, or Ryubing installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed and not retroarch_installed:
+            print("No Lutris, Heroic, Bottles, Steam, Ryubing, or RetroArch installation detected.")
             return
 
         if lutris_command and is_lutris_running():
@@ -62,6 +64,8 @@ def main():
                 futures['Steam'] = executor.submit(list_steam_games)
             if ryubing_installed:
                 futures['Ryubing'] = executor.submit(list_ryubing_games)
+            if retroarch_installed:
+                futures['RetroArch'] = executor.submit(list_retroarch_games)
 
             all_games = []
             for source, future in futures.items():
@@ -76,12 +80,22 @@ def main():
                     all_games.extend([(game_id, game_name, "Steam", "Steam") for game_id, game_name in result])
                 elif source == 'Ryubing':
                     all_games.extend([(game_id, game_name, "Ryubing", "Ryubing") for game_id, game_name in result])
+                elif source == 'RetroArch':
+                    all_games.extend([
+                        (
+                            game_path,
+                            game_name,
+                            "RetroArch",
+                            core_info,
+                        )
+                        for game_path, game_name, core_info in result
+                    ])
 
         if not all_games:
             print("No games found in Lutris, Heroic, Bottles, or Steam.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed)
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed, retroarch_installed)
         print(games_found_message)
 
         existing_apps = get_existing_apps()
@@ -105,13 +119,28 @@ def main():
             print("No new games to add to Sunshine configuration.")
             return
 
+        valid_selected_games = []
+        for game_id, game_name, display_source, source in selected_games:
+            if display_source == "RetroArch":
+                core_info = source if isinstance(source, dict) else {}
+                core_path = (core_info.get("core_path", "") or "").strip()
+                core_name = (core_info.get("core_name", "") or "").strip()
+                if core_path.upper() == "DETECT" or core_name.upper() == "DETECT" or not core_path:
+                    print(f"Error: RetroArch core not set for '{game_name}'. Please associate the game with a core in RetroArch before adding it to Sunshine.")
+                    continue
+            valid_selected_games.append((game_id, game_name, display_source, source))
+
+        if not valid_selected_games:
+            print("No games ready to add. Please resolve the reported issues and try again.")
+            return
+
         download_images = get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
         api_key = manage_api_key() if download_images else None
 
         games_added = False
         with ThreadPoolExecutor() as executor:
             futures = {}
-            for game_id, game_name, display_source, source in selected_games:
+            for game_id, game_name, display_source, source in valid_selected_games:
                 if download_images and api_key:
                     future = executor.submit(download_image_from_steamgriddb, game_name, api_key)
                     futures[future] = (game_id, game_name, source)
