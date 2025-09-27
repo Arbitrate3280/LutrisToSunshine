@@ -1,7 +1,7 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris, Heroic, Bottles, Steam, and Ryubing, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing and Retroarch, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 
 
@@ -13,13 +13,14 @@ This script lists games from Lutris, Heroic, Bottles, Steam, and Ryubing, adds t
   - Bottles (Flatpak)
   - Steam (Native and Flatpak)
   - Ryubing (Flatpak)
+  - RetroArch (Native and Flatpak)
 - Adds selected games to Sunshine
 - Option to add all listed games at once
 - Downloads game covers from SteamGridDB (optional)
 - Avoids duplicate entries in Sunshine
 
 ## Main Goal
-This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, or Ryubing. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Ryubing, or RetroArch. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
 
 ## Installation
 
@@ -64,6 +65,7 @@ chmod +x lutristosunshine
  - [Heroic Games Launcher](https://heroicgameslauncher.com/)
  - [Bottles](https://usebottles.com/)
  - [Ryubing](https://ryujinx.app/)
+ - [RetroArch](https://www.retroarch.com/)
  - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
  - [SteamGridDB](https://www.steamgriddb.com/)
 
