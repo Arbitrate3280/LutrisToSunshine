@@ -5,6 +5,7 @@ import requests
 import getpass
 import urllib3
 import subprocess
+import glob
 from typing import Tuple, Optional, Dict, List
 from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
 from utils.utils import run_command
@@ -47,7 +48,17 @@ def detect_sunshine_installation() -> Tuple[bool, str]:
     # Check for native installation
     elif run_command("which sunshine").returncode == 0:
         return True, "native"
+    # Check for AppImage installation
     else:
+        appimage_paths = (
+            glob.glob(os.path.expanduser("~/sunshine.AppImage")) +
+            glob.glob(os.path.expanduser("~/.local/share/applications/sunshine.AppImage")) +
+            glob.glob(os.path.expanduser("~/AppImages/sunshine.AppImage")) +
+            glob.glob(os.path.expanduser("~/bin/sunshine.AppImage")) +
+            glob.glob(os.path.expanduser("~/Downloads/sunshine.AppImage"))
+        )
+        if appimage_paths:
+            return True, "appimage"
         return False, ""
 
 def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
