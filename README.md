@@ -3,7 +3,7 @@
 
 This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing and Retroarch, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
-
+<img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 
 ## Features
 
