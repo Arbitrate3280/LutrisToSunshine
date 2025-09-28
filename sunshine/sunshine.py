@@ -168,6 +168,10 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) 
     else:  # Bottles
         cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
+    # Prefix commands with flatpak-spawn --host if Sunshine is installed as Flatpak
+    if INSTALLATION_TYPE == "flatpak":
+        cmd = f"flatpak-spawn --host {cmd}"
+
     # Use the API instead of directly modifying apps.json
     add_game_to_sunshine_api(game_name, cmd, image_path)
 
