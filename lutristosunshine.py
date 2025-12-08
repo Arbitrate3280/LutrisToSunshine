@@ -1,5 +1,6 @@
 import sys
 import os
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
@@ -15,7 +16,23 @@ from launchers.steam import detect_steam_installation, list_steam_games, get_ste
 from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
 from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Sync launcher games to Sunshine.")
+    parser.add_argument(
+        "--cover",
+        action="store_true",
+        help="Automatically download SteamGridDB covers for added games.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Automatically add all listed games (skips selection prompt).",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     try:
         sunshine_installed, installation_type = detect_sunshine_installation()
         if not sunshine_installed:
@@ -112,7 +129,11 @@ def main():
             else:
                 print(f"{idx + 1}. {game_name} {status}")
 
-        selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+        if args.all:
+            selected_indices = list(range(len(all_games)))
+        else:
+            selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+
         selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
 
         if not selected_games:
@@ -134,7 +155,7 @@ def main():
             print("No games ready to add. Please resolve the reported issues and try again.")
             return
 
-        download_images = get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
+        download_images = args.cover or get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
         api_key = manage_api_key() if download_images else None
 
         games_added = False
