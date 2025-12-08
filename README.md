@@ -45,6 +45,33 @@ This tool is designed to work with Sunshine (native or flatpak) along with Lutri
 python3 lutristosunshine.py
 ```
 
+### Command Line Arguments
+
+- `--cover`: Automatically download covers from SteamGridDB for all added games
+- `--all`: Automatically add all listed games (skips the selection prompt)
+
+### Examples
+
+- Interactive mode (select games manually, optionally download covers):
+  ```bash
+  python3 lutristosunshine.py
+  ```
+
+- Add all games with automatic cover downloads:
+  ```bash
+  python3 lutristosunshine.py --all --cover
+  ```
+
+- Add all games without cover downloads:
+  ```bash
+  python3 lutristosunshine.py --all
+  ```
+
+- Interactive mode with automatic cover downloads:
+  ```bash
+  python3 lutristosunshine.py --cover
+  ```
+
 3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
 
 Alternatively, you can download the binary available in the "Releases" section of the GitHub repository. Download the binary from the latest release, make it executable, and run it:
@@ -52,6 +79,11 @@ Alternatively, you can download the binary available in the "Releases" section o
 ```bash
 chmod +x lutristosunshine
 ./lutristosunshine
+```
+
+The same command line arguments work with the binary:
+```bash
+./lutristosunshine --all --cover
 ```
 
 ## License
