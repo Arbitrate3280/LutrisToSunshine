@@ -4,10 +4,10 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
-from sunshine.sunshine import get_covers_path, set_installation_type
-from utils.utils import handle_interrupt, run_command, get_games_found_message, parse_json_output
+from sunshine.sunshine import get_covers_path, set_installation_type, set_server_name
+from utils.utils import handle_interrupt, get_games_found_message
 from utils.input import get_yes_no_input, get_user_selection
-from sunshine.sunshine import detect_sunshine_installation, add_game_to_sunshine, get_existing_apps, get_auth_token, is_sunshine_running
+from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, get_existing_apps, get_auth_session, get_auth_token, get_running_servers, is_server_running
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -15,6 +15,7 @@ from launchers.bottles import detect_bottles_installation, list_bottles_games
 from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
 from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
 from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
+from launchers.eden import detect_eden_installation, list_eden_games
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Sync launcher games to Sunshine.")
@@ -34,24 +35,55 @@ def parse_args():
 def main():
     args = parse_args()
     try:
-        sunshine_installed, installation_type = detect_sunshine_installation()
-        if not sunshine_installed:
-            print("Error: No Sunshine installation detected.")
+        sunshine_installed, sunshine_install_type = detect_sunshine_installation()
+        apollo_installed = detect_apollo_installation()
+        if not sunshine_installed and not apollo_installed:
+            print("Error: No Sunshine or Apollo installation detected.")
             return
 
-        set_installation_type(installation_type)
-        COVERS_PATH = get_covers_path()
+        running_servers = get_running_servers()
+        if not running_servers:
+            print("Error: Sunshine or Apollo is not running. Please start it and try again.")
+            return
 
+        if "sunshine" in running_servers and "apollo" in running_servers:
+            while True:
+                choice = input("Both Sunshine and Apollo are running. Use (1) Sunshine or (2) Apollo? ").strip().lower()
+                if choice in ("1", "sunshine", "s"):
+                    server_name = "sunshine"
+                    break
+                if choice in ("2", "apollo", "a"):
+                    server_name = "apollo"
+                    break
+                print("Please enter 1 for Sunshine or 2 for Apollo.")
+        else:
+            server_name = running_servers[0]
+
+        if server_name == "sunshine":
+            if not sunshine_installed:
+                print("Error: Sunshine is not installed.")
+                return
+            set_installation_type(sunshine_install_type)
+        else:
+            if not apollo_installed:
+                print("Error: Apollo is not installed.")
+                return
+            set_installation_type("native")
+
+        set_server_name(server_name)
+        if not is_server_running(server_name):
+            print(f"Error: {server_name.title()} is not running. Please start it and try again.")
+            return
+
+        COVERS_PATH = get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
 
-        if not is_sunshine_running():
-            print("Error: Sunshine is not running. Please start Sunshine and try again.")
-            return
-
-        token = get_auth_token() 
-        if not token:
-            print("Error: Could not obtain a valid authentication token. Exiting.")
-            return
+        session = get_auth_session()
+        if not session:
+            token = get_auth_token()
+            if not token:
+                print("Error: Could not obtain valid authentication. Exiting.")
+                return
 
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()
@@ -60,9 +92,10 @@ def main():
         steam_command = get_steam_command() if steam_installed else ""
         ryubing_installed = detect_ryubing_installation()
         retroarch_installed = detect_retroarch_installation()
+        eden_installed = detect_eden_installation()
 
-        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed and not retroarch_installed:
-            print("No Lutris, Heroic, Bottles, Steam, Ryubing, or RetroArch installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed and not retroarch_installed and not eden_installed:
+            print("No Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, or Eden installation detected.")
             return
 
         if lutris_command and is_lutris_running():
@@ -83,6 +116,8 @@ def main():
                 futures['Ryubing'] = executor.submit(list_ryubing_games)
             if retroarch_installed:
                 futures['RetroArch'] = executor.submit(list_retroarch_games)
+            if eden_installed:
+                futures['Eden'] = executor.submit(list_eden_games)
 
             all_games = []
             for source, future in futures.items():
@@ -107,12 +142,14 @@ def main():
                         )
                         for game_path, game_name, core_info in result
                     ])
+                elif source == 'Eden':
+                    all_games.extend([(game_id, game_name, "Eden", "Eden") for game_id, game_name in result])
 
         if not all_games:
-            print("No games found in Lutris, Heroic, Bottles, or Steam.")
+            print("No games found in any detected launcher.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed, retroarch_installed)
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed, retroarch_installed, eden_installed)
         print(games_found_message)
 
         existing_apps = get_existing_apps()

@@ -1,7 +1,7 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing and Retroarch, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, and Eden, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 <img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 
@@ -14,13 +14,14 @@ This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing and Retroar
   - Steam (Native and Flatpak)
   - Ryubing (Flatpak)
   - RetroArch (Native and Flatpak)
+  - Eden (AppImage and native binary)
 - Adds selected games to Sunshine
 - Option to add all listed games at once
 - Downloads game covers from SteamGridDB (optional)
 - Avoids duplicate entries in Sunshine
 
 ## Main Goal
-This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Ryubing, or RetroArch. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, or Eden. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
 
 ## Installation
 
@@ -98,6 +99,6 @@ The same command line arguments work with the binary:
  - [Bottles](https://usebottles.com/)
  - [Ryubing](https://ryujinx.app/)
  - [RetroArch](https://www.retroarch.com/)
+ - Eden
  - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
  - [SteamGridDB](https://www.steamgriddb.com/)
-
