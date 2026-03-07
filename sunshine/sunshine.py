@@ -13,12 +13,7 @@ from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
-from launchers.faugus import (
-    FAUGUS_BATTLEYE_PATH,
-    FAUGUS_EAC_PATH,
-    FAUGUS_FLATPAK_ID,
-    FAUGUS_UMU_RUN_PATH,
-)
+from launchers.faugus import FAUGUS_FLATPAK_ID
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
@@ -314,33 +309,7 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) 
             return
         cmd = f'{eden_cmd} -f -g "{game_id}"'
     elif isinstance(runner, dict) and runner.get("type") == "Faugus":
-        game_path = (runner.get("game_path", "") or "").strip()
-        prefix = (runner.get("prefix", "") or "").strip()
-        if not game_path or not prefix or not os.path.exists(FAUGUS_UMU_RUN_PATH):
-            print(f"Warning: Unable to determine Faugus launch command for {game_name}. Skipping.")
-            return
-
-        env_parts = [
-            "env",
-            f"GAMEID={shlex.quote(game_id)}",
-            f"WINEPREFIX={shlex.quote(prefix)}",
-            "PROTONFIXES_DISABLE=1",
-            f"PROTON_EAC_RUNTIME={shlex.quote(FAUGUS_EAC_PATH)}",
-            f"PROTON_BATTLEYE_RUNTIME={shlex.quote(FAUGUS_BATTLEYE_PATH)}",
-        ]
-        if runner.get("disable_hidraw"):
-            env_parts.append("PROTON_DISABLE_HIDRAW=1")
-        if runner.get("prevent_sleep"):
-            env_parts.append("PREVENT_SLEEP=1")
-        if runner.get("mangohud"):
-            env_parts.append("mangohud")
-        env_parts.append(shlex.quote(FAUGUS_UMU_RUN_PATH))
-        env_parts.append(shlex.quote(game_path))
-        inner_cmd = " ".join(env_parts)
-        cmd = (
-            f"flatpak run --command=sh {FAUGUS_FLATPAK_ID} "
-            f"-c {shlex.quote(inner_cmd)}"
-        )
+        cmd = f"flatpak run --command=faugus-run {FAUGUS_FLATPAK_ID} --game {shlex.quote(game_id)}"
     elif isinstance(runner, dict) and runner.get("type") == "RetroArch":
         core_path = runner.get("core_path", "")
         core_path = os.path.expanduser(core_path) if core_path else core_path
