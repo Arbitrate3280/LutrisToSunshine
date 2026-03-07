@@ -130,6 +130,14 @@ def is_sunshine_running() -> bool:
 def _cookies_file_path():
     return os.path.join(get_credentials_path(), "cookies.json")
 
+def _token_file_path() -> str:
+    return os.path.join(get_credentials_path(), "auth_token.txt")
+
+def _save_auth_token(token: str) -> None:
+    os.makedirs(get_credentials_path(), exist_ok=True)
+    with open(_token_file_path(), "w") as f:
+        f.write(token)
+
 def _save_session_cookies(session: requests.Session):
     os.makedirs(get_credentials_path(), exist_ok=True)
     cookies_dict = dict_from_cookiejar(session.cookies)
@@ -175,7 +183,7 @@ def _validate_token(token: str) -> bool:
 
 def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
     """Retrieves or creates an authenticated session using cookies or basic auth."""
-    global AUTH_SESSION
+    global AUTH_SESSION, AUTH_TOKEN
     if AUTH_SESSION and _validate_session(AUTH_SESSION):
         return AUTH_SESSION
 
@@ -225,6 +233,11 @@ def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
     session = requests.Session()
     session.auth = (username, password)
     if _validate_session(session):
+        auth_header = f"{username}:{password}"
+        encoded_auth = base64.b64encode(auth_header.encode()).decode()
+        token = f"Basic {encoded_auth}"
+        _save_auth_token(token)
+        AUTH_TOKEN = token
         AUTH_SESSION = session
         return session
 
@@ -234,7 +247,7 @@ def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
     global AUTH_TOKEN
-    token_path = os.path.join(get_credentials_path(), "auth_token.txt")
+    token_path = _token_file_path()
 
     # Check if Sunshine is running BEFORE attempting any authentication
     if not is_sunshine_running():
@@ -269,9 +282,7 @@ def get_auth_token() -> Optional[str]:
         return None
 
     # Save the new token if it's valid
-    os.makedirs(get_credentials_path(), exist_ok=True)
-    with open(token_path, 'w') as f:
-        f.write(token)
+    _save_auth_token(token)
 
     AUTH_TOKEN = token
     return token

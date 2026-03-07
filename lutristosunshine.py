@@ -78,7 +78,8 @@ def main():
         COVERS_PATH = get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
 
-        session = get_auth_session()
+        # Reuse saved cookies/token first; only prompt if nothing cached is valid.
+        session = get_auth_session(allow_prompt=False)
         if not session:
             token = get_auth_token()
             if not token:
