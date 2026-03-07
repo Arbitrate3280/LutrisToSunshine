@@ -76,6 +76,13 @@ python3 lutristosunshine.py
 
 3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
 
+### Launcher Notes
+
+- Faugus support is currently Flatpak-only.
+- Faugus games are discovered from `~/.var/app/io.github.Faugus.faugus-launcher/config/faugus-launcher/games.json`.
+- Faugus entries are launched through the Faugus Flatpak runtime so bundled tools such as `mangohud` work the same way they do inside Faugus itself.
+- Per-game Faugus options such as `mangohud`, `disable_hidraw`, and `prevent_sleep` are carried over when generating the Sunshine command.
+
 Alternatively, you can download the binary available in the "Releases" section of the GitHub repository. Download the binary from the latest release, make it executable, and run it:
 
 ```bash
@@ -98,6 +105,7 @@ The same command line arguments work with the binary:
  - [Lutris](https://lutris.net/)
  - [Heroic Games Launcher](https://heroicgameslauncher.com/)
  - [Bottles](https://usebottles.com/)
+ - [Faugus Launcher](https://github.com/Faugus/faugus-launcher)
  - [Ryubing](https://ryujinx.app/)
  - [RetroArch](https://www.retroarch.com/)
  - Eden
