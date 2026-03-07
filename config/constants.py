@@ -9,6 +9,7 @@ SOURCE_COLORS = {
     "Lutris": "\033[38;5;214m",  # Orange 
     "Bottles": "\033[38;5;203m",  # Red - wine/bottles theme
     "Steam": "\033[38;5;26m",  # Dark blue - Steam branding
+    "Faugus": "\033[38;5;81m",  # Cyan - distinct Flatpak launcher highlight
     "Ryubing": "\033[38;5;196m",  # Bright red - Nintendo Switch theme
     "RetroArch": "\033[38;5;46m",  # Green - retro gaming theme
     "Eden": "\033[38;5;201m",  # Pink - distinct highlight for Eden

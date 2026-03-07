@@ -13,6 +13,7 @@ from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
 from launchers.bottles import detect_bottles_installation, list_bottles_games
 from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
+from launchers.faugus import detect_faugus_installation, list_faugus_games
 from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
 from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
 from launchers.eden import detect_eden_installation, list_eden_games
@@ -91,12 +92,13 @@ def main():
         bottles_installed = detect_bottles_installation()
         steam_installed, _ = detect_steam_installation()
         steam_command = get_steam_command() if steam_installed else ""
+        faugus_installed = detect_faugus_installation()
         ryubing_installed = detect_ryubing_installation()
         retroarch_installed = detect_retroarch_installation()
         eden_installed = detect_eden_installation()
 
-        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not ryubing_installed and not retroarch_installed and not eden_installed:
-            print("No Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, or Eden installation detected.")
+        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not faugus_installed and not ryubing_installed and not retroarch_installed and not eden_installed:
+            print("No Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, or Eden installation detected.")
             return
 
         if lutris_command and is_lutris_running():
@@ -113,6 +115,8 @@ def main():
                 futures['Bottles'] = executor.submit(list_bottles_games)
             if steam_command:
                 futures['Steam'] = executor.submit(list_steam_games)
+            if faugus_installed:
+                futures['Faugus'] = executor.submit(list_faugus_games)
             if ryubing_installed:
                 futures['Ryubing'] = executor.submit(list_ryubing_games)
             if retroarch_installed:
@@ -131,6 +135,8 @@ def main():
                     all_games.extend(result)  # Bottles results are already in the correct format
                 elif source == 'Steam':
                     all_games.extend([(game_id, game_name, "Steam", "Steam") for game_id, game_name in result])
+                elif source == 'Faugus':
+                    all_games.extend(result)
                 elif source == 'Ryubing':
                     all_games.extend([(game_id, game_name, "Ryubing", "Ryubing") for game_id, game_name in result])
                 elif source == 'RetroArch':
@@ -150,7 +156,7 @@ def main():
             print("No games found in any detected launcher.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, ryubing_installed, retroarch_installed, eden_installed)
+        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, faugus_installed, ryubing_installed, retroarch_installed, eden_installed)
         print(games_found_message)
 
         existing_apps = get_existing_apps()

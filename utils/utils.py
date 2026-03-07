@@ -45,6 +45,7 @@ def get_games_found_message(
     heroic_command,
     bottles_installed,
     steam_command,
+    faugus_installed,
     ryubing_installed,
     retroarch_installed,
     eden_installed,
@@ -58,6 +59,8 @@ def get_games_found_message(
         sources.add("Bottles")
     if steam_command:
         sources.add("Steam")
+    if faugus_installed:
+        sources.add("Faugus")
     if ryubing_installed:
         sources.add("Ryubing")
     if retroarch_installed:

@@ -1,7 +1,7 @@
 
 # LutrisToSunshine
 
-This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, and Eden, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+This script lists games from Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, and Eden, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
 
 <img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 
@@ -12,6 +12,7 @@ This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch,
   - Heroic (Native and Flatpak)
   - Bottles (Flatpak)
   - Steam (Native and Flatpak)
+  - Faugus (Flatpak)
   - Ryubing (Flatpak)
   - RetroArch (Native and Flatpak)
   - Eden (AppImage and native binary)
@@ -21,7 +22,7 @@ This script lists games from Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch,
 - Avoids duplicate entries in Sunshine
 
 ## Main Goal
-This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch, or Eden. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, or Eden. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
 
 ## Installation
 
