@@ -68,7 +68,7 @@ def _is_base_game_file(file_name: str) -> bool:
 
 
 def get_eden_game_dirs() -> List[str]:
-    """Get Eden game directories from qt-config.ini with sensible fallbacks."""
+    """Get Eden game directories from qt-config.ini."""
     game_dirs: List[str] = []
     config_path = os.path.expanduser("~/.config/eden/qt-config.ini")
 
@@ -86,14 +86,6 @@ def get_eden_game_dirs() -> List[str]:
                         game_dirs.append(path)
         except OSError:
             pass
-
-    if not game_dirs:
-        for fallback in [
-            os.path.expanduser("~/Games/Switch/titles"),
-            os.path.expanduser("~/Games/Switch"),
-        ]:
-            if fallback not in game_dirs:
-                game_dirs.append(fallback)
 
     return game_dirs
 
