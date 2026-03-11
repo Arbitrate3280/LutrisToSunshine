@@ -6,6 +6,7 @@ from typing import List, Tuple
 from utils.utils import run_command
 
 SUPPORTED_EXTENSIONS = (".nsp", ".xci", ".nca", ".nro")
+TITLE_ID_PATTERN = re.compile(r"\[([0-9A-Fa-f]{16})\]")
 
 
 def _candidate_home_dirs() -> List[str]:
@@ -47,6 +48,23 @@ def get_eden_command() -> str:
 def detect_eden_installation() -> bool:
     """Detect if Eden is installed."""
     return bool(get_eden_command())
+
+
+def _is_base_game_file(file_name: str) -> bool:
+    """Return True when the filename looks like a launchable base title."""
+    stem = os.path.splitext(file_name)[0]
+    stem_lower = stem.lower()
+
+    if any(token in stem_lower for token in ("[update", "[upd]", "[dlc")):
+        return False
+
+    title_id_match = TITLE_ID_PATTERN.search(stem)
+    if title_id_match:
+        title_id = title_id_match.group(1).lower()
+        if title_id[-3:] != "000":
+            return False
+
+    return True
 
 
 def get_eden_game_dirs() -> List[str]:
@@ -92,6 +110,8 @@ def list_eden_games() -> List[Tuple[str, str]]:
         for root, _, files in os.walk(games_dir):
             for file_name in files:
                 if not file_name.lower().endswith(SUPPORTED_EXTENSIONS):
+                    continue
+                if not _is_base_game_file(file_name):
                     continue
 
                 game_path = os.path.join(root, file_name)
