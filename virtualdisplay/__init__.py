@@ -1,0 +1,2 @@
+"""Virtual display management helpers."""
+

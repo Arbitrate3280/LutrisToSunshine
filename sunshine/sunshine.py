@@ -17,6 +17,15 @@ from launchers.faugus import FAUGUS_FLATPAK_ID
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
+from virtualdisplay.manager import (
+    get_app_prep_commands,
+    get_wrapped_command_origin,
+    get_wrapped_command_exit_timeout,
+    is_wrapped_command,
+    is_enabled as virtual_display_enabled,
+    unwrap_command,
+    wrap_command,
+)
 
 #Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -96,7 +105,13 @@ def is_server_running(name: Optional[str] = None) -> bool:
         return bool(running)
     return name in running
 
-def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
+def add_game_to_sunshine_api(
+    game_name: str,
+    cmd: str,
+    image_path: str,
+    prep_cmd: Optional[List[Dict[str, str]]] = None,
+    detached: Optional[List[str]] = None,
+) -> None:
     """Add a game to the Sunshine configuration using the API."""
     payload = {
         "name": game_name,
@@ -108,8 +123,8 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
         "auto-detach": True,
         "wait-all": True,
         "exit-timeout": 5,
-        "prep-cmd": [],
-        "detached": [],
+        "prep-cmd": prep_cmd or [],
+        "detached": detached or [],
         "image-path": image_path
     }
 
@@ -118,6 +133,218 @@ def add_game_to_sunshine_api(game_name: str, cmd: str, image_path: str) -> None:
         print(f"Error adding {game_name} to Sunshine via API: {error}")
     else:
         print(f"Added {game_name} to Sunshine.")
+
+
+def _get_virtual_display_prep_scripts() -> set[str]:
+    managed_scripts = set()
+    for command in get_app_prep_commands():
+        do_cmd = command.get("do", "")
+        undo_cmd = command.get("undo", "")
+        if do_cmd:
+            managed_scripts.add(do_cmd)
+        if undo_cmd:
+            managed_scripts.add(undo_cmd)
+    return managed_scripts
+
+
+def _normalize_prep_cmd(app: Dict, enable_virtual_display: bool) -> List[Dict]:
+    prep_cmd = app.get("prep-cmd") or []
+    managed_scripts = _get_virtual_display_prep_scripts()
+    filtered = []
+    for command in prep_cmd:
+        if not isinstance(command, dict):
+            continue
+        do_cmd = command.get("do", "")
+        undo_cmd = command.get("undo", "")
+        if do_cmd in managed_scripts or undo_cmd in managed_scripts:
+            continue
+        filtered.append(command)
+
+    if enable_virtual_display:
+        return get_app_prep_commands() + filtered
+    return filtered
+
+
+def _normalize_app_payload(app: Dict) -> Dict:
+    payload = dict(app)
+    payload["cmd"] = payload.get("cmd") or ""
+    payload["output"] = payload.get("output") or ""
+    payload["detached"] = payload.get("detached") or []
+    payload["prep-cmd"] = payload.get("prep-cmd") or []
+    payload["exclude-global-prep-cmd"] = payload.get("exclude-global-prep-cmd", False)
+    payload["elevated"] = payload.get("elevated", False)
+    payload["auto-detach"] = payload.get("auto-detach", True)
+    payload["wait-all"] = payload.get("wait-all", True)
+    payload["exit-timeout"] = payload.get("exit-timeout", 5)
+    payload["image-path"] = payload.get("image-path") or ""
+    return payload
+
+
+def _dedupe_commands(commands: List[str]) -> List[str]:
+    unique_commands = []
+    seen = set()
+    for command in commands:
+        if not command or command in seen:
+            continue
+        unique_commands.append(command)
+        seen.add(command)
+    return unique_commands
+
+
+def _unwrap_with_origin(command: str, field_origin: str) -> Tuple[str, str]:
+    if not command:
+        return "", field_origin
+    if not is_wrapped_command(command):
+        return command, field_origin
+
+    origin = get_wrapped_command_origin(command) or field_origin
+    # Legacy wrappers only encoded the command, so preserve the field placement.
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = []
+    if len(parts) < 3:
+        origin = field_origin
+
+    unwrapped = unwrap_command(command) or ""
+    return unwrapped, origin
+
+
+def _select_virtual_display_primary_command(app: Dict) -> Tuple[str, str, List[str], int]:
+    cmd, cmd_origin = _unwrap_with_origin(app.get("cmd") or "", "cmd")
+    if cmd:
+        timeout = get_wrapped_command_exit_timeout(app.get("cmd") or "", app.get("exit-timeout", 5))
+        remaining = []
+        for command in app.get("detached") or []:
+            unwrapped, _ = _unwrap_with_origin(command, "detached")
+            if unwrapped:
+                remaining.append(unwrapped)
+        return cmd, cmd_origin, remaining, timeout
+
+    detached_commands: List[str] = []
+    detached_timeout = app.get("exit-timeout", 5)
+    for command in app.get("detached") or []:
+        unwrapped, _ = _unwrap_with_origin(command, "detached")
+        if not unwrapped:
+            continue
+        detached_commands.append(unwrapped)
+        if len(detached_commands) == 1:
+            detached_timeout = get_wrapped_command_exit_timeout(command, app.get("exit-timeout", 5))
+
+    if not detached_commands:
+        return "", "cmd", [], app.get("exit-timeout", 5)
+    return detached_commands[0], "detached", detached_commands[1:], detached_timeout
+
+
+def _enable_virtual_display_launch(app: Dict) -> Tuple[str, List[str]]:
+    primary_command, origin, detached_commands, exit_timeout = _select_virtual_display_primary_command(app)
+    wrapped_primary = wrap_command(primary_command, origin, exit_timeout) or ""
+    return wrapped_primary, _dedupe_commands(detached_commands)
+
+
+def _disable_virtual_display_launch(app: Dict) -> Tuple[str, List[str]]:
+    restored_cmd = ""
+    restored_detached: List[str] = []
+
+    cmd, origin = _unwrap_with_origin(app.get("cmd") or "", "cmd")
+    if cmd:
+        if origin == "detached":
+            restored_detached.append(cmd)
+        else:
+            restored_cmd = cmd
+
+    for command in app.get("detached") or []:
+        unwrapped, detached_origin = _unwrap_with_origin(command, "detached")
+        if not unwrapped:
+            continue
+        if detached_origin == "cmd" and not restored_cmd:
+            restored_cmd = unwrapped
+        else:
+            restored_detached.append(unwrapped)
+
+    return restored_cmd, _dedupe_commands(restored_detached)
+
+
+def _transform_app_for_virtual_display(app: Dict, enable_virtual_display: bool) -> Dict:
+    updated = _normalize_app_payload(app)
+    if enable_virtual_display:
+        updated["cmd"], updated["detached"] = _enable_virtual_display_launch(updated)
+    else:
+        updated["cmd"], updated["detached"] = _disable_virtual_display_launch(updated)
+    updated["prep-cmd"] = _normalize_prep_cmd(updated, enable_virtual_display)
+    return updated
+
+
+def _iter_unwrapped_app_commands(app: Dict) -> List[str]:
+    commands: List[str] = []
+    cmd, _ = _unwrap_with_origin(app.get("cmd") or "", "cmd")
+    if cmd:
+        commands.append(cmd)
+    for command in app.get("detached") or []:
+        unwrapped, _ = _unwrap_with_origin(command, "detached")
+        if unwrapped:
+            commands.append(unwrapped)
+    return commands
+
+
+def _load_cached_auth_token() -> Optional[str]:
+    token_path = _token_file_path()
+    if not os.path.exists(token_path):
+        return None
+    try:
+        with open(token_path, "r") as file:
+            token = file.read().strip()
+    except OSError:
+        return None
+    return token or None
+
+
+def _get_full_sunshine_apps(allow_prompt: bool = True) -> Tuple[List[Dict], Optional[str]]:
+    request_kwargs = {}
+    if not allow_prompt:
+        session = get_auth_session(allow_prompt=False)
+        token = AUTH_TOKEN or _load_cached_auth_token()
+        if session is None and token is None:
+            return [], "No cached Sunshine authentication is available."
+        if session is not None:
+            request_kwargs["session"] = session
+        if token is not None:
+            request_kwargs["token"] = token
+
+    data, error = sunshine_api_request("GET", "/api/apps", **request_kwargs)
+    if error:
+        return [], error
+
+    apps = []
+    for index, app in enumerate(data.get("apps", [])):
+        if isinstance(app, dict):
+            payload = dict(app)
+            payload["index"] = index
+            apps.append(payload)
+    return apps, None
+
+
+def get_virtual_display_blocked_apps() -> Tuple[List[Tuple[str, str]], Optional[str]]:
+    return [], None
+
+
+def reconcile_virtual_display_apps(enable_virtual_display: bool) -> Tuple[int, Optional[str]]:
+    apps, error = _get_full_sunshine_apps()
+    if error:
+        return 0, error
+
+    updated_count = 0
+    for app in apps:
+        transformed = _transform_app_for_virtual_display(app, enable_virtual_display)
+        if transformed == _normalize_app_payload(app):
+            continue
+        _, update_error = sunshine_api_request("POST", "/api/apps", json=transformed)
+        if update_error:
+            app_name = app.get("name", "Unknown App")
+            return updated_count, f"Error updating {app_name}: {update_error}"
+        updated_count += 1
+
+    return updated_count, None
 
 def get_sunshine_credentials() -> Tuple[str, str]:
     """Prompts the user for their Sunshine username and password."""
@@ -289,44 +516,55 @@ def get_auth_token() -> Optional[str]:
     AUTH_TOKEN = token
     return token
 
-def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
-    """Add a game to the Sunshine configuration."""
+
+def build_game_command(game_id: str, runner) -> Optional[str]:
     if runner == "Lutris":
         lutris_cmd = get_lutris_command()
-        cmd = f"{lutris_cmd} lutris:rungameid/{game_id}"
-    elif runner in ["legendary", "gog", "nile", "sideload"]:
+        return f"{lutris_cmd} lutris:rungameid/{game_id}"
+    if runner in ["legendary", "gog", "nile", "sideload"]:
         heroic_cmd, _ = get_heroic_command()
-        cmd = f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
-    elif runner == "Steam":
+        return f"{heroic_cmd} heroic://launch/{runner}/{game_id} --no-gui --no-sandbox"
+    if runner == "Steam":
         steam_cmd = get_steam_command()
-        cmd = f"{steam_cmd} steam://run/{game_id}"
-    elif runner == "Ryubing":
-        cmd = f"flatpak run io.github.ryubing.Ryujinx \"{game_id}\""
-    elif runner == "Eden":
+        return f"{steam_cmd} steam://run/{game_id}"
+    if runner == "Ryubing":
+        return f"flatpak run io.github.ryubing.Ryujinx \"{game_id}\""
+    if runner == "Eden":
         eden_cmd = get_eden_command()
         if not eden_cmd:
-            print(f"Warning: Unable to determine Eden launch command for {game_name}. Skipping.")
-            return
-        cmd = f'{eden_cmd} -f -g "{game_id}"'
-    elif isinstance(runner, dict) and runner.get("type") == "Faugus":
-        cmd = f"flatpak run --command=faugus-run {FAUGUS_FLATPAK_ID} --game {shlex.quote(game_id)}"
-    elif isinstance(runner, dict) and runner.get("type") == "RetroArch":
+            return None
+        return f'{eden_cmd} -f -g "{game_id}"'
+    if isinstance(runner, dict) and runner.get("type") == "Faugus":
+        return f"flatpak run --command=faugus-run {FAUGUS_FLATPAK_ID} --game {shlex.quote(game_id)}"
+    if isinstance(runner, dict) and runner.get("type") == "RetroArch":
         core_path = runner.get("core_path", "")
         core_path = os.path.expanduser(core_path) if core_path else core_path
         retroarch_cmd = get_retroarch_command()
         if not retroarch_cmd or not core_path:
-            print(f"Warning: Unable to determine RetroArch launch command for {game_name}. Skipping.")
-            return
-        cmd = f'{retroarch_cmd} -L "{core_path}" "{game_id}"'
-    else:  # Bottles
-        cmd = f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
+            return None
+        return f'{retroarch_cmd} -L "{core_path}" "{game_id}"'
+    return f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
+
+def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
+    """Add a game to the Sunshine configuration."""
+    cmd = build_game_command(game_id, runner)
+    if not cmd:
+        print(f"Warning: Unable to determine launch command for {game_name}. Skipping.")
+        return
 
     # Prefix commands with flatpak-spawn --host if Sunshine is installed as Flatpak
     if INSTALLATION_TYPE == "flatpak":
         cmd = f"flatpak-spawn --host {cmd}"
 
+    enable_virtual_display = SERVER_NAME == "sunshine" and virtual_display_enabled()
+
+    if enable_virtual_display:
+        cmd = wrap_command(cmd, "cmd") or cmd
+
+    prep_cmd = get_app_prep_commands() if enable_virtual_display else []
+
     # Use the API instead of directly modifying apps.json
-    add_game_to_sunshine_api(game_name, cmd, image_path)
+    add_game_to_sunshine_api(game_name, cmd, image_path, prep_cmd=prep_cmd, detached=[])
 
 def get_existing_apps() -> List[Dict]:
     """Retrieves the list of existing apps from the Sunshine API."""
