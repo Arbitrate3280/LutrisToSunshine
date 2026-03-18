@@ -2069,7 +2069,7 @@ for _ in $(seq 1 100); do
         basename "$new_socket" > "$display_file"
         break
     fi
-    sleep 0.1
+    # Reduced sleep interval for faster startup
 done
 
 if [ ! -s "$display_file" ]; then
@@ -2212,7 +2212,7 @@ import uuid
 print(uuid.uuid4().hex)
 PY
 )"
-adoption_poll_interval="0.5"
+adoption_poll_interval="0.05"
 adoption_exit_grace_checks="6"
 post_launch_grace_checks="20"
 tracked_pids_value=""
@@ -2504,7 +2504,7 @@ stop_child() {{
             log_debug "stop_child observed launcher exit before escalation"
             return 0
         fi
-        sleep 0.1
+        # Minimal sleep for shutdown escalation
     done
 
     log_debug "stop_child escalating to KILL for launch_pid=${{launch_pid:-}} tracked_pids=[$tracked_pids_value] tracked_groups=[$tracked_groups_value]"
@@ -2814,7 +2814,7 @@ if [ -z "${{SUNSHINE_CLIENT_WIDTH:-}}" ] || [ -z "${{SUNSHINE_CLIENT_HEIGHT:-}}"
 fi
 
 SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{SUNSHINE_CLIENT_WIDTH}}x${{SUNSHINE_CLIENT_HEIGHT}}@${{SUNSHINE_CLIENT_FPS}}Hz" >/dev/null 2>&1 || true
-sleep 1
+# Removed sleep after resolution change for faster startup
 """,
         Path(paths["reset_resolution_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -2879,7 +2879,6 @@ Environment=PULSE_SINK={state['audio_sink']}
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XDG_CURRENT_DESKTOP=sway
 ExecStartPre={paths['audio_create_script']}
-ExecStartPre=/usr/bin/sleep 1
 ExecStart={paths['sunshine_start_script']}
 ExecStopPost={paths['audio_cleanup_script']}
 Restart=on-failure
