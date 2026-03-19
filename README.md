@@ -97,6 +97,7 @@ This feature supports two different ways to control your streamed games:
 **1. Client inputs (automatic)**
 
 Controllers, keyboards, and mice from your streaming device (like the Moonlight app on your phone or another PC) work automatically. These inputs go directly to the streamed game and never affect your host desktop - you can be working on your host PC while someone else controls the game from their device.
+The managed setup installs a udev rule so Sunshine's virtual keyboard, mouse, touch, and pen devices stay accessible to the headless Sway session.
 
 **2. Host controller pass-through (optional)**
 
@@ -137,6 +138,7 @@ python3 lutristosunshine.py virtualdisplay disable
 - Imported games automatically receive the virtual-display launch wrapper and resolution commands when this mode is enabled
 - Flatpak launchers use transient portal handoff during launch, so they target the headless session without permanently affecting your host desktop
 - Sunshine capture settings remain user-managed (this tool doesn't change your `capture` configuration)
+- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay setup` once so the managed udev rule is regenerated with the latest input permissions
 
 ### Virtual Display Status
 

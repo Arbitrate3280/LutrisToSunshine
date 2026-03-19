@@ -79,6 +79,27 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertIn('KERNEL=="uhid"', rule)
         self.assertIn('SUBSYSTEM=="misc"', rule)
 
+    def test_udev_rule_grants_current_user_access_to_sunshine_inputs(self) -> None:
+        original_user = manager.current_user_name
+        original_group = manager.current_user_group
+        try:
+            manager.current_user_name = lambda: "alice"
+            manager.current_user_group = lambda: "streaming"
+            rule = manager._udev_rule()
+        finally:
+            manager.current_user_name = original_user
+            manager.current_user_group = original_group
+        self.assertIn('OWNER="alice"', rule)
+        self.assertIn('GROUP="streaming"', rule)
+        self.assertIn('MODE="0660"', rule)
+
+    def test_udev_rule_preserves_input_classification(self) -> None:
+        rule = manager._udev_rule()
+        self.assertNotIn('ENV{ID_INPUT}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_KEYBOARD}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_MOUSE}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_TOUCHPAD}=""', rule)
+
     def test_ensure_dependencies_requires_setfacl(self) -> None:
         original = manager.shutil.which
         try:

@@ -1,8 +1,10 @@
 import base64
 import glob
+import grp
 import hashlib
 import json
 import os
+import pwd
 import shlex
 import shutil
 import stat
@@ -821,6 +823,20 @@ def _write_file(path: Path, content: str, executable: bool = False) -> None:
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def current_user_name() -> str:
+    try:
+        return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return str(os.environ.get("USER") or "").strip()
+
+
+def current_user_group() -> str:
+    try:
+        return grp.getgrgid(os.getgid()).gr_name
+    except KeyError:
+        return str(os.environ.get("USER") or "").strip()
+
+
 def _input_bridge_script(state: Dict[str, Any]) -> str:
     paths = state["paths"]
     python_executable = sys.executable or "/usr/bin/env python3"
@@ -1297,6 +1313,13 @@ def realpath_safe(path):
 def current_user_name():
     try:
         return pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return safe_string(os.environ.get("USER"))
+
+
+def current_user_group():
+    try:
+        return grp.getgrgid(os.getgid()).gr_name
     except KeyError:
         return safe_string(os.environ.get("USER"))
 
@@ -2055,7 +2078,6 @@ unset KDE_SESSION_VERSION
     PULSE_SINK="{audio_sink}" \
     WLR_BACKENDS=headless,libinput \
     LIBSEAT_BACKEND=noop \
-    WLR_LIBINPUT_NO_DEVICES=1 \
     /usr/bin/sway --config "{paths['sway_config']}" &
 sway_pid=$!
 
@@ -2842,7 +2864,6 @@ Environment=SWAYSOCK={state['sway_socket']}
 Environment=PULSE_SINK={state['audio_sink']}
 Environment=WLR_BACKENDS=headless,libinput
 Environment=LIBSEAT_BACKEND=noop
-Environment=WLR_LIBINPUT_NO_DEVICES=1
 Environment=XDG_SESSION_TYPE=wayland
 Environment=XDG_CURRENT_DESKTOP=sway
 ExecStart={paths['sway_start_script']}
@@ -2891,8 +2912,19 @@ WantedBy=default.target
 
 
 def _udev_rule() -> str:
+    user_name = current_user_name()
+    group_name = current_user_group()
+    sunshine_input_permissions = [
+        'MODE="0660"',
+        'TAG+="uaccess"',
+    ]
+    if user_name:
+        sunshine_input_permissions.append(f'OWNER="{user_name}"')
+    if group_name:
+        sunshine_input_permissions.append(f'GROUP="{group_name}"')
+    sunshine_input_clause = ", ".join(sunshine_input_permissions)
     return f"""# Managed by LutrisToSunshine virtualdisplay.
-ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{SUNSHINE_INPUT_VENDOR_ID:04x}", ATTRS{{id/product}}=="{SUNSHINE_INPUT_PRODUCT_ID:04x}", ENV{{ID_INPUT}}="", ENV{{ID_INPUT_KEYBOARD}}="", ENV{{ID_INPUT_MOUSE}}="", ENV{{ID_INPUT_TOUCHPAD}}="", TAG+="uaccess"
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{SUNSHINE_INPUT_VENDOR_ID:04x}", ATTRS{{id/product}}=="{SUNSHINE_INPUT_PRODUCT_ID:04x}", {sunshine_input_clause}
 ACTION!="remove", KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uhid"
 """
 
