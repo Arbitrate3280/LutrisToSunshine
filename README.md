@@ -85,11 +85,36 @@ The Virtual Display feature creates a separate, invisible desktop environment th
 - **Uninterrupted desktop work**: Stream games in the background while your actual desktop stays usable for other tasks
 - **Headless-friendly**: No monitor required - the virtual display runs completely without a physical display
 - **Smart controller handling**: Use controllers from your streaming device or pass through physical controllers from your host PC without interfering with your desktop
+- **Per-game audio routing**: Games launched into the virtual display use the managed virtual sink, while normal host apps keep using your regular desktop output
 - **Flatpak compatibility**: Games from Flatpak launchers (Lutris, Heroic, etc.) automatically target the virtual environment without messing up your host desktop settings
 
 **How it works:**
 
 Behind the scenes, this feature sets up a headless Sway compositor (a Wayland display server) that Sunshine can capture from. When you launch a game, it gets directed to this invisible display instead of your main desktop. The system also handles the complex plumbing needed for Flatpak games and ensures your controllers work properly in the streaming session.
+**System requirements:**
+
+The virtual display feature requires the following packages to be installed on your system:
+
+- **sway** - Wayland compositor for the headless display
+- **swaybg** - Background wallpaper utility for Sway
+- **xdg-desktop-portal-wlr** - Portal implementation for Wayland
+
+On Fedora/RHEL:
+```bash
+sudo dnf install sway swaybg xdg-desktop-portal-wlr
+```
+
+On Ubuntu/Debian:
+```bash
+sudo apt install sway swaybg xdg-desktop-portal-wlr
+```
+
+On Arch Linux:
+```bash
+sudo pacman -S sway swaybg xdg-desktop-portal-wlr
+```
+
+
 **Two types of game inputs:**
 
 This feature supports two different ways to control your streamed games:
@@ -101,7 +126,7 @@ The managed setup installs a udev rule so Sunshine's virtual keyboard, mouse, to
 
 **2. Host controller pass-through (optional)**
 
-If you have physical controllers connected to your host PC (USB, Bluetooth, etc.) and want to use them in your streamed games, the `inputs` command lets you select which controllers should be "grabbed" from the host and re-exposed only to the streaming session. This means:
+If you have physical controllers connected to your host PC (USB, Bluetooth, etc.) and want to use them in your streamed games, the `inputs` command lets you select which controllers should be "grabbed" from the host and re-exposed only to the streaming session. The prompt shows currently selected controllers and lets you toggle additional controllers on or off without rebuilding the whole selection. This means:
 - Your host PC won't see or respond to those controllers while you're streaming
 - The controllers only work in the streamed game, not on your host desktop
 - Perfect for keeping your desktop clean while gaming, or for setups where you want dedicated gaming controllers
@@ -136,6 +161,8 @@ python3 lutristosunshine.py virtualdisplay disable
 **Technical notes:**
 
 - Imported games automatically receive the virtual-display launch wrapper and resolution commands when this mode is enabled
+- Headless launches are routed to the managed virtual sink, while Sunshine captures from that sink name directly so client audio still works
+- A managed audio guard keeps PipeWire's default sink and source pinned to your saved host devices if Sunshine tries to switch them during a stream
 - Flatpak launchers use transient portal handoff during launch, so they target the headless session without permanently affecting your host desktop
 - Sunshine capture settings remain user-managed (this tool doesn't change your `capture` configuration)
 - After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay setup` once so the managed udev rule is regenerated with the latest input permissions
