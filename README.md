@@ -1,209 +1,255 @@
-
 # LutrisToSunshine
 
-This script lists games from Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, and Eden, adds them to Sunshine, and optionally downloads game covers from SteamGridDB.
+LutrisToSunshine imports games from supported launchers into Sunshine and can optionally download cover art from SteamGridDB. It also includes a guided virtual-display mode for headless streaming, so streamed games can run on a separate desktop without disturbing your main session.
+
+## Table of Contents
+
+- [Why Use It](#why-use-it)
+- [Supported Launchers](#supported-launchers)
+- [Quick Start](#quick-start)
+- [Common Usage](#common-usage)
+- [What The Main Flow Does](#what-the-main-flow-does)
+- [Virtual Display](#virtual-display)
+- [Virtual Display Notes](#virtual-display-notes)
+- [Limitations And Compatibility](#limitations-and-compatibility)
+- [Binary Release](#binary-release)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
 <img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 
-## Features
+## Why Use It
 
-- Supports:
-  - Lutris (Native and Flatpak)
-  - Heroic (Native and Flatpak)
-  - Bottles (Flatpak)
-  - Steam (Native and Flatpak)
-  - Faugus (Flatpak)
-  - Ryubing (Flatpak)
-  - RetroArch (Native and Flatpak)
-  - Eden (AppImage and native binary)
-- Adds selected games to Sunshine
-- Option to add all listed games at once
-- Downloads game covers from SteamGridDB (optional)
-- Avoids duplicate entries in Sunshine
+- Import games from multiple launchers into Sunshine from one CLI
+- Avoid duplicate Sunshine entries
+- Optionally fetch game covers from SteamGridDB
+- Run streamed games in a separate headless desktop with optional host-controller passthrough
 
-## Main Goal
-This tool is designed to work with Sunshine (native or flatpak) along with Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, or Eden. I'm sharing it in case others find it useful. It was created with the help of AI, as I'm not a developer. Please note, this is a personal tool and not intended as a formal project.
+## Supported Launchers
 
-## Installation
+- Lutris: native and Flatpak
+- Heroic: native and Flatpak
+- Bottles: Flatpak
+- Steam: native and Flatpak
+- Faugus: Flatpak
+- Ryubing: Flatpak
+- RetroArch: native and Flatpak
+- Eden: AppImage and native binary
 
-1. Clone the repository
+## Quick Start
 
-```bash
-  git clone https://github.com/Arbitrate3280/LutrisToSunshine.git
-  cd LutrisToSunshine
-```
-2. Install required Python libraries:
+1. Clone the repository:
 
 ```bash
-  pip install -r requirements.txt
+git clone https://github.com/Arbitrate3280/LutrisToSunshine.git
+cd LutrisToSunshine
 ```
-## Usage
 
-1. Ensure that Lutris is closed before running the script (other launchers should be fine).
+2. Install dependencies:
 
-2. Run the script:
+```bash
+pip install -r requirements.txt
+```
+
+3. Make sure Sunshine is running.
+
+4. Close Lutris before scanning. Other launchers can stay open.
+
+5. Run the importer:
 
 ```bash
 python3 lutristosunshine.py
 ```
 
-### Command Line Arguments
+## Common Usage
 
-- `--cover`: Automatically download covers from SteamGridDB for all added games
-- `--all`: Automatically add all listed games (skips the selection prompt)
+Interactive import:
 
-### Examples
+```bash
+python3 lutristosunshine.py
+```
 
-- Interactive mode (select games manually, optionally download covers):
-  ```bash
-  python3 lutristosunshine.py
-  ```
+Import all detected games:
 
-- Add all games with automatic cover downloads:
-  ```bash
-  python3 lutristosunshine.py --all --cover
-  ```
+```bash
+python3 lutristosunshine.py --all
+```
 
-- Add all games without cover downloads:
-  ```bash
-  python3 lutristosunshine.py --all
-  ```
+Import all detected games and download covers:
 
-- Interactive mode with automatic cover downloads:
-  ```bash
-  python3 lutristosunshine.py --cover
-  ```
+```bash
+python3 lutristosunshine.py --all --cover
+```
 
-### Virtual Display (Headless Streaming)
+Interactive import with automatic cover downloads:
 
-**What is it?**
+```bash
+python3 lutristosunshine.py --cover
+```
 
-The Virtual Display feature creates a separate, invisible desktop environment that runs in the background on your system. This lets you stream games without interrupting your actual desktop work - perfect for headless systems or when you want to keep your main desktop undisturbed while gaming.
+### Main Flags
 
-**Why use it?**
+- `--all`: add all detected games without the selection prompt
+- `--cover`: download SteamGridDB covers for added games
 
-- **Uninterrupted desktop work**: Stream games in the background while your actual desktop stays usable for other tasks
-- **Headless-friendly**: No monitor required - the virtual display runs completely without a physical display
-- **Smart controller handling**: Use controllers from your streaming device or pass through physical controllers from your host PC without interfering with your desktop
-- **Per-game audio routing**: Games launched into the virtual display use the managed virtual sink, while normal host apps keep using your regular desktop output
-- **Flatpak compatibility**: Games from Flatpak launchers (Lutris, Heroic, etc.) automatically target the virtual environment without messing up your host desktop settings
+## What The Main Flow Does
 
-**How it works:**
+When you run `python3 lutristosunshine.py`, the tool:
 
-Behind the scenes, this feature sets up a headless Sway compositor (a Wayland display server) that Sunshine can capture from. When you launch a game, it gets directed to this invisible display instead of your main desktop. The system also handles the complex plumbing needed for Flatpak games and ensures your controllers work properly in the streaming session.
-**System requirements:**
+1. Detects Sunshine or Apollo
+2. Finds supported launchers installed on your system
+3. Lists the games it can import
+4. Lets you choose which games to add
+5. Optionally downloads covers
+6. Adds the selected games to Sunshine
 
-The virtual display feature requires the following packages to be installed on your system:
+## Virtual Display
 
-- **sway** - Wayland compositor for the headless display
-- **swaybg** - Background wallpaper utility for Sway
-- **xdg-desktop-portal-wlr** - Portal implementation for Wayland
+### What It Is
 
-On Fedora/RHEL:
+Virtual display creates a separate headless desktop for streamed games. Sunshine captures that desktop instead of your main one, so you can keep using your normal desktop while a game is running remotely.
+
+### Why It Is Useful
+
+- Keep your main desktop usable while streaming
+- Run Sunshine on headless systems
+- Keep client input isolated from the host desktop
+- Route streamed-game audio separately from normal desktop audio
+- Launch Flatpak-based games into the headless session without permanently changing the host desktop environment
+
+### Input Model
+
+There are two input paths:
+
+- Client input: automatic. Controllers, keyboard, and mouse from Moonlight or another Sunshine client already work in the streamed session.
+- Host controller passthrough: optional. Use the `controllers` command only if you want physical controllers connected to the host PC to be reserved for streamed games and hidden from the host desktop while streaming.
+
+### Virtual Display Requirements
+
+Install these packages first:
+
+- `sway`
+- `swaybg`
+- `xdg-desktop-portal-wlr`
+
+Fedora / RHEL:
+
 ```bash
 sudo dnf install sway swaybg xdg-desktop-portal-wlr
 ```
 
-On Ubuntu/Debian:
+Ubuntu / Debian:
+
 ```bash
 sudo apt install sway swaybg xdg-desktop-portal-wlr
 ```
 
-On Arch Linux:
+Arch:
+
 ```bash
 sudo pacman -S sway swaybg xdg-desktop-portal-wlr
 ```
 
+### Virtual Display Quick Start
 
-**Two types of game inputs:**
-
-This feature supports two different ways to control your streamed games:
-
-**1. Client inputs (automatic)**
-
-Controllers, keyboards, and mice from your streaming device (like the Moonlight app on your phone or another PC) work automatically. These inputs go directly to the streamed game and never affect your host desktop - you can be working on your host PC while someone else controls the game from their device.
-The managed setup installs a udev rule so Sunshine's virtual keyboard, mouse, touch, and pen devices stay accessible to the headless Sway session.
-
-**2. Host controller pass-through (optional)**
-
-If you have physical controllers connected to your host PC (USB, Bluetooth, etc.) and want to use them in your streamed games, the `inputs` command lets you select which controllers should be "grabbed" from the host and re-exposed only to the streaming session. The prompt shows currently selected controllers and lets you toggle additional controllers on or off without rebuilding the whole selection. This means:
-- Your host PC won't see or respond to those controllers while you're streaming
-- The controllers only work in the streamed game, not on your host desktop
-- Perfect for keeping your desktop clean while gaming, or for setups where you want dedicated gaming controllers
-- The original controller identity is preserved (including rumble support when available)
-
-**Commands:**
-
-Use the `virtualdisplay` command group to manage the headless streaming environment:
+Open the guided hub:
 
 ```bash
 python3 lutristosunshine.py virtualdisplay
+```
+
+Set up, start, and sync the full virtual-display flow:
+
+```bash
 python3 lutristosunshine.py virtualdisplay enable
+```
+
+Configure optional host-controller passthrough:
+
+```bash
 python3 lutristosunshine.py virtualdisplay controllers
+```
+
+Inspect problems and suggested fixes:
+
+```bash
 python3 lutristosunshine.py virtualdisplay doctor
+```
+
+Show current virtual-display state:
+
+```bash
 python3 lutristosunshine.py virtualdisplay status
+```
+
+Test controller rumble through the bridged path:
+
+```bash
 python3 lutristosunshine.py virtualdisplay rumble
-python3 lutristosunshine.py virtualdisplay logs
+```
+
+Stop the running virtual-display stack without removing setup:
+
+```bash
 python3 lutristosunshine.py virtualdisplay stop
+```
+
+Turn off virtual display, restore Sunshine app launches to normal mode, and remove the managed setup:
+
+```bash
 python3 lutristosunshine.py virtualdisplay reset
 ```
 
-**Command details:**
+Show recent virtual-display logs:
 
-- `virtualdisplay` - Opens an interactive hub that shows current status and offers the most common actions
-- `enable` - Runs the guided happy path: checks dependencies, installs/refreshes the managed files, starts the stack, syncs Sunshine apps, and then offers optional host-controller setup
-- `controllers` - Select physical controllers connected to your host PC for exclusive use in streamed games (see "Two types of game inputs" above for details)
-- `doctor` - Runs targeted diagnostics and prints actionable fixes for the current setup
-- `status` - Shows a concise dashboard with runtime state, controller status, blocked Flatpak apps, and the next recommended action
-- `rumble` - Sends test rumble signals to your controllers to verify force feedback is working through the virtual device path
-- `logs` - Shows system logs for debugging virtual display issues
-- `stop` - Stops the virtual display stack
-- `reset` - Restores Sunshine app entries to normal mode and removes the managed virtual display setup
+```bash
+python3 lutristosunshine.py virtualdisplay logs
+```
 
-**Technical notes:**
+## Virtual Display Notes
 
-- Imported games automatically receive the virtual-display launch wrapper and resolution commands when this mode is enabled
-- Headless launches are routed to the managed virtual sink, while Sunshine captures from that sink name directly so client audio still works
-- A managed audio guard keeps PipeWire's default sink and source pinned to your saved host devices if Sunshine tries to switch them during a stream
-- Flatpak launchers use transient portal handoff during launch, so they target the headless session without permanently affecting your host desktop
-- Sunshine capture settings remain user-managed (this tool doesn't change your `capture` configuration)
-- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay enable` once so the managed files and udev rule are refreshed with the latest version
+- Imported games receive the virtual-display launch wrapper and resolution prep commands only while virtual display is enabled
+- Headless launches use the managed virtual sink while normal desktop apps keep using your saved host audio defaults
+- Flatpak launchers use transient portal handoff so the headless environment does not permanently replace your host desktop session
+- Sunshine capture settings remain user-managed; this tool does not rewrite your `capture` configuration
+- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay enable` once to refresh the managed files and udev rule
 
-### Virtual Display Status
+## Limitations And Compatibility
 
-The virtual display feature is currently a **work-in-progress** and has been tested only on:
-- **Aurora** (specific environment)
-- **AMD GPU** configuration
+Virtual display is still a work in progress. It has currently been tested only on:
 
-Other environments, GPU configurations, and distributions may encounter issues. Feedback and testing reports from different setups are welcome.
+- Aurora (Ublue)
+- AMD GPU configurations
 
-3. Follow the prompts to list games, select games to add, and optionally download images from SteamGridDB.
+Other environments, distributions, or GPU setups may need extra troubleshooting.
 
-Alternatively, you can download the binary available in the "Releases" section of the GitHub repository. Download the binary from the latest release, make it executable, and run it:
+## Binary Release
+
+If you prefer the standalone binary from the Releases page:
 
 ```bash
 chmod +x lutristosunshine
 ./lutristosunshine
 ```
 
-The same command line arguments work with the binary:
+The same flags still apply:
+
 ```bash
 ./lutristosunshine --all --cover
 ```
 
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
-
+[MIT](https://choosealicense.com/licenses/mit-license.php)
 
 ## Acknowledgements
 
- - [Lutris](https://lutris.net/)
- - [Heroic Games Launcher](https://heroicgameslauncher.com/)
- - [Bottles](https://usebottles.com/)
- - [Faugus Launcher](https://github.com/Faugus/faugus-launcher)
- - [Ryubing](https://ryujinx.app/)
- - [RetroArch](https://www.retroarch.com/)
- - Eden
- - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
- - [SteamGridDB](https://www.steamgriddb.com/)
+- [Lutris](https://lutris.net/)
+- [Heroic Games Launcher](https://heroicgameslauncher.com/)
+- [Bottles](https://usebottles.com/)
+- [Faugus Launcher](https://github.com/Faugus/faugus-launcher)
+- [Ryubing](https://ryujinx.app/)
+- [RetroArch](https://www.retroarch.com/)
+- [Eden](https://eden-emu.dev/)
+- [Sunshine](https://app.lizardbyte.dev/Sunshine/)
+- [SteamGridDB](https://www.steamgriddb.com/)

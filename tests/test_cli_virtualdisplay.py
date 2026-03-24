@@ -18,6 +18,18 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(args.command, "virtualdisplay")
         self.assertEqual(args.virtualdisplay_action, "enable")
 
+    def test_virtualdisplay_help_describes_reset_clearly(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit):
+                lutristosunshine.parse_args(["virtualdisplay", "--help"])
+
+        normalized = " ".join(output.getvalue().split())
+        self.assertIn(
+            "restore Sunshine app launches to normal mode",
+            normalized,
+        )
+
     def test_handle_virtualdisplay_enable_runs_setup_start_and_sync(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay", "enable"])
         calls = []
@@ -78,6 +90,29 @@ class VirtualDisplayCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("sync", False), "remove"])
+
+    def test_handle_virtualdisplay_reset_prints_clear_summary(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "reset"])
+
+        original_reconcile_virtual_display_apps = lutristosunshine.reconcile_virtual_display_apps
+        original_remove_virtual_display = lutristosunshine.remove_virtual_display
+        original_is_server_running = lutristosunshine.is_server_running
+        try:
+            lutristosunshine.reconcile_virtual_display_apps = lambda enable_virtual_display: (1, None)
+            lutristosunshine.remove_virtual_display = lambda: 0
+            lutristosunshine.is_server_running = lambda name=None: True
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.reconcile_virtual_display_apps = original_reconcile_virtual_display_apps
+            lutristosunshine.remove_virtual_display = original_remove_virtual_display
+            lutristosunshine.is_server_running = original_is_server_running
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("Sunshine app launches were restored to normal mode", rendered)
 
     def test_handle_virtualdisplay_without_subcommand_opens_hub(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay"])

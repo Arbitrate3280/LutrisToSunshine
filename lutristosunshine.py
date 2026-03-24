@@ -124,7 +124,10 @@ def parse_args(argv=None):
         default=0x8000,
         help="Weak motor magnitude from 0 to 65535.",
     )
-    virtualdisplay_subparsers.add_parser("reset", help="Restore Sunshine apps and remove the managed virtual display setup.")
+    virtualdisplay_subparsers.add_parser(
+        "reset",
+        help="Turn off virtual display, restore Sunshine app launches to normal mode, and remove the managed setup.",
+    )
     logs_parser = virtualdisplay_subparsers.add_parser("logs", help="Show recent logs for the managed services.")
     logs_parser.add_argument(
         "--lines",
@@ -285,7 +288,10 @@ def handle_virtualdisplay_command(args) -> int:
         reconcile_status = reconcile_apps(False)
         if reconcile_status != 0:
             return reconcile_status
-        return remove_virtual_display()
+        remove_status = remove_virtual_display()
+        if remove_status == 0:
+            print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
+        return remove_status
 
     def run_hub() -> int:
         while True:
@@ -299,7 +305,7 @@ def handle_virtualdisplay_command(args) -> int:
             print(f"{accent('4.')} Test controller rumble")
             print(f"{accent('5.')} Show logs")
             print(f"{accent('6.')} Stop virtual display")
-            print(f"{accent('7.')} Reset virtual display")
+            print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
             print(f"{muted('0.')} Exit")
             choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
             if choice == "0":
@@ -332,7 +338,7 @@ def handle_virtualdisplay_command(args) -> int:
                     return result
             elif choice == "7":
                 confirmed = get_yes_no_input(
-                    "Reset the virtual display setup and restore Sunshine apps to normal mode?",
+                    "Turn off virtual display and restore Sunshine app launches to normal mode? This removes the managed headless setup.",
                     default=False,
                 )
                 if confirmed:
