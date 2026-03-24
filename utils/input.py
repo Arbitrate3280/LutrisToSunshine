@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple, Callable
+from typing import Any, List, Tuple, Callable, Optional
 from utils.utils import handle_interrupt
 
 def get_user_input(prompt: str, validator: Callable[[str], Any], error_message: str) -> Any:
@@ -21,12 +21,39 @@ def yes_no_validator(value: str) -> bool:
         return False
     raise ValueError()
 
-def get_yes_no_input(prompt: str) -> bool:
+def get_yes_no_input(prompt: str, default: Optional[bool] = None) -> bool:
     """Get a yes or no input from the user."""
+    if default is True:
+        prompt = f"{prompt.rstrip()} [Y/n]: "
+    elif default is False:
+        prompt = f"{prompt.rstrip()} [y/N]: "
+
+    def validator(value: str) -> bool:
+        stripped = value.strip()
+        if stripped == "" and default is not None:
+            return default
+        return yes_no_validator(stripped)
+
     return get_user_input(
         prompt,
-        yes_no_validator,
+        validator,
         "Invalid input. Please enter 'y' for yes or 'n' for no."
+    )
+
+def get_menu_choice(prompt: str, valid_choices: List[str]) -> str:
+    """Get a menu choice from a known set of values."""
+    normalized_choices = {choice.strip().lower() for choice in valid_choices}
+
+    def validator(value: str) -> str:
+        selected = value.strip().lower()
+        if selected in normalized_choices:
+            return selected
+        raise ValueError()
+
+    return get_user_input(
+        prompt,
+        validator,
+        f"Invalid selection. Choose one of: {', '.join(valid_choices)}."
     )
 
 def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
@@ -51,7 +78,7 @@ def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
         raise ValueError()
 
     return get_user_input(
-        "Enter the number(s) of the game(s) you want to add to Sunshine (comma-separated for multiple, or ranges like 2-9): ",
+        "Select games to add (comma-separated or ranges like 2-9): ",
         selection_validator,
         "Invalid selection. Please try again."
     )

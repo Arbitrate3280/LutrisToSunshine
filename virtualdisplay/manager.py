@@ -3592,72 +3592,243 @@ def stop_virtual_display() -> int:
     return 0
 
 
-def virtual_display_status() -> int:
+def virtual_display_snapshot() -> Dict[str, Any]:
     state = load_state()
-    if not state.get("enabled"):
-        print("Virtual display is not configured.")
-        return 1
-
-    sunshine_active = _sunshine_service_active()
-    sway_active = sunshine_active and Path(state["sway_socket"]).exists() and WAYLAND_DISPLAY_PATH.exists()
-    bridge_state = _bridge_service_state()
+    configured = bool(state.get("enabled"))
+    sunshine_active = _sunshine_service_active() if configured else False
     wayland_display = ""
     if WAYLAND_DISPLAY_PATH.exists():
         wayland_display = WAYLAND_DISPLAY_PATH.read_text(encoding="utf-8").strip()
+    sway_active = bool(
+        configured
+        and sunshine_active
+        and Path(state["sway_socket"]).exists()
+        and WAYLAND_DISPLAY_PATH.exists()
+    )
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
     audio_guard_state = "active" if sunshine_active and Path(state["paths"]["audio_module_file"]).exists() else "inactive"
+    selections = state["exclusive_input_devices"]["devices"]
+    devices, device_error = _list_controller_devices() if configured and selections else ([], None)
+    runtime_status = _input_bridge_status(state) if configured else {}
+    runtime_by_id = {}
+    for item in runtime_status.get("devices", []):
+        if isinstance(item, dict) and item.get("selection_id"):
+            runtime_by_id[item["selection_id"]] = item
 
-    print(f"Profile: {state['profile']}")
-    print(f"Managed Sunshine unit: {SUNSHINE_UNIT} ({'active' if sunshine_active else 'inactive'})")
-    print(f"Headless sway runtime: {'active' if sway_active else 'inactive'}")
-    print(f"Input bridge runtime: {bridge_state}")
-    print(f"Audio guard runtime: {audio_guard_state}")
-    print(f"Audio sink: {state['audio_sink']}")
-    print(f"Sunshine audio target: {_sunshine_audio_capture_target(state)}")
+    controller_rows: List[Dict[str, str]] = []
+    for selection in selections:
+        runtime = runtime_by_id.get(selection["selection_id"], {})
+        current_match = next(
+            (device for device in devices if _selection_matches_device(selection, device)),
+            None,
+        )
+        if runtime:
+            message = _safe_string(runtime.get("message"))
+            identity_bits = _selection_runtime_identity_bits(runtime)
+            detail_parts = []
+            if identity_bits:
+                detail_parts.append(" | ".join(identity_bits))
+            if message:
+                detail_parts.append(message)
+            controller_rows.append(
+                {
+                    "label": selection["label"],
+                    "state": _safe_string(runtime.get("state")) or "unknown",
+                    "details": " - ".join(detail_parts),
+                }
+            )
+        elif current_match:
+            controller_rows.append(
+                {
+                    "label": selection["label"],
+                    "state": "detected",
+                    "details": current_match["event_path"],
+                }
+            )
+        else:
+            controller_rows.append(
+                {
+                    "label": selection["label"],
+                    "state": "missing",
+                    "details": "",
+                }
+            )
+
     host_defaults = state.get("host_audio_defaults") or {}
-    if host_defaults.get("sink") or host_defaults.get("source"):
+    snapshot = {
+        "configured": configured,
+        "profile": state["profile"],
+        "sunshine_unit": SUNSHINE_UNIT,
+        "sunshine_active": sunshine_active,
+        "sway_active": sway_active,
+        "bridge_state": _bridge_service_state() if configured else "inactive",
+        "audio_guard_state": audio_guard_state,
+        "audio_sink": state["audio_sink"],
+        "sunshine_audio_target": _sunshine_audio_capture_target(state),
+        "host_audio_defaults": {
+            "sink": _safe_string(host_defaults.get("sink")),
+            "source": _safe_string(host_defaults.get("source")),
+        },
+        "wayland_display": wayland_display,
+        "sway_socket": state["sway_socket"],
+        "udev_rule_path": state["udev_rule_path"],
+        "udev_rule_present": Path(state["udev_rule_path"]).exists(),
+        "portal_handoff_active": portal_handoff_active,
+        "last_launch_log_file": state["paths"]["last_launch_log_file"],
+        "controllers": controller_rows,
+        "controller_count": len(selections),
+        "controller_detection_error": device_error,
+        "dependencies_missing": _ensure_dependencies(),
+        "next_step": "",
+    }
+    if not configured:
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay enable' to set up the headless stack."
+    elif not sunshine_active:
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay enable' to start the stack and sync apps."
+    elif not sway_active:
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay doctor' to inspect why headless Sway is not ready."
+    elif selections and snapshot["bridge_state"] != "active":
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay doctor' if selected controllers are not being bridged."
+    else:
+        snapshot["next_step"] = "Virtual display is ready. Use 'controllers', 'rumble', or 'logs' for follow-up actions."
+    return snapshot
+
+
+def virtual_display_doctor_report() -> Dict[str, Any]:
+    snapshot = virtual_display_snapshot()
+    checks = []
+    missing = snapshot["dependencies_missing"]
+    if missing:
+        checks.append(
+            {
+                "label": "Dependencies",
+                "status": "fail",
+                "message": f"Missing required commands: {', '.join(missing)}",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "label": "Dependencies",
+                "status": "pass",
+                "message": "Required commands are available.",
+            }
+        )
+
+    if not snapshot["configured"]:
+        checks.append(
+            {
+                "label": "Setup",
+                "status": "fail",
+                "message": "Virtual display is not configured.",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "label": "Setup",
+                "status": "pass",
+                "message": "Managed files are installed.",
+            }
+        )
+        checks.append(
+            {
+                "label": "Managed udev rule",
+                "status": "pass" if snapshot["udev_rule_present"] else "warn",
+                "message": "Input permissions rule is present." if snapshot["udev_rule_present"] else "Managed udev rule is missing.",
+            }
+        )
+        checks.append(
+            {
+                "label": "Sunshine service",
+                "status": "pass" if snapshot["sunshine_active"] else "warn",
+                "message": "Managed Sunshine unit is active." if snapshot["sunshine_active"] else "Managed Sunshine unit is not active.",
+            }
+        )
+        checks.append(
+            {
+                "label": "Headless display",
+                "status": "pass" if snapshot["sway_active"] else "warn",
+                "message": (
+                    f"Headless Wayland display is ready ({snapshot['wayland_display']})."
+                    if snapshot["sway_active"]
+                    else "Headless Wayland display is not ready."
+                ),
+            }
+        )
+        checks.append(
+            {
+                "label": "Controller bridge",
+                "status": "pass" if snapshot["bridge_state"] == "active" else "info",
+                "message": (
+                    f"{snapshot['controller_count']} host controller(s) configured; bridge is active."
+                    if snapshot["bridge_state"] == "active"
+                    else (
+                        "No host controllers configured."
+                        if snapshot["controller_count"] == 0
+                        else f"{snapshot['controller_count']} host controller(s) configured; bridge state is {snapshot['bridge_state']}."
+                    )
+                ),
+            }
+        )
+    if snapshot["controller_detection_error"]:
+        checks.append(
+            {
+                "label": "Controller detection",
+                "status": "warn",
+                "message": snapshot["controller_detection_error"],
+            }
+        )
+
+    summary = "healthy"
+    if any(item["status"] == "fail" for item in checks):
+        summary = "needs_attention"
+    elif any(item["status"] == "warn" for item in checks):
+        summary = "degraded"
+
+    return {
+        "summary": summary,
+        "checks": checks,
+        "next_step": snapshot["next_step"],
+    }
+
+
+def virtual_display_status() -> int:
+    snapshot = virtual_display_snapshot()
+    if not snapshot["configured"]:
+        print("Virtual display is not configured.")
+        return 1
+
+    print("Virtual display status")
+    print(f"Profile: {snapshot['profile']}")
+    print(
+        "Runtime: "
+        f"Sunshine={'active' if snapshot['sunshine_active'] else 'inactive'}, "
+        f"Sway={'active' if snapshot['sway_active'] else 'inactive'}, "
+        f"Input bridge={snapshot['bridge_state']}, "
+        f"Audio guard={snapshot['audio_guard_state']}"
+    )
+    print(f"Audio sink: {snapshot['audio_sink']}")
+    print(f"Headless display: {snapshot['wayland_display'] or 'not detected'}")
+    print(f"Portal handoff: {'active' if snapshot['portal_handoff_active'] else 'idle'}")
+    print(f"Controllers: {snapshot['controller_count']} configured")
+    if snapshot["controller_detection_error"]:
+        print(f"Controller detection: {snapshot['controller_detection_error']}")
+    elif snapshot["controllers"]:
+        for controller in snapshot["controllers"]:
+            suffix = f" - {controller['details']}" if controller["details"] else ""
+            print(f"- {controller['label']} ({controller['state']}){suffix}")
+    else:
+        print("- Client inputs from Moonlight/Sunshine work automatically.")
+        print("- No host controllers are currently reserved for passthrough.")
+    defaults = snapshot["host_audio_defaults"]
+    if defaults["sink"] or defaults["source"]:
         print(
             "Saved host audio defaults: "
-            f"sink={host_defaults.get('sink') or 'unset'}, "
-            f"source={host_defaults.get('source') or 'unset'}"
+            f"sink={defaults['sink'] or 'unset'}, source={defaults['source'] or 'unset'}"
         )
-    print(f"Headless Wayland display: {wayland_display or 'not detected'}")
-    print(f"Sway socket: {state['sway_socket']}")
-    print(f"Udev rule: {state['udev_rule_path']}")
-    print("Flatpak launch mode: transient portal handoff")
-    print(f"Portal handoff: {'active' if portal_handoff_active else 'idle'}")
-    print(f"Last launch log: {state['paths']['last_launch_log_file']}")
-    selections = state["exclusive_input_devices"]["devices"]
-    if not selections:
-        print("Exclusive host controllers: none configured")
-    else:
-        devices, error = _list_controller_devices()
-        runtime_status = _input_bridge_status(state)
-        runtime_by_id = {}
-        for item in runtime_status.get("devices", []):
-            if isinstance(item, dict) and item.get("selection_id"):
-                runtime_by_id[item["selection_id"]] = item
-        if error:
-            print(f"Exclusive host controllers: unavailable ({error})")
-        else:
-            print("Exclusive host controllers:")
-            for selection in selections:
-                runtime = runtime_by_id.get(selection["selection_id"], {})
-                current_match = next(
-                    (device for device in devices if _selection_matches_device(selection, device)),
-                    None,
-                )
-                if runtime:
-                    message = runtime.get("message", "").strip()
-                    identity_bits = _selection_runtime_identity_bits(runtime)
-                    details = f": {message}" if message else ""
-                    suffix = f" [{' | '.join(identity_bits)}]" if identity_bits else ""
-                    print(f"- {selection['label']} ({runtime.get('state', 'unknown')}){suffix}{details}")
-                elif current_match:
-                    print(f"- {selection['label']} (detected at {current_match['event_path']})")
-                else:
-                    print(f"- {selection['label']} (missing)")
-    print("Sunshine capture settings are user-managed and unchanged by this command.")
+    print(f"Logs: {snapshot['last_launch_log_file']}")
+    print(f"Next step: {snapshot['next_step']}")
     return 0
 
 

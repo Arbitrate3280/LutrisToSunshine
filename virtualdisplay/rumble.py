@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.input import get_user_input
+from utils.terminal import accent, badge, heading, muted
 from virtualdisplay import manager
 
 
@@ -371,12 +372,12 @@ def test_bridge_rumble(
 ) -> int:
     evdev_error = manager._evdev_import_error()
     if evdev_error:
-        print(evdev_error)
+        print(f"{badge('FAIL', 'error')} {evdev_error}")
         return 1
 
     devices = list_live_bridge_devices()
     if not devices:
-        print("No live bridged controllers detected.")
+        print(f"{badge('FAIL', 'error')} No live bridged controllers detected.")
         print("Start the virtual display stack and make sure a selected controller is currently bridged.")
         return 1
 
@@ -384,19 +385,19 @@ def test_bridge_rumble(
     if not selector and len(targets) > 1:
         targets = _select_devices_interactively(targets)
     if not targets:
-        print(f"No live bridged controller matched '{selector}'.")
+        print(f"{badge('FAIL', 'error')} No live bridged controller matched '{selector}'.")
         return 1
 
     success = False
     for device in targets:
-        print(f"Testing {device['label']}")
-        print(f"- event: {device['event_path'] or 'none'}")
-        print(f"- hidraw: {device['hidraw_path'] or 'none'}")
+        print(heading(f"Testing {device['label']}"))
+        print(f"{accent('event:')} {device['event_path'] or muted('none')}")
+        print(f"{accent('hidraw:')} {device['hidraw_path'] or muted('none')}")
         if device.get("bridge_mode"):
-            print(f"- bridge: {device['bridge_mode']}")
+            print(f"{accent('bridge:')} {device['bridge_mode']}")
         if device.get("runtime_backed"):
-            print("- discovery: runtime bridge status")
-        print(f"- mode: {mode}")
+            print(f"{accent('discovery:')} runtime bridge status")
+        print(f"{accent('mode:')} {mode}")
 
         modes = [mode]
         if mode == "auto":
@@ -413,7 +414,7 @@ def test_bridge_rumble(
                         repeat=repeat,
                         pause=pause,
                     )
-                    print("  evdev rumble signal sent.")
+                    print(f"  {badge('PASS', 'success')} evdev rumble signal sent.")
                     success = True
                 elif current_mode == "hidraw-ds4":
                     _play_ds4_bt_hidraw_rumble(
@@ -424,14 +425,15 @@ def test_bridge_rumble(
                         repeat=repeat,
                         pause=pause,
                     )
-                    print("  DS4 hidraw rumble signal sent.")
+                    print(f"  {badge('PASS', 'success')} DS4 hidraw rumble signal sent.")
                     success = True
                 else:
-                    print(f"  unsupported mode: {current_mode}")
+                    print(f"  {badge('WARN', 'warning')} unsupported mode: {current_mode}")
             except Exception as error:
-                print(f"  {current_mode} failed: {error}")
+                print(f"  {badge('WARN', 'warning')} {current_mode} failed: {error}")
 
     if not success:
-        print("No rumble signal path succeeded.")
+        print(f"{badge('FAIL', 'error')} No rumble signal path succeeded.")
         return 1
+    print(f"{badge('PASS', 'success')} Rumble test completed.")
     return 0

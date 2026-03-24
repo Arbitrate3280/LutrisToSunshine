@@ -368,6 +368,36 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertFalse(Path(state["paths"]["sunshine_wrapper_script"]).exists())
         self.assertFalse(override_dir.exists())
 
+    def test_virtual_display_snapshot_not_configured_has_enable_next_step(self) -> None:
+        state = manager._default_state()
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            snapshot = manager.virtual_display_snapshot()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+
+        self.assertFalse(snapshot["configured"])
+        self.assertIn("virtualdisplay enable", snapshot["next_step"])
+
+    def test_virtual_display_doctor_report_flags_missing_dependencies(self) -> None:
+        state = manager._default_state()
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: ["sway", "setfacl"]
+            report = manager.virtual_display_doctor_report()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+
+        self.assertEqual(report["summary"], "needs_attention")
+        self.assertTrue(any(check["status"] == "fail" for check in report["checks"]))
+
     def test_managed_sunshine_templates_do_not_force_global_pulse_sink(self) -> None:
         state = manager._default_state()
         scripts = manager._script_templates(state)

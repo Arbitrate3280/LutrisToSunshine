@@ -137,26 +137,28 @@ If you have physical controllers connected to your host PC (USB, Bluetooth, etc.
 Use the `virtualdisplay` command group to manage the headless streaming environment:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay setup
-python3 lutristosunshine.py virtualdisplay inputs
+python3 lutristosunshine.py virtualdisplay
+python3 lutristosunshine.py virtualdisplay enable
+python3 lutristosunshine.py virtualdisplay controllers
+python3 lutristosunshine.py virtualdisplay doctor
 python3 lutristosunshine.py virtualdisplay status
-python3 lutristosunshine.py virtualdisplay test-rumble
-python3 lutristosunshine.py virtualdisplay sync-apps
+python3 lutristosunshine.py virtualdisplay rumble
 python3 lutristosunshine.py virtualdisplay logs
 python3 lutristosunshine.py virtualdisplay stop
-python3 lutristosunshine.py virtualdisplay disable
+python3 lutristosunshine.py virtualdisplay reset
 ```
 
 **Command details:**
 
-- `setup` - Installs helper scripts, a Sunshine service override, input-isolation rules, starts the managed Sunshine stack, and then tries to update existing Sunshine app entries for virtual display mode
-- `inputs` - Select physical controllers connected to your host PC for exclusive use in streamed games (see "Two types of game inputs" above for details)
-- `status` - Shows whether the virtual display is running, which controllers are configured, and system information
-- `test-rumble` - Sends test rumble signals to your controllers to verify force feedback is working through the virtual device path
-- `sync-apps` - Reapplies virtual display settings to existing Sunshine app entries when Sunshine API access is available
+- `virtualdisplay` - Opens an interactive hub that shows current status and offers the most common actions
+- `enable` - Runs the guided happy path: checks dependencies, installs/refreshes the managed files, starts the stack, syncs Sunshine apps, and then offers optional host-controller setup
+- `controllers` - Select physical controllers connected to your host PC for exclusive use in streamed games (see "Two types of game inputs" above for details)
+- `doctor` - Runs targeted diagnostics and prints actionable fixes for the current setup
+- `status` - Shows a concise dashboard with runtime state, controller status, blocked Flatpak apps, and the next recommended action
+- `rumble` - Sends test rumble signals to your controllers to verify force feedback is working through the virtual device path
 - `logs` - Shows system logs for debugging virtual display issues
 - `stop` - Stops the virtual display stack
-- `disable` - Removes the virtual display setup and restores Sunshine to normal operation
+- `reset` - Restores Sunshine app entries to normal mode and removes the managed virtual display setup
 
 **Technical notes:**
 
@@ -165,7 +167,7 @@ python3 lutristosunshine.py virtualdisplay disable
 - A managed audio guard keeps PipeWire's default sink and source pinned to your saved host devices if Sunshine tries to switch them during a stream
 - Flatpak launchers use transient portal handoff during launch, so they target the headless session without permanently affecting your host desktop
 - Sunshine capture settings remain user-managed (this tool doesn't change your `capture` configuration)
-- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay setup` once so the managed udev rule is regenerated with the latest input permissions
+- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay enable` once so the managed files and udev rule are refreshed with the latest version
 
 ### Virtual Display Status
 
