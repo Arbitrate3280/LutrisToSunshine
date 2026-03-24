@@ -59,12 +59,6 @@ jobs:
         CURRENT_TAG="${GITHUB_REF_NAME}"
         BASE_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
 
-        # Backfill the next release with everything that shipped after 2.5.0,
-        # since the intermediate GitHub releases were missing the changelog body.
-        if [ "${CURRENT_TAG}" = "2.6.4" ]; then
-          BASE_TAG="2.5.0"
-        fi
-
         {
           echo "## What's Changed"
 
