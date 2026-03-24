@@ -24,10 +24,11 @@ VIRTUALDISPLAY_ROOT = CONFIG_ROOT / "virtualdisplay"
 PROFILE_ROOT = VIRTUALDISPLAY_ROOT / PROFILE_NAME
 BIN_ROOT = CONFIG_ROOT / "bin"
 STATE_PATH = VIRTUALDISPLAY_ROOT / "virtualdisplay.json"
-SWAY_UNIT = "lutristosunshine-virtualdisplay-sway.service"
-SUNSHINE_UNIT = "lutristosunshine-virtualdisplay-sunshine.service"
-INPUT_BRIDGE_UNIT = "lutristosunshine-virtualdisplay-inputbridge.service"
-AUDIO_GUARD_UNIT = "lutristosunshine-virtualdisplay-audioguard.service"
+SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
+LEGACY_SWAY_UNIT = "lutristosunshine-virtualdisplay-sway.service"
+LEGACY_SUNSHINE_UNIT = "lutristosunshine-virtualdisplay-sunshine.service"
+LEGACY_INPUT_BRIDGE_UNIT = "lutristosunshine-virtualdisplay-inputbridge.service"
+LEGACY_AUDIO_GUARD_UNIT = "lutristosunshine-virtualdisplay-audioguard.service"
 FLATPAK_PORTAL_UNIT = "flatpak-portal.service"
 SWAYSOCK_PATH = f"/run/user/{os.getuid()}/lutristosunshine-virtualdisplay.sock"
 WAYLAND_DISPLAY_PATH = PROFILE_ROOT / "wayland-display"
@@ -462,6 +463,8 @@ def _input_bridge_status(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _state_paths() -> Dict[str, str]:
+    systemd_user_dir = Path("~/.config/systemd/user").expanduser()
+    override_dir = systemd_user_dir / f"{SUNSHINE_UNIT}.d"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
@@ -469,6 +472,7 @@ def _state_paths() -> Dict[str, str]:
         "sway_config": str(PROFILE_ROOT / "sway.conf"),
         "sway_start_script": str(BIN_ROOT / "lutristosunshine-start-headless-sway.sh"),
         "sunshine_start_script": str(BIN_ROOT / "lutristosunshine-start-virtualdisplay-sunshine.sh"),
+        "sunshine_wrapper_script": str(BIN_ROOT / "lutristosunshine-run-virtualdisplay-service.sh"),
         "audio_create_script": str(BIN_ROOT / "lutristosunshine-create-audio-sink.sh"),
         "audio_cleanup_script": str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
         "audio_guard_script": str(BIN_ROOT / "lutristosunshine-guard-audio-defaults.sh"),
@@ -481,10 +485,13 @@ def _state_paths() -> Dict[str, str]:
         "input_bridge_status_file": str(INPUT_BRIDGE_STATUS_PATH),
         "wayland_display_file": str(WAYLAND_DISPLAY_PATH),
         "audio_module_file": str(AUDIO_MODULE_PATH),
-        "sway_unit": str(Path("~/.config/systemd/user").expanduser() / SWAY_UNIT),
-        "sunshine_unit": str(Path("~/.config/systemd/user").expanduser() / SUNSHINE_UNIT),
-        "input_bridge_unit": str(Path("~/.config/systemd/user").expanduser() / INPUT_BRIDGE_UNIT),
-        "audio_guard_unit": str(Path("~/.config/systemd/user").expanduser() / AUDIO_GUARD_UNIT),
+        "systemd_user_dir": str(systemd_user_dir),
+        "sunshine_override_dir": str(override_dir),
+        "sunshine_override": str(override_dir / "override.conf"),
+        "legacy_sway_unit": str(systemd_user_dir / LEGACY_SWAY_UNIT),
+        "legacy_sunshine_unit": str(systemd_user_dir / LEGACY_SUNSHINE_UNIT),
+        "legacy_input_bridge_unit": str(systemd_user_dir / LEGACY_INPUT_BRIDGE_UNIT),
+        "legacy_audio_guard_unit": str(systemd_user_dir / LEGACY_AUDIO_GUARD_UNIT),
         "input_bridge_script": str(BIN_ROOT / "lutristosunshine-input-bridge.py"),
         "sunshine_conf": str(detect_sunshine_config_root() / "sunshine.conf"),
     }
@@ -499,7 +506,6 @@ def _default_state() -> Dict[str, Any]:
         "host_audio_defaults": {"sink": "", "source": ""},
         "sway_socket": SWAYSOCK_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
-        "stock_units": {},
         "sunshine_audio_sink": None,
         "exclusive_input_devices": _empty_exclusive_input_state(),
         "paths": paths,
@@ -728,16 +734,6 @@ def analyze_flatpak_command_for_virtualdisplay(command: Optional[str]) -> Option
 
 def _systemctl_user(*args: str, check: bool = False) -> subprocess.CompletedProcess:
     return _run(["systemctl", "--user", *args], check=check)
-
-
-def _stock_units() -> List[str]:
-    return ["sunshine.service", "app-dev.lizardbyte.app.Sunshine.service"]
-
-
-def _unit_state(unit_name: str) -> Dict[str, bool]:
-    enabled = _systemctl_user("is-enabled", unit_name).returncode == 0
-    active = _systemctl_user("is-active", unit_name).returncode == 0
-    return {"enabled": enabled, "active": active}
 
 
 def _sudo_prefix() -> Optional[List[str]]:
@@ -2238,6 +2234,242 @@ exec /usr/bin/env -i \
     XDG_SESSION_DESKTOP=sway \
     {sunshine_command}
 """,
+        Path(paths["sunshine_wrapper_script"]): f"""#!/bin/bash
+set -euo pipefail
+
+state_path="{paths['state_path']}"
+sunshine_conf="{paths['sunshine_conf']}"
+audio_sink="{audio_sink}"
+audio_create_script="{paths['audio_create_script']}"
+audio_cleanup_script="{paths['audio_cleanup_script']}"
+audio_guard_script="{paths['audio_guard_script']}"
+input_bridge_script="{paths['input_bridge_script']}"
+sway_start_script="{paths['sway_start_script']}"
+sunshine_start_script="{paths['sunshine_start_script']}"
+display_file="{paths['wayland_display_file']}"
+bridge_status_file="{paths['input_bridge_status_file']}"
+sway_socket="{state['sway_socket']}"
+audio_guard_pid=""
+input_bridge_pid=""
+sway_pid=""
+sunshine_status=0
+
+prepare_audio_state() {{
+    python3 - "$state_path" "$sunshine_conf" "$audio_sink" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+conf_path = Path(sys.argv[2])
+managed_sink = sys.argv[3]
+managed_sinks = set({managed_audio_sinks!r})
+managed_sources = set({managed_audio_sources!r})
+
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    state = {{}}
+if not isinstance(state, dict):
+    state = {{}}
+
+host_defaults = state.get("host_audio_defaults") or {{}}
+if not isinstance(host_defaults, dict):
+    host_defaults = {{}}
+
+lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
+current_value = ""
+present = False
+for line in lines:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        continue
+    key, value = stripped.split("=", 1)
+    if key.strip() == "audio_sink":
+        present = True
+        current_value = value.strip()
+        break
+
+original = state.get("sunshine_audio_sink")
+if not isinstance(original, dict) or "present" not in original:
+    state["sunshine_audio_sink"] = {{"present": present, "value": current_value}}
+
+updated_lines = []
+replaced = False
+for line in lines:
+    stripped = line.strip()
+    if stripped and not stripped.startswith("#") and "=" in stripped:
+        key = stripped.split("=", 1)[0].strip()
+        if key == "audio_sink":
+            updated_lines.append(f"audio_sink = {{managed_sink}}")
+            replaced = True
+            continue
+    updated_lines.append(line)
+if not replaced:
+    if updated_lines and updated_lines[-1] != "":
+        updated_lines.append("")
+    updated_lines.append(f"audio_sink = {{managed_sink}}")
+conf_path.parent.mkdir(parents=True, exist_ok=True)
+conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
+
+try:
+    pactl = subprocess.run(
+        ["pactl", "info"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+except OSError:
+    pactl = None
+if pactl and pactl.returncode == 0:
+    current_sink = ""
+    current_source = ""
+    for line in pactl.stdout.splitlines():
+        if line.startswith("Default Sink: "):
+            current_sink = line.split(": ", 1)[1].strip()
+        elif line.startswith("Default Source: "):
+            current_source = line.split(": ", 1)[1].strip()
+    if current_sink and current_source:
+        if not (
+            current_sink in managed_sinks
+            and current_source in managed_sources
+            and host_defaults.get("sink")
+            and host_defaults.get("source")
+        ):
+            state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
+
+state_path.parent.mkdir(parents=True, exist_ok=True)
+state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+PY
+}}
+
+restore_audio_state() {{
+    python3 - "$state_path" "$sunshine_conf" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+conf_path = Path(sys.argv[2])
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+if not isinstance(state, dict):
+    raise SystemExit(0)
+
+original = state.get("sunshine_audio_sink") or {{}}
+host_defaults = state.get("host_audio_defaults") or {{}}
+if not isinstance(original, dict):
+    original = {{}}
+if not isinstance(host_defaults, dict):
+    host_defaults = {{}}
+
+lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
+updated_lines = []
+found = False
+for line in lines:
+    stripped = line.strip()
+    if stripped and not stripped.startswith("#") and "=" in stripped:
+        key = stripped.split("=", 1)[0].strip()
+        if key == "audio_sink":
+            found = True
+            if original.get("present"):
+                updated_lines.append(f"audio_sink = {{str(original.get('value') or '').strip()}}")
+            continue
+    updated_lines.append(line)
+if not found and original.get("present"):
+    if updated_lines and updated_lines[-1] != "":
+        updated_lines.append("")
+    updated_lines.append(f"audio_sink = {{str(original.get('value') or '').strip()}}")
+conf_path.parent.mkdir(parents=True, exist_ok=True)
+conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
+
+sink_name = str(host_defaults.get("sink") or "").strip()
+source_name = str(host_defaults.get("source") or "").strip()
+if sink_name:
+    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False)
+if source_name:
+    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False)
+state["host_audio_defaults"] = {{"sink": "", "source": ""}}
+state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+PY
+}}
+
+input_bridge_enabled() {{
+    python3 - "$state_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+devices = ((state.get("exclusive_input_devices") or {{}}).get("devices") or [])
+raise SystemExit(0 if devices else 1)
+PY
+}}
+
+stop_child() {{
+    local pid="${{1:-}}"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill -- "-$pid" >/dev/null 2>&1 || kill "$pid" >/dev/null 2>&1 || true
+        wait "$pid" >/dev/null 2>&1 || true
+    fi
+}}
+
+cleanup() {{
+    local exit_code=$?
+    stop_child "$sunshine_pid"
+    stop_child "$input_bridge_pid"
+    stop_child "$audio_guard_pid"
+    stop_child "$sway_pid"
+    rm -f "$bridge_status_file" "$display_file"
+    "$audio_cleanup_script" >/dev/null 2>&1 || true
+    restore_audio_state >/dev/null 2>&1 || true
+    exit "$exit_code"
+}}
+
+trap cleanup EXIT INT TERM HUP
+
+prepare_audio_state
+"$audio_create_script"
+setsid "$sway_start_script" &
+sway_pid=$!
+
+for _ in $(seq 1 100); do
+    if [ -s "$display_file" ] && [ -S "$sway_socket" ]; then
+        break
+    fi
+    if ! kill -0 "$sway_pid" 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
+if [ ! -s "$display_file" ] || [ ! -S "$sway_socket" ]; then
+    echo "Headless sway did not become ready." >&2
+    exit 1
+fi
+
+setsid "$audio_guard_script" &
+audio_guard_pid=$!
+
+if input_bridge_enabled; then
+    setsid python3 "$input_bridge_script" &
+    input_bridge_pid=$!
+fi
+
+setsid "$sunshine_start_script" &
+sunshine_pid=$!
+wait "$sunshine_pid"
+sunshine_status=$?
+exit "$sunshine_status"
+""",
         Path(paths["audio_create_script"]): f"""#!/bin/bash
 set -euo pipefail
 
@@ -3015,74 +3247,10 @@ SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode {FALLBACK_WIDT
 
 def _systemd_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
-    python_executable = sys.executable or "/usr/bin/env python3"
     return {
-        Path(paths["sway_unit"]): f"""[Unit]
-Description=LutrisToSunshine headless sway session
-After=graphical-session.target pipewire.service wireplumber.service
-
-[Service]
-Type=simple
-Environment=SWAYSOCK={state['sway_socket']}
-Environment=WLR_BACKENDS=headless,libinput
-Environment=LIBSEAT_BACKEND=noop
-Environment=XDG_SESSION_TYPE=wayland
-Environment=XDG_CURRENT_DESKTOP=sway
-ExecStart={paths['sway_start_script']}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-""",
-        Path(paths["input_bridge_unit"]): f"""[Unit]
-Description=LutrisToSunshine exclusive input bridge
-After={SWAY_UNIT}
-Requires={SWAY_UNIT}
-
-[Service]
-Type=simple
-ExecStart={python_executable} {paths['input_bridge_script']}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-""",
-        Path(paths["audio_guard_unit"]): f"""[Unit]
-Description=LutrisToSunshine audio default guard
-After={SUNSHINE_UNIT} pipewire.service wireplumber.service
-PartOf={SUNSHINE_UNIT}
-
-[Service]
-Type=simple
-ExecStart={paths['audio_guard_script']}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-""",
-        Path(paths["sunshine_unit"]): f"""[Unit]
-Description=LutrisToSunshine Sunshine virtual display
-After={SWAY_UNIT}
-Requires={SWAY_UNIT}
-Wants={AUDIO_GUARD_UNIT}
-Conflicts=sunshine.service app-dev.lizardbyte.app.Sunshine.service
-
-[Service]
-Type=simple
-Environment=SWAYSOCK={state['sway_socket']}
-Environment=XDG_SESSION_TYPE=wayland
-Environment=XDG_CURRENT_DESKTOP=sway
-ExecStartPre={paths['audio_create_script']}
-ExecStart={paths['sunshine_start_script']}
-ExecStopPost={paths['audio_cleanup_script']}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
+        Path(paths["sunshine_override"]): f"""[Service]
+ExecStart=
+ExecStart={paths['sunshine_wrapper_script']}
 """,
     }
 
@@ -3144,7 +3312,7 @@ def _ensure_dependencies() -> List[str]:
 def _write_managed_files(state: Dict[str, Any]) -> None:
     PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
     BIN_ROOT.mkdir(parents=True, exist_ok=True)
-    Path("~/.config/systemd/user").expanduser().mkdir(parents=True, exist_ok=True)
+    Path(state["paths"]["systemd_user_dir"]).mkdir(parents=True, exist_ok=True)
 
     for path, content in _script_templates(state).items():
         _write_file(path, content, executable=path.suffix == ".sh")
@@ -3170,22 +3338,38 @@ def _restore_sunshine_audio_sink(state: Dict[str, Any]) -> None:
         _remove_key(sunshine_conf, "audio_sink")
 
 
-def _record_stock_units(state: Dict[str, Any]) -> None:
-    state["stock_units"] = {unit: _unit_state(unit) for unit in _stock_units()}
+def _legacy_unit_names() -> List[str]:
+    return [
+        LEGACY_INPUT_BRIDGE_UNIT,
+        LEGACY_AUDIO_GUARD_UNIT,
+        LEGACY_SUNSHINE_UNIT,
+        LEGACY_SWAY_UNIT,
+    ]
 
 
-def _stop_stock_units() -> None:
-    for unit in _stock_units():
+def _legacy_unit_paths(state: Dict[str, Any]) -> List[Path]:
+    paths = state["paths"]
+    return [
+        Path(paths["legacy_input_bridge_unit"]),
+        Path(paths["legacy_audio_guard_unit"]),
+        Path(paths["legacy_sunshine_unit"]),
+        Path(paths["legacy_sway_unit"]),
+    ]
+
+
+def _cleanup_legacy_virtualdisplay_units(state: Dict[str, Any]) -> None:
+    for unit in _legacy_unit_names():
         _systemctl_user("stop", unit)
         _systemctl_user("disable", unit)
+    for path in _legacy_unit_paths(state):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
-def _restore_stock_units(state: Dict[str, Any]) -> None:
-    for unit, details in state.get("stock_units", {}).items():
-        if details.get("enabled"):
-            _systemctl_user("enable", unit)
-        if details.get("active"):
-            _systemctl_user("start", unit)
+def _sunshine_service_active() -> bool:
+    return _systemctl_user("is-active", SUNSHINE_UNIT).returncode == 0
 
 
 def _daemon_reload() -> None:
@@ -3204,30 +3388,24 @@ def _bridge_runtime_enabled(state: Dict[str, Any]) -> bool:
 
 
 def _bridge_service_state() -> str:
-    if _systemctl_user("is-active", INPUT_BRIDGE_UNIT).returncode == 0:
+    if Path(load_state()["paths"]["input_bridge_status_file"]).exists():
         return "active"
-    if _systemctl_user("is-failed", INPUT_BRIDGE_UNIT).returncode == 0:
-        return "failed"
+    if _sunshine_service_active() and _has_selected_input_devices(load_state()):
+        return "starting"
     return "inactive"
 
 
 def _apply_input_bridge_runtime_state(state: Dict[str, Any]) -> None:
     if not _bridge_runtime_enabled(state):
-        _systemctl_user("stop", INPUT_BRIDGE_UNIT)
         _clear_input_bridge_status_file(state)
         return
 
-    stack_active = (
-        _systemctl_user("is-active", SWAY_UNIT).returncode == 0
-        or _systemctl_user("is-active", SUNSHINE_UNIT).returncode == 0
-    )
-    if not stack_active:
+    if not _sunshine_service_active():
         return
 
-    if _systemctl_user("is-active", INPUT_BRIDGE_UNIT).returncode == 0:
-        _systemctl_user("restart", INPUT_BRIDGE_UNIT)
-        return
-    _systemctl_user("start", INPUT_BRIDGE_UNIT)
+    # The input bridge now runs as a child of the Sunshine override wrapper.
+    # Restart the service so the wrapper can re-read the saved controller selection.
+    _systemctl_user("restart", SUNSHINE_UNIT)
 
 
 def _parse_selection_numbers(value: str, total_items: int) -> List[int]:
@@ -3353,7 +3531,7 @@ def setup_virtual_display() -> int:
         return 1
 
     state = load_state()
-    _record_stock_units(state)
+    sunshine_was_active = _sunshine_service_active()
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
     save_state(state)
@@ -3366,10 +3544,12 @@ def setup_virtual_display() -> int:
         print("Install sudo or pkexec, then rerun the command.")
         return 1
 
-    _stop_stock_units()
+    _cleanup_legacy_virtualdisplay_units(state)
     _daemon_reload()
     state["enabled"] = True
     save_state(state)
+    if sunshine_was_active:
+        _systemctl_user("restart", SUNSHINE_UNIT)
 
     print("Virtual display files installed.")
     return 0
@@ -3381,22 +3561,11 @@ def start_virtual_display() -> int:
         print("Virtual display is not set up. Run 'virtualdisplay setup' first.")
         return 1
     state = refresh_managed_files(state)
-    if _bridge_runtime_enabled(state):
-        bridge_result = _systemctl_user("start", INPUT_BRIDGE_UNIT)
-        if bridge_result.returncode != 0:
-            stderr = (bridge_result.stderr or "").strip()
-            if stderr:
-                print(stderr)
-            print("Error: unable to start the exclusive input bridge service.")
-            return 1
     _remember_sunshine_audio_sink(state)
-    _snapshot_host_audio_defaults(state)
-    _set_runtime_sunshine_audio_sink(state)
     save_state(state)
     result = _systemctl_user("start", SUNSHINE_UNIT)
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
-        _systemctl_user("stop", AUDIO_GUARD_UNIT)
         _systemctl_user("stop", SUNSHINE_UNIT)
         _restore_sunshine_audio_sink(state)
         _restore_host_audio_defaults(state)
@@ -3404,8 +3573,6 @@ def start_virtual_display() -> int:
         if stderr:
             print(stderr)
         print("Error: unable to start the virtual display Sunshine service.")
-        if _bridge_runtime_enabled(state):
-            _systemctl_user("stop", INPUT_BRIDGE_UNIT)
         return 1
     print("Virtual display started.")
     return 0
@@ -3416,10 +3583,7 @@ def stop_virtual_display() -> int:
     if not state.get("enabled"):
         print("Virtual display is not set up.")
         return 1
-    _systemctl_user("stop", INPUT_BRIDGE_UNIT)
-    _systemctl_user("stop", AUDIO_GUARD_UNIT)
     _systemctl_user("stop", SUNSHINE_UNIT)
-    _systemctl_user("stop", SWAY_UNIT)
     _clear_input_bridge_status_file(state)
     _restore_sunshine_audio_sink(state)
     _restore_host_audio_defaults(state)
@@ -3434,18 +3598,20 @@ def virtual_display_status() -> int:
         print("Virtual display is not configured.")
         return 1
 
-    sunshine_active = _systemctl_user("is-active", SUNSHINE_UNIT).returncode == 0
-    sway_active = _systemctl_user("is-active", SWAY_UNIT).returncode == 0
+    sunshine_active = _sunshine_service_active()
+    sway_active = sunshine_active and Path(state["sway_socket"]).exists() and WAYLAND_DISPLAY_PATH.exists()
     bridge_state = _bridge_service_state()
     wayland_display = ""
     if WAYLAND_DISPLAY_PATH.exists():
         wayland_display = WAYLAND_DISPLAY_PATH.read_text(encoding="utf-8").strip()
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
+    audio_guard_state = "active" if sunshine_active and Path(state["paths"]["audio_module_file"]).exists() else "inactive"
 
     print(f"Profile: {state['profile']}")
     print(f"Managed Sunshine unit: {SUNSHINE_UNIT} ({'active' if sunshine_active else 'inactive'})")
-    print(f"Managed Sway unit: {SWAY_UNIT} ({'active' if sway_active else 'inactive'})")
-    print(f"Managed input bridge unit: {INPUT_BRIDGE_UNIT} ({bridge_state})")
+    print(f"Headless sway runtime: {'active' if sway_active else 'inactive'}")
+    print(f"Input bridge runtime: {bridge_state}")
+    print(f"Audio guard runtime: {audio_guard_state}")
     print(f"Audio sink: {state['audio_sink']}")
     print(f"Sunshine audio target: {_sunshine_audio_capture_target(state)}")
     host_defaults = state.get("host_audio_defaults") or {}
@@ -3501,13 +3667,7 @@ def virtual_display_logs(lines: int = 80) -> int:
             "journalctl",
             "--user",
             "-u",
-            SWAY_UNIT,
-            "-u",
             SUNSHINE_UNIT,
-            "-u",
-            INPUT_BRIDGE_UNIT,
-            "-u",
-            AUDIO_GUARD_UNIT,
             "-n",
             str(lines),
             "--no-pager",
@@ -3524,29 +3684,32 @@ def remove_virtual_display() -> int:
         return 1
 
     stop_virtual_display()
-    _systemctl_user("disable", INPUT_BRIDGE_UNIT)
-    _systemctl_user("disable", AUDIO_GUARD_UNIT)
-    _systemctl_user("disable", SUNSHINE_UNIT)
-    _systemctl_user("disable", SWAY_UNIT)
+    _cleanup_legacy_virtualdisplay_units(state)
 
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
 
-    _restore_stock_units(state)
-
     for path_key in [
-        "sway_unit",
-        "sunshine_unit",
-        "input_bridge_unit",
-        "audio_guard_unit",
+        "sunshine_override",
         "input_bridge_script",
         "audio_guard_script",
+        "sunshine_wrapper_script",
     ]:
         try:
             Path(state["paths"][path_key]).unlink()
         except OSError:
             pass
-    for path_key in ["portal_active_file", "portal_lock_file", "input_bridge_status_file"]:
+    try:
+        Path(state["paths"]["sunshine_override_dir"]).rmdir()
+    except OSError:
+        pass
+    for path_key in [
+        "portal_active_file",
+        "portal_lock_file",
+        "input_bridge_status_file",
+        "wayland_display_file",
+        "audio_module_file",
+    ]:
         try:
             Path(state["paths"][path_key]).unlink()
         except OSError:

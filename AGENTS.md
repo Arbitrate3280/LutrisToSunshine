@@ -18,6 +18,21 @@
 - Python 3, 4-space indents, prefer PEP 8 casing (`snake_case` for functions/vars, `CamelCase` for classes if added).
 - Keep functions small and launcher-specific logic inside the corresponding module; reuse helpers from `utils/`.
 - Type hints are present in several helpers—extend them when adding new functions.
+
+## LSP & Code Intelligence Guidelines
+- **ALWAYS use LSP when available** - Run `lsp diagnostics` before editing files to identify syntax errors, type issues, and warnings.
+- **Use semantic tools over text search** - For syntax questions, symbol lookups, or finding usages, use `lsp` tools (definition, references, hover, symbols) instead of `grep` or text search.
+- **Check for code actions** - Use `lsp code_actions` to discover available quick-fixes, refactors, or import actions before making manual changes.
+- **LSP tells the truth** - When LSP reports an error, trust it over manual inspection. LSP parsers have complete context of the codebase.
+- **Priority order for understanding code**:
+  1. `lsp hover` - What is this thing? (type signature, docs)
+  2. `lsp definition` - Where is this defined?
+  3. `lsp references` - Where is this used?
+  4. `lsp symbols` - What's in this file?
+  5. Only after exhausting LSP, fall back to grep/text search
+- **Before committing changes** - Run `lsp diagnostics` on modified files to ensure no new errors or warnings were introduced.
+- **For syntax errors** - LSP diagnostics will pinpoint the exact location and nature of syntax issues. Use this information instead of manual inspection.
+
 - User prompts and errors should be concise and actionable; prefer `print` over logging for CLI output.
 
 ## Testing Guidelines

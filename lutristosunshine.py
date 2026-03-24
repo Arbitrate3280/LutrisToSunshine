@@ -157,7 +157,12 @@ def handle_virtualdisplay_command(args) -> int:
         setup_status = setup_virtual_display()
         if setup_status != 0:
             return setup_status
-        return reconcile_apps(True)
+        reconcile_status = reconcile_apps(True)
+        if reconcile_status != 0:
+            print("Warning: virtual display setup completed, but Sunshine app reconciliation was skipped.")
+            print("Run 'python3 lutristosunshine.py virtualdisplay sync-apps' later if you want existing app entries updated.")
+            return 0
+        return 0
     if action == "status":
         status = virtual_display_status()
         if status == 0:

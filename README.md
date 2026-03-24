@@ -149,11 +149,11 @@ python3 lutristosunshine.py virtualdisplay disable
 
 **Command details:**
 
-- `setup` - Installs user services, helper scripts, input-isolation rules, starts the managed Sunshine stack, and updates existing Sunshine app entries to work with the virtual display
+- `setup` - Installs helper scripts, a Sunshine service override, input-isolation rules, starts the managed Sunshine stack, and then tries to update existing Sunshine app entries for virtual display mode
 - `inputs` - Select physical controllers connected to your host PC for exclusive use in streamed games (see "Two types of game inputs" above for details)
 - `status` - Shows whether the virtual display is running, which controllers are configured, and system information
 - `test-rumble` - Sends test rumble signals to your controllers to verify force feedback is working through the virtual device path
-- `sync-apps` - Reapplies virtual display settings to existing Sunshine app entries
+- `sync-apps` - Reapplies virtual display settings to existing Sunshine app entries when Sunshine API access is available
 - `logs` - Shows system logs for debugging virtual display issues
 - `stop` - Stops the virtual display stack
 - `disable` - Removes the virtual display setup and restores Sunshine to normal operation
