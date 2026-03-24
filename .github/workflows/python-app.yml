@@ -54,73 +54,45 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       id: release_notes
       run: |
-        # Get latest tag and clean it
-        CURRENT_TAG=${GITHUB_REF#refs/tags/}
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-        
-        echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-        
-        echo "## What's Changed" >> $GITHUB_ENV
-        if [ -n "$PREVIOUS_TAG" ]; then
-          # Get commits between tags, excluding merge commits and workflow changes
-          git log --pretty=format:"%H" ${PREVIOUS_TAG}..${CURRENT_TAG} | \
-          while read -r commit_hash; do
-            # Get the commit message
-            commit_msg=$(git log -1 --pretty=format:"%s (%h)" $commit_hash)
-            
-            # Skip if it matches our filter patterns
-            if echo "$commit_msg" | grep -qE "^Merge |workflow|\.github|gitignore|requirements.txt|README|typo"; then
-              continue
-            fi
-            
-            # Check if this commit is associated with a PR
-            pr_info=$(git log -1 --pretty=format:"%b" $commit_hash | grep -o "^PR: #[0-9]* from \S*" || true)
-            if [ -n "$pr_info" ]; then
-              # Extract username from PR info
-              contributor=$(echo $pr_info | grep -o "from \S*" | cut -d' ' -f2)
-              echo "* ${commit_msg} - Thank you @${contributor} for your contribution! 🎉" >> $GITHUB_ENV
-            else
-              echo "* ${commit_msg}" >> $GITHUB_ENV
-            fi
-          done
-        else
-          # Same logic for first release
-          git log --pretty=format:"%H" ${CURRENT_TAG} | \
-          while read -r commit_hash; do
-            commit_msg=$(git log -1 --pretty=format:"%s (%h)" $commit_hash)
-            
-            if echo "$commit_msg" | grep -qE "^Merge |workflow|\.github|gitignore|requirements.txt|README|typo"; then
-              continue
-            fi
-            
-            pr_info=$(git log -1 --pretty=format:"%b" $commit_hash | grep -o "^PR: #[0-9]* from \S*" || true)
-            if [ -n "$pr_info" ]; then
-              contributor=$(echo $pr_info | grep -o "from \S*" | cut -d' ' -f2)
-              echo "* ${commit_msg} - Thank you @${contributor} for your contribution! 🎉" >> $GITHUB_ENV
-            else
-              echo "* ${commit_msg}" >> $GITHUB_ENV
-            fi
-          done
+        set -euo pipefail
+
+        CURRENT_TAG="${GITHUB_REF_NAME}"
+        BASE_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
+
+        # Backfill the next release with everything that shipped after 2.5.0,
+        # since the intermediate GitHub releases were missing the changelog body.
+        if [ "${CURRENT_TAG}" = "2.6.4" ]; then
+          BASE_TAG="2.5.0"
         fi
-        echo "" >> $GITHUB_ENV
-        echo "" >> $GITHUB_ENV
-        
-        echo "## Installation" >> $GITHUB_ENV
-        echo "1. Download the binary" >> $GITHUB_ENV
-        echo "2. Make it executable: \`chmod +x lutristosunshine\`" >> $GITHUB_ENV
-        echo "3. Run it: \`./lutristosunshine\`" >> $GITHUB_ENV
-        echo "" >> $GITHUB_ENV
-        
-        echo "EOF" >> $GITHUB_ENV
+
+        {
+          echo "## What's Changed"
+
+          if [ -n "${BASE_TAG}" ]; then
+            git log --no-merges --reverse --pretty=format:"* %s (%h)" "${BASE_TAG}..${CURRENT_TAG}" \
+              -- . ":(exclude).github" ":(exclude).gitignore"
+          else
+            git log --no-merges --reverse --pretty=format:"* %s (%h)" "${CURRENT_TAG}" \
+              -- . ":(exclude).github" ":(exclude).gitignore"
+          fi
+
+          echo
+          echo
+          echo "## Installation"
+          echo
+          echo "1. Download the binary"
+          echo "2. Make it executable: \`chmod +x lutristosunshine\`"
+          echo "3. Run it: \`./lutristosunshine\`"
+        } > release_notes.md
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: lutristosunshine
-        tag_name: ${{ github.ref }}
+        tag_name: ${{ github.ref_name }}
         name: ${{ github.ref_name }}
-        body: ${{ env.RELEASE_NOTES }}
+        body_path: release_notes.md
         generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
