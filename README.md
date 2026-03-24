@@ -3,6 +3,7 @@
 LutrisToSunshine imports games from supported launchers into Sunshine and can optionally download cover art from SteamGridDB. It also includes a guided virtual-display mode for headless streaming, so streamed games can run on a separate desktop without disturbing your main session.
 
 <img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
+<img width="1648" height="439" alt="Captura_de_tela_20260324_203642" src="https://github.com/user-attachments/assets/bec9a1e3-9318-492f-bdf5-242429dc6607" />
 
 ## Table of Contents
 
