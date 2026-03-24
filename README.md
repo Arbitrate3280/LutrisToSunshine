@@ -2,6 +2,8 @@
 
 LutrisToSunshine imports games from supported launchers into Sunshine and can optionally download cover art from SteamGridDB. It also includes a guided virtual-display mode for headless streaming, so streamed games can run on a separate desktop without disturbing your main session.
 
+<img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
+
 ## Table of Contents
 
 - [Why Use It](#why-use-it)
@@ -15,8 +17,6 @@ LutrisToSunshine imports games from supported launchers into Sunshine and can op
 - [Binary Release](#binary-release)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
-
-<img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 
 ## Why Use It
 
@@ -115,13 +115,6 @@ Virtual display creates a separate headless desktop for streamed games. Sunshine
 - Run Sunshine on headless systems
 - Keep client input isolated from the host desktop
 - Route streamed-game audio separately from normal desktop audio
-- Launch Flatpak-based games into the headless session without permanently changing the host desktop environment
-
-### Input Model
-
-There are two input paths:
-
-- Client input: automatic. Controllers, keyboard, and mouse from Moonlight or another Sunshine client already work in the streamed session.
 - Host controller passthrough: optional. Use the `controllers` command only if you want physical controllers connected to the host PC to be reserved for streamed games and hidden from the host desktop while streaming.
 
 ### Virtual Display Requirements
@@ -194,7 +187,7 @@ Stop the running virtual-display stack without removing setup:
 python3 lutristosunshine.py virtualdisplay stop
 ```
 
-Turn off virtual display, restore Sunshine app launches to normal mode, and remove the managed setup:
+Undo virtual display changes, restore Sunshine to original state, and remove the managed setup:
 
 ```bash
 python3 lutristosunshine.py virtualdisplay reset
@@ -205,14 +198,6 @@ Show recent virtual-display logs:
 ```bash
 python3 lutristosunshine.py virtualdisplay logs
 ```
-
-## Virtual Display Notes
-
-- Imported games receive the virtual-display launch wrapper and resolution prep commands only while virtual display is enabled
-- Headless launches use the managed virtual sink while normal desktop apps keep using your saved host audio defaults
-- Flatpak launchers use transient portal handoff so the headless environment does not permanently replace your host desktop session
-- Sunshine capture settings remain user-managed; this tool does not rewrite your `capture` configuration
-- After upgrading LutrisToSunshine, rerun `python3 lutristosunshine.py virtualdisplay enable` once to refresh the managed files and udev rule
 
 ## Limitations And Compatibility
 
@@ -252,4 +237,5 @@ The same flags still apply:
 - [RetroArch](https://www.retroarch.com/)
 - [Eden](https://eden-emu.dev/)
 - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
-- [SteamGridDB](https://www.steamgriddb.com/)
+- [SteamGridDB](https://www.steamgriddb.com/)]
+- [Sunshine Headless Sway](https://github.com/daaaaan/sunshine-headless-sway)
