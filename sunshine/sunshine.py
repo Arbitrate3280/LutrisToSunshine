@@ -18,12 +18,16 @@ from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
 from virtualdisplay.manager import (
+    HEADLESS_PREP_PREFIX,
     get_app_prep_commands,
+    is_headless_prep_wrapped,
     get_wrapped_command_origin,
     get_wrapped_command_exit_timeout,
     is_wrapped_command,
     is_enabled as virtual_display_enabled,
+    unwrap_headless_prep_command,
     unwrap_command,
+    wrap_headless_prep_command,
     wrap_command,
 )
 
@@ -203,11 +207,37 @@ def _normalize_prep_cmd(app: Dict, enable_virtual_display: bool) -> List[Dict]:
         undo_cmd = command.get("undo", "")
         if do_cmd in managed_scripts or undo_cmd in managed_scripts:
             continue
-        filtered.append(command)
+        normalized = dict(command)
+        normalized["do"] = _normalize_single_prep_command(do_cmd, enable_virtual_display)
+        normalized["undo"] = _normalize_single_prep_command(undo_cmd, enable_virtual_display)
+        filtered.append(normalized)
 
     if enable_virtual_display:
         return get_app_prep_commands() + filtered
     return filtered
+
+
+def _normalize_single_prep_command(command: str, enable_virtual_display: bool) -> str:
+    if not command:
+        return ""
+
+    if enable_virtual_display:
+        if is_headless_prep_wrapped(command):
+            return command
+        if command.startswith(HEADLESS_PREP_PREFIX):
+            raw_command = command[len(HEADLESS_PREP_PREFIX):].lstrip()
+            if not raw_command:
+                return ""
+            return wrap_headless_prep_command(raw_command) or command
+        return command
+
+    if is_headless_prep_wrapped(command):
+        raw_command = unwrap_headless_prep_command(command)
+        if not raw_command:
+            return ""
+        return f"{HEADLESS_PREP_PREFIX}{raw_command}"
+
+    return command
 
 
 def _normalize_app_payload(app: Dict) -> Dict:

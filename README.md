@@ -13,6 +13,7 @@ LutrisToSunshine imports games from supported launchers into Sunshine and can op
 - [Common Usage](#common-usage)
 - [What The Main Flow Does](#what-the-main-flow-does)
 - [Virtual Display](#virtual-display)
+- [Headless Prep Commands](#headless-prep-commands)
 - [Virtual Display Notes](#virtual-display-notes)
 - [Limitations And Compatibility](#limitations-and-compatibility)
 - [Binary Release](#binary-release)
@@ -206,6 +207,31 @@ Show recent virtual-display logs:
 ```bash
 python3 lutristosunshine.py virtualdisplay logs
 ```
+
+## Headless Prep Commands
+
+Use `headless:` on `prep-cmd.do` and `prep-cmd.undo` when a companion command should run inside the Sway virtual display instead of on the host session.
+
+This is useful for helpers such as AntiMicroX, on-screen tools, or other Flatpak apps that should live on the streamed desktop.
+
+Example:
+
+```json
+"prep-cmd": [
+  {
+    "do": "headless:/home/vitor/bash-scripts/antimicrox-toggle.sh do",
+    "undo": "headless:/home/vitor/bash-scripts/antimicrox-toggle.sh undo"
+  }
+]
+```
+
+After editing the app entry, run:
+
+```bash
+python3 lutristosunshine.py virtualdisplay enable
+```
+
+That reconciles the Sunshine app list and rewrites `headless:` prep commands to the managed helper that launches them with the virtual-display environment and Flatpak portal handoff when needed.
 
 ## Limitations And Compatibility
 
