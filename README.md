@@ -247,5 +247,5 @@ The same flags still apply:
 - [RetroArch](https://www.retroarch.com/)
 - [Eden](https://eden-emu.dev/)
 - [Sunshine](https://app.lizardbyte.dev/Sunshine/)
-- [SteamGridDB](https://www.steamgriddb.com/)]
+- [SteamGridDB](https://www.steamgriddb.com/)
 - [Sunshine Headless Sway](https://github.com/daaaaan/sunshine-headless-sway)
