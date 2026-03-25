@@ -212,7 +212,6 @@ python3 lutristosunshine.py virtualdisplay logs
 
 Use `headless:` on `prep-cmd.do` and `prep-cmd.undo` when a companion command should run inside the Sway virtual display instead of on the host session.
 
-This is useful for helpers such as AntiMicroX, on-screen tools, or other Flatpak apps that should live on the streamed desktop.
 
 Example:
 
@@ -243,6 +242,7 @@ Virtual display is still a work in progress. It has currently been tested only o
 Other environments, distributions, or GPU setups may need extra troubleshooting.
 
 Dynamic MangoHud FPS limit only works if you're already using MangoHud, it doesn't set it up for you. It sets `MANGOHUD_CONFIG=read_cfg,fps_limit=$SUNSHINE_CLIENT_FPS` for those launches and does not enable MangoHud by itself.
+Still need to disable input on host for bridged controllers. 
 
 ## Binary Release
 
