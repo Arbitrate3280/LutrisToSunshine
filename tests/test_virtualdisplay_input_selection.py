@@ -486,9 +486,21 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertIn("run_audio_command pactl set-default-source", audio_guard)
         self.assertNotIn("pactl subscribe", audio_guard)
         self.assertIn('PULSE_SINK="lts-sunshine-stereo"', launch_script)
+        self.assertNotIn("MANGOHUD_CONFIG", launch_script)
         self.assertIn("ExecStart=", sunshine_override)
         self.assertIn(state["paths"]["sunshine_wrapper_script"], sunshine_override)
         self.assertNotIn("Environment=PULSE_SINK=", sunshine_override)
+
+    def test_launch_script_can_inject_dynamic_mangohud_fps_limit(self) -> None:
+        state = manager._default_state()
+        state["dynamic_mangohud_fps_limit"] = True
+
+        scripts = manager._script_templates(state)
+        launch_script = scripts[Path(state["paths"]["launch_app_script"])]
+
+        self.assertIn('local mangohud_config_value=""', launch_script)
+        self.assertIn('mangohud_config_value="read_cfg,fps_limit=${SUNSHINE_CLIENT_FPS}"', launch_script)
+        self.assertIn('launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")', launch_script)
 
     def test_input_bridge_script_includes_acl_user_helpers(self) -> None:
         state = manager._default_state()

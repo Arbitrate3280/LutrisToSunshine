@@ -501,6 +501,7 @@ def _default_state() -> Dict[str, Any]:
     paths = _state_paths()
     return {
         "enabled": False,
+        "dynamic_mangohud_fps_limit": False,
         "profile": PROFILE_NAME,
         "audio_sink": "lts-sunshine-stereo",
         "host_audio_defaults": {"sink": "", "source": ""},
@@ -538,6 +539,16 @@ def save_state(state: Dict[str, Any]) -> None:
 
 def is_enabled() -> bool:
     return bool(load_state().get("enabled"))
+
+
+def dynamic_mangohud_fps_limit_enabled() -> bool:
+    return bool(load_state().get("dynamic_mangohud_fps_limit"))
+
+
+def set_dynamic_mangohud_fps_limit(enabled: bool) -> Dict[str, Any]:
+    state = load_state()
+    state["dynamic_mangohud_fps_limit"] = bool(enabled)
+    return refresh_managed_files(state)
 
 
 def get_app_prep_commands() -> List[Dict[str, str]]:
@@ -2103,6 +2114,20 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     audio_sink = state["audio_sink"]
     managed_audio_sinks = _managed_audio_sink_names(state)
     managed_audio_sources = _managed_audio_source_names(state)
+    mangohud_fps_limit_block = ""
+    mangohud_env_append_block = ""
+    if state.get("dynamic_mangohud_fps_limit"):
+        mangohud_fps_limit_block = """
+    local mangohud_config_value=""
+    if [[ "${SUNSHINE_CLIENT_FPS:-}" =~ ^[0-9]+$ ]]; then
+        mangohud_config_value="read_cfg,fps_limit=${SUNSHINE_CLIENT_FPS}"
+    fi
+"""
+        mangohud_env_append_block = """
+    if [ -n "$mangohud_config_value" ]; then
+        launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
+    fi
+"""
     sunshine_conf_root = Path(paths["sunshine_conf"]).parent
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine virtualdisplay.
@@ -2823,29 +2848,34 @@ PY
 
 launch_headless_direct() {{
     local command_to_run="$1"
+{mangohud_fps_limit_block.rstrip()}
     log_debug "launch command: $command_to_run"
-    setsid /usr/bin/env -i \
-        HOME="$home_value" \
-        USER="$user_value" \
-        LOGNAME="$logname_value" \
-        SHELL="$shell_value" \
-        PATH="$path_value" \
-        LANG="$lang_value" \
-        XDG_RUNTIME_DIR="$runtime_dir" \
-        DBUS_SESSION_BUS_ADDRESS="$dbus_value" \
-        DISPLAY="$display_value" \
-        WAYLAND_DISPLAY="$wayland_value" \
-        SWAYSOCK="{state['sway_socket']}" \
-        XDG_SESSION_TYPE=wayland \
-        XDG_CURRENT_DESKTOP=sway \
-        XDG_SESSION_DESKTOP=sway \
-        DESKTOP_SESSION=sway \
-        LTS_LAUNCH_ID="$launch_id" \
-        LTS_VDISPLAY=1 \
-        PULSE_SINK="{audio_sink}" \
-        PULSE_SERVER="$pulse_server_value" \
-        PULSE_CLIENTCONFIG="$pulse_clientconfig_value" \
-        /bin/sh -lc "$command_to_run" >>"$launch_log_file" 2>&1 &
+    local -a launch_command
+    launch_command=(/usr/bin/env -i
+        "HOME=$home_value"
+        "USER=$user_value"
+        "LOGNAME=$logname_value"
+        "SHELL=$shell_value"
+        "PATH=$path_value"
+        "LANG=$lang_value"
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "DISPLAY=$display_value"
+        "WAYLAND_DISPLAY=$wayland_value"
+        "SWAYSOCK={state['sway_socket']}"
+        "XDG_SESSION_TYPE=wayland"
+        "XDG_CURRENT_DESKTOP=sway"
+        "XDG_SESSION_DESKTOP=sway"
+        "DESKTOP_SESSION=sway"
+        "LTS_LAUNCH_ID=$launch_id"
+        "LTS_VDISPLAY=1"
+        "PULSE_SINK={audio_sink}"
+        "PULSE_SERVER=$pulse_server_value"
+        "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
+    )
+{mangohud_env_append_block.rstrip()}
+    launch_command+=(/bin/sh -lc "$command_to_run")
+    setsid "${{launch_command[@]}}" >>"$launch_log_file" 2>&1 &
     launch_pid="$!"
 }}
 
@@ -3753,6 +3783,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
 
     snapshot = {
         "configured": configured,
+        "dynamic_mangohud_fps_limit": bool(state.get("dynamic_mangohud_fps_limit")),
         "profile": state["profile"],
         "sunshine_unit": SUNSHINE_UNIT,
         "sunshine_active": sunshine_active,
@@ -3902,6 +3933,10 @@ def virtual_display_status() -> int:
         f"Sway={'active' if snapshot['sway_active'] else 'inactive'}, "
         f"Input bridge={snapshot['bridge_state']}, "
         f"Audio guard={snapshot['audio_guard_state']}"
+    )
+    print(
+        "Dynamic MangoHud FPS limit: "
+        f"{'enabled' if snapshot['dynamic_mangohud_fps_limit'] else 'disabled'}"
     )
     print(f"Audio sink: {snapshot['audio_sink']}")
     print(f"Headless display: {snapshot['wayland_display'] or 'not detected'}")
