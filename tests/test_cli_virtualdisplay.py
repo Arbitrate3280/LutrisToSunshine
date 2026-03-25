@@ -18,6 +18,13 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(args.command, "virtualdisplay")
         self.assertEqual(args.virtualdisplay_action, "enable")
 
+    def test_parse_virtualdisplay_mangohud_fps_limit_enable_command(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "mangohud-fps-limit", "enable"])
+
+        self.assertEqual(args.command, "virtualdisplay")
+        self.assertEqual(args.virtualdisplay_action, "mangohud-fps-limit")
+        self.assertEqual(args.mangohud_fps_limit_action, "enable")
+
     def test_virtualdisplay_help_describes_reset_clearly(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -114,6 +121,30 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("Sunshine app launches were restored to normal mode", rendered)
 
+    def test_handle_virtualdisplay_mangohud_fps_limit_enable_updates_setting(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "mangohud-fps-limit", "enable"])
+        calls = []
+
+        original_dynamic_mangohud_fps_limit_enabled = lutristosunshine.dynamic_mangohud_fps_limit_enabled
+        original_set_dynamic_mangohud_fps_limit = lutristosunshine.set_dynamic_mangohud_fps_limit
+        try:
+            lutristosunshine.dynamic_mangohud_fps_limit_enabled = lambda: False
+            lutristosunshine.set_dynamic_mangohud_fps_limit = lambda enabled: calls.append(enabled) or {
+                "dynamic_mangohud_fps_limit": enabled
+            }
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.dynamic_mangohud_fps_limit_enabled = original_dynamic_mangohud_fps_limit_enabled
+            lutristosunshine.set_dynamic_mangohud_fps_limit = original_set_dynamic_mangohud_fps_limit
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [True])
+        self.assertIn("Dynamic MangoHud FPS limit enabled", rendered)
+
     def test_handle_virtualdisplay_without_subcommand_opens_hub(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay"])
 
@@ -123,6 +154,7 @@ class VirtualDisplayCliTests(unittest.TestCase):
         try:
             lutristosunshine.virtual_display_snapshot = lambda: {
                 "configured": False,
+                "dynamic_mangohud_fps_limit": False,
                 "sunshine_active": False,
                 "sway_active": False,
                 "bridge_state": "inactive",
@@ -154,6 +186,7 @@ class VirtualDisplayCliTests(unittest.TestCase):
         try:
             lutristosunshine.virtual_display_snapshot = lambda: {
                 "configured": True,
+                "dynamic_mangohud_fps_limit": True,
                 "sunshine_active": True,
                 "sway_active": False,
                 "bridge_state": "starting",
@@ -184,6 +217,7 @@ class VirtualDisplayCliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(result, 0)
         self.assertIn("Virtual display", rendered)
+        self.assertIn("Dynamic MangoHud FPS limit: [ENABLED]", rendered)
         self.assertIn("Dependencies: [OK]", rendered)
         self.assertIn("Wireless Controller [DETECTED]", rendered)
         self.assertNotIn("\033[", rendered)

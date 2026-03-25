@@ -177,6 +177,12 @@ Show current virtual-display state:
 python3 lutristosunshine.py virtualdisplay status
 ```
 
+Enable the dynamic MangoHud FPS limit for wrapped virtual-display launches:
+
+```bash
+python3 lutristosunshine.py virtualdisplay mangohud-fps-limit enable
+```
+
 Test controller rumble through the bridged path:
 
 ```bash
@@ -209,6 +215,8 @@ Virtual display is still a work in progress. It has currently been tested only o
 - AMD GPU
 
 Other environments, distributions, or GPU setups may need extra troubleshooting.
+
+Dynamic MangoHud FPS limit only affects virtual-display-wrapped launches that already use MangoHud. It sets `MANGOHUD_CONFIG=read_cfg,fps_limit=$SUNSHINE_CLIENT_FPS` for those launches and does not enable MangoHud by itself.
 
 ## Binary Release
 

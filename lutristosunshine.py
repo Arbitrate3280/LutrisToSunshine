@@ -20,9 +20,11 @@ from launchers.retroarch import detect_retroarch_installation, list_retroarch_ga
 from launchers.eden import detect_eden_installation, list_eden_games
 from virtualdisplay.manager import (
     configure_exclusive_input_devices,
+    dynamic_mangohud_fps_limit_enabled,
     is_enabled as virtual_display_is_enabled,
     refresh_managed_files,
     remove_virtual_display,
+    set_dynamic_mangohud_fps_limit,
     setup_virtual_display,
     start_virtual_display,
     stop_virtual_display,
@@ -78,6 +80,13 @@ def parse_args(argv=None):
     virtualdisplay_subparsers.add_parser("doctor", help="Inspect the virtual display setup and suggest fixes.")
     virtualdisplay_subparsers.add_parser("controllers", help="Choose which host controllers are reserved for the virtual display.")
     virtualdisplay_subparsers.add_parser("status", help="Show the current virtual display status.")
+    mangohud_parser = virtualdisplay_subparsers.add_parser(
+        "mangohud-fps-limit",
+        help="Enable or disable the dynamic MangoHud FPS limit for virtual-display launches.",
+    )
+    mangohud_subparsers = mangohud_parser.add_subparsers(dest="mangohud_fps_limit_action")
+    mangohud_subparsers.add_parser("enable", help="Enable the dynamic MangoHud FPS limit.")
+    mangohud_subparsers.add_parser("disable", help="Disable the dynamic MangoHud FPS limit.")
     virtualdisplay_subparsers.add_parser("stop", help="Stop the managed headless Sway and Sunshine services.")
     rumble_parser = virtualdisplay_subparsers.add_parser(
         "rumble",
@@ -159,6 +168,12 @@ def handle_virtualdisplay_command(args) -> int:
         ]
         print(_format_kv("Status:", ", ".join(status_parts)))
         print(_format_kv("Runtime:", ", ".join(runtime_parts)))
+        mangohud_status = (
+            f"{badge('ENABLED', 'success')} wrapped launches that already use MangoHud follow the client FPS"
+            if snapshot["dynamic_mangohud_fps_limit"]
+            else f"{badge('DISABLED', 'info')} wrapped launches keep their normal MangoHud FPS behavior"
+        )
+        print(_format_kv("Dynamic MangoHud FPS limit:", mangohud_status))
         if snapshot["dependencies_missing"]:
             print(
                 _format_kv(
@@ -293,6 +308,18 @@ def handle_virtualdisplay_command(args) -> int:
             print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
         return remove_status
 
+    def update_mangohud_fps_limit(enabled: bool) -> int:
+        previous = dynamic_mangohud_fps_limit_enabled()
+        set_dynamic_mangohud_fps_limit(enabled)
+        if previous == enabled:
+            state = "enabled" if enabled else "disabled"
+            print(f"Dynamic MangoHud FPS limit is already {state} for virtual-display launches.")
+        else:
+            state = "enabled" if enabled else "disabled"
+            print(f"Dynamic MangoHud FPS limit {state} for virtual-display launches.")
+        print("This only affects wrapped launches that already use MangoHud.")
+        return 0
+
     def run_hub() -> int:
         while True:
             print("")
@@ -306,8 +333,9 @@ def handle_virtualdisplay_command(args) -> int:
             print(f"{accent('5.')} Show logs")
             print(f"{accent('6.')} Stop virtual display")
             print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
+            print(f"{accent('8.')} Toggle dynamic MangoHud FPS limit")
             print(f"{muted('0.')} Exit")
-            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
+            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7", "8"])
             if choice == "0":
                 return 0
             if choice == "1":
@@ -343,6 +371,17 @@ def handle_virtualdisplay_command(args) -> int:
                 )
                 if confirmed:
                     return run_reset()
+            elif choice == "8":
+                enabling = not dynamic_mangohud_fps_limit_enabled()
+                prompt = (
+                    "Enable dynamic MangoHud FPS limit for virtual-display launches?"
+                    if enabling
+                    else "Disable dynamic MangoHud FPS limit for virtual-display launches?"
+                )
+                if get_yes_no_input(prompt, default=True):
+                    result = update_mangohud_fps_limit(enabling)
+                    if result != 0:
+                        return result
 
     action = args.virtualdisplay_action
     if action is None:
@@ -359,6 +398,13 @@ def handle_virtualdisplay_command(args) -> int:
     if action == "status":
         print_dashboard()
         return 0 if virtual_display_snapshot()["configured"] else 1
+    if action == "mangohud-fps-limit":
+        if args.mangohud_fps_limit_action == "enable":
+            return update_mangohud_fps_limit(True)
+        if args.mangohud_fps_limit_action == "disable":
+            return update_mangohud_fps_limit(False)
+        print("Choose 'enable' or 'disable' for 'virtualdisplay mangohud-fps-limit'.")
+        return 1
     if action == "stop":
         return stop_virtual_display()
     if action == "rumble":
