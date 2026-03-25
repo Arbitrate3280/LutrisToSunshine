@@ -4,11 +4,11 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
-from sunshine.sunshine import get_covers_path, set_installation_type, set_server_name
+from sunshine.sunshine import get_covers_path, get_server_display_name, set_installation_type, set_server_name
 from utils.utils import handle_interrupt, get_games_found_message
 from utils.input import get_menu_choice, get_yes_no_input, get_user_selection
 from utils.terminal import accent, badge, heading, muted, state_text
-from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, get_existing_apps, get_auth_session, get_auth_token, get_running_servers, is_server_running, reconcile_virtual_display_apps, get_virtual_display_blocked_apps
+from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_virtual_display_apps, get_virtual_display_blocked_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -473,13 +473,9 @@ def main(argv=None):
         COVERS_PATH = get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
 
-        # Reuse saved cookies/token first; only prompt if nothing cached is valid.
-        session = get_auth_session(allow_prompt=False)
-        if not session:
-            token = get_auth_token()
-            if not token:
-                print("Error: Could not obtain valid authentication. Exiting.")
-                return
+        if not ensure_authenticated(allow_prompt=True):
+            print("Error: Could not obtain valid authentication. Exiting.")
+            return
 
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()
@@ -559,7 +555,7 @@ def main(argv=None):
         all_games.sort(key=lambda x: x[1])
 
         for idx, (_, game_name, display_source, source) in enumerate(all_games):
-            status = "(already in Sunshine)" if game_name in existing_game_names else ""
+            status = f"(already in {get_server_display_name()})" if game_name in existing_game_names else ""
             if len(futures) > 1: 
                 source_color = SOURCE_COLORS.get(display_source, "")
                 source_info = f"{source_color}({display_source}){RESET_COLOR}"
@@ -575,7 +571,7 @@ def main(argv=None):
         selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
 
         if not selected_games:
-            print("No new games to add to Sunshine configuration.")
+            print(f"No new games to add to {get_server_display_name()} configuration.")
             return
 
         valid_selected_games = []
@@ -585,7 +581,9 @@ def main(argv=None):
                 core_path = (core_info.get("core_path", "") or "").strip()
                 core_name = (core_info.get("core_name", "") or "").strip()
                 if core_path.upper() == "DETECT" or core_name.upper() == "DETECT" or not core_path:
-                    print(f"Error: RetroArch core not set for '{game_name}'. Please associate the game with a core in RetroArch before adding it to Sunshine.")
+                    print(
+                        f"Error: RetroArch core not set for '{game_name}'. Please associate the game with a core in RetroArch before adding it to {get_server_display_name()}."
+                    )
                     continue
             valid_selected_games.append((game_id, game_name, display_source, source))
 
@@ -619,9 +617,9 @@ def main(argv=None):
                 games_added = True
 
         if games_added:
-            print("Games added to Sunshine successfully.")
+            print(f"Games added to {get_server_display_name()} successfully.")
         else:
-            print("No new games were added to Sunshine.")
+            print(f"No new games were added to {get_server_display_name()}.")
 
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()

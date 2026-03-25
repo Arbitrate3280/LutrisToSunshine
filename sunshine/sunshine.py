@@ -43,13 +43,58 @@ def set_server_name(name: str):
     global SERVER_NAME
     SERVER_NAME = name
 
+
+def _server_supports_token_auth() -> bool:
+    return SERVER_NAME != "apollo"
+
+
+def get_server_display_name() -> str:
+    return "Apollo" if SERVER_NAME == "apollo" else "Sunshine"
+
+
+def _get_apollo_process_config_root() -> Optional[str]:
+    try:
+        output = subprocess.check_output(["pgrep", "-x", "apollo-bin"], stderr=subprocess.STDOUT).decode()
+    except subprocess.CalledProcessError:
+        return None
+
+    for pid in output.split():
+        cmdline_path = f"/proc/{pid}/cmdline"
+        try:
+            with open(cmdline_path, "rb") as cmdline_file:
+                args = [part.decode() for part in cmdline_file.read().split(b"\0") if part]
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        for arg in reversed(args[1:]):
+            expanded = os.path.expanduser(arg)
+            if expanded.endswith(".conf"):
+                return os.path.dirname(os.path.realpath(expanded))
+
+    return None
+
+
+def _get_apollo_config_root() -> str:
+    process_root = _get_apollo_process_config_root()
+    if process_root:
+        return process_root
+
+    apollo_root = os.path.expanduser("~/.config/apollo")
+    if os.path.isdir(apollo_root):
+        return apollo_root
+
+    sunshine_root = os.path.expanduser("~/.config/sunshine")
+    if os.path.isdir(sunshine_root):
+        return sunshine_root
+
+    return apollo_root
+
+
 def _get_config_root() -> str:
     if INSTALLATION_TYPE == "flatpak":
         return os.path.expanduser("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine")
     if SERVER_NAME == "apollo":
-        apollo_root = os.path.expanduser("~/.config/apollo")
-        if os.path.isdir(apollo_root):
-            return apollo_root
+        return _get_apollo_config_root()
     return os.path.expanduser("~/.config/sunshine")
 
 def get_covers_path():
@@ -112,7 +157,7 @@ def add_game_to_sunshine_api(
     prep_cmd: Optional[List[Dict[str, str]]] = None,
     detached: Optional[List[str]] = None,
 ) -> None:
-    """Add a game to the Sunshine configuration using the API."""
+    """Add a game to the active server configuration using the API."""
     payload = {
         "name": game_name,
         "output": "",
@@ -130,9 +175,9 @@ def add_game_to_sunshine_api(
 
     _, error = sunshine_api_request("POST", "/api/apps", json=payload)
     if error:
-        print(f"Error adding {game_name} to Sunshine via API: {error}")
+        print(f"Error adding {game_name} to {get_server_display_name()} via API: {error}")
     else:
-        print(f"Added {game_name} to Sunshine.")
+        print(f"Added {game_name} to {get_server_display_name()}.")
 
 
 def _get_virtual_display_prep_scripts() -> set[str]:
@@ -399,6 +444,8 @@ def _validate_session(session: requests.Session) -> bool:
         return False
 
 def _validate_token(token: str) -> bool:
+    if not _server_supports_token_auth():
+        return False
     try:
         resp = requests.get(
             f"{SUNSHINE_API_URL}/api/apps",
@@ -411,7 +458,7 @@ def _validate_token(token: str) -> bool:
         return False
 
 def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
-    """Retrieves or creates an authenticated session using cookies or basic auth."""
+    """Retrieves or creates an authenticated session using cookies or login endpoints."""
     global AUTH_SESSION, AUTH_TOKEN
     if AUTH_SESSION and _validate_session(AUTH_SESSION):
         return AUTH_SESSION
@@ -458,7 +505,11 @@ def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
                 AUTH_SESSION = session
                 return session
 
-    # Fallback: use basic auth on the session.
+    if not _server_supports_token_auth():
+        print("Error: Authentication failed. Could not obtain a valid session.")
+        return None
+
+    # Fallback: use basic auth on the session for Sunshine.
     session = requests.Session()
     session.auth = (username, password)
     if _validate_session(session):
@@ -473,10 +524,39 @@ def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
     print("Error: Authentication failed. Could not obtain a valid session.")
     return None
 
+def ensure_authenticated(allow_prompt: bool = True) -> bool:
+    """Ensures the active server has either a valid session or token available."""
+    global AUTH_TOKEN
+
+    session = get_auth_session(allow_prompt=False)
+    if session is not None:
+        return True
+
+    if _server_supports_token_auth():
+        token = AUTH_TOKEN or _load_cached_auth_token()
+        if token and _validate_token(token):
+            AUTH_TOKEN = token
+            return True
+
+    if not allow_prompt:
+        return False
+
+    session = get_auth_session(allow_prompt=True)
+    if session is not None:
+        return True
+
+    if _server_supports_token_auth():
+        return get_auth_token() is not None
+
+    return False
+
 def get_auth_token() -> Optional[str]:
     """Retrieves or generates an authentication token."""
     global AUTH_TOKEN
     token_path = _token_file_path()
+
+    if not _server_supports_token_auth():
+        return None
 
     # Check if Sunshine is running BEFORE attempting any authentication
     if not is_sunshine_running():
@@ -567,10 +647,10 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) 
     add_game_to_sunshine_api(game_name, cmd, image_path, prep_cmd=prep_cmd, detached=[])
 
 def get_existing_apps() -> List[Dict]:
-    """Retrieves the list of existing apps from the Sunshine API."""
+    """Retrieves the list of existing apps from the active server API."""
     data, error = sunshine_api_request("GET", "/api/apps")
     if error:
-        print(f"Error retrieving existing apps from Sunshine API: {error}")
+        print(f"Error retrieving existing apps from {get_server_display_name()} API: {error}")
         return []
 
     existing_apps = []
@@ -578,7 +658,7 @@ def get_existing_apps() -> List[Dict]:
     if data is not None:
         apps_list = data.get("apps", [])
     else:
-        print("Warning: No data received from Sunshine API.")
+        print(f"Warning: No data received from {get_server_display_name()} API.")
 
     if isinstance(apps_list, list):
         for app_data in apps_list:
@@ -608,6 +688,12 @@ def sunshine_api_request(method, endpoint, **kwargs):
 
     if session is None:
         session = get_auth_session(allow_prompt=False)
+
+    if session is None and token is None:
+        if not ensure_authenticated(allow_prompt=True):
+            return None, "Error: Could not obtain authentication token or session."
+        session = AUTH_SESSION
+        token = AUTH_TOKEN
 
     if session:
         try:
