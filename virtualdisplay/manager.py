@@ -44,6 +44,12 @@ FALLBACK_FPS = 60
 SUNSHINE_FLATPAK_ID = "dev.lizardbyte.app.Sunshine"
 SUNSHINE_INPUT_VENDOR_ID = 0xBEEF
 SUNSHINE_INPUT_PRODUCT_ID = 0xDEAD
+SUNSHINE_INPUT_NAME_MARKERS = [
+    "Keyboard_passthrough",
+    "Mouse_passthrough",
+    "Touch_passthrough",
+    "Pen_passthrough",
+]
 BRIDGE_DEVICE_PHYS_PREFIX = "lts-inputbridge/"
 HIDRAW_BUFFER_MAX = 4096
 AUDIO_GUARD_POLL_INTERVAL_SECONDS = 0.5
@@ -493,7 +499,9 @@ def _state_paths() -> Dict[str, str]:
         "legacy_input_bridge_unit": str(systemd_user_dir / LEGACY_INPUT_BRIDGE_UNIT),
         "legacy_audio_guard_unit": str(systemd_user_dir / LEGACY_AUDIO_GUARD_UNIT),
         "input_bridge_script": str(BIN_ROOT / "lutristosunshine-input-bridge.py"),
+        "kwin_input_isolation_script": str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
         "sunshine_conf": str(detect_sunshine_config_root() / "sunshine.conf"),
+        "kwin_input_isolation_status_file": str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
     }
 
 
@@ -938,6 +946,130 @@ def current_user_group() -> str:
         return grp.getgrgid(os.getgid()).gr_name
     except KeyError:
         return str(os.environ.get("USER") or "").strip()
+
+
+def _is_plasma_session() -> bool:
+    current_desktop = _safe_string(os.environ.get("XDG_CURRENT_DESKTOP")).lower()
+    session_desktop = _safe_string(os.environ.get("XDG_SESSION_DESKTOP")).lower()
+    desktop_session = _safe_string(os.environ.get("DESKTOP_SESSION")).lower()
+    kde_full_session = _safe_string(os.environ.get("KDE_FULL_SESSION")).lower()
+    plasma_markers = ("kde", "plasma", "kwin")
+    return (
+        kde_full_session in {"1", "true", "yes", "on"}
+        or any(marker in current_desktop for marker in plasma_markers)
+        or any(marker in session_desktop for marker in plasma_markers)
+        or any(marker in desktop_session for marker in plasma_markers)
+    )
+
+
+def _host_session_name() -> str:
+    parts = []
+    for value in [
+        _safe_string(os.environ.get("XDG_CURRENT_DESKTOP")),
+        _safe_string(os.environ.get("XDG_SESSION_DESKTOP")),
+        _safe_string(os.environ.get("DESKTOP_SESSION")),
+    ]:
+        if value and value not in parts:
+            parts.append(value)
+    if parts:
+        return " / ".join(parts)
+    if _safe_string(os.environ.get("KDE_FULL_SESSION")).lower() in {"1", "true", "yes", "on"}:
+        return "KDE"
+    return "unknown"
+
+
+def _input_isolation_mode() -> str:
+    return "kwin-runtime-disable" if _is_plasma_session() else "permissions-only"
+
+
+def _empty_kwin_input_isolation_status() -> Dict[str, Any]:
+    return {
+        "state": "inactive",
+        "service": "",
+        "disabled_devices": [],
+        "failed_devices": [],
+        "seen_device_count": 0,
+        "last_error": "",
+    }
+
+
+def _kwin_input_isolation_status(state: Dict[str, Any]) -> Dict[str, Any]:
+    status = _empty_kwin_input_isolation_status()
+    path = Path(state["paths"]["kwin_input_isolation_status_file"])
+    if not path.exists():
+        return status
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return status
+    if isinstance(data, dict):
+        status.update(data)
+    if not isinstance(status.get("disabled_devices"), list):
+        status["disabled_devices"] = []
+    if not isinstance(status.get("failed_devices"), list):
+        status["failed_devices"] = []
+    status["state"] = _safe_string(status.get("state")) or "inactive"
+    status["service"] = _safe_string(status.get("service"))
+    status["last_error"] = _safe_string(status.get("last_error"))
+    try:
+        status["seen_device_count"] = int(status.get("seen_device_count") or 0)
+    except (TypeError, ValueError):
+        status["seen_device_count"] = 0
+    return status
+
+
+def _sunshine_virtual_input_devices() -> List[Dict[str, str]]:
+    devices_path = Path("/proc/bus/input/devices")
+    try:
+        content = devices_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    devices: List[Dict[str, str]] = []
+    current: Dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            vendor_id = _safe_string(current.get("vendor_id")).lower()
+            product_id = _safe_string(current.get("product_id")).lower()
+            if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
+                devices.append(
+                    {
+                        "name": _safe_string(current.get("name")),
+                        "event_path": _safe_string(current.get("event_path")),
+                    }
+                )
+            current = {}
+            continue
+        if line.startswith("I:"):
+            for token in line[2:].strip().split():
+                if "=" not in token:
+                    continue
+                key, value = token.split("=", 1)
+                lowered = key.lower()
+                if lowered == "vendor":
+                    current["vendor_id"] = value
+                elif lowered == "product":
+                    current["product_id"] = value
+        elif line.startswith('N: Name="') and line.endswith('"'):
+            current["name"] = line[len('N: Name="'):-1]
+        elif line.startswith("H: Handlers="):
+            handlers = line[len("H: Handlers="):].split()
+            event_name = next((item for item in handlers if item.startswith("event")), "")
+            if event_name:
+                current["event_path"] = f"/dev/input/{event_name}"
+
+    if current:
+        vendor_id = _safe_string(current.get("vendor_id")).lower()
+        product_id = _safe_string(current.get("product_id")).lower()
+        if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
+            devices.append(
+                {
+                    "name": _safe_string(current.get("name")),
+                    "event_path": _safe_string(current.get("event_path")),
+                }
+            )
+    return devices
 
 
 def _input_bridge_script(state: Dict[str, Any]) -> str:
@@ -2108,6 +2240,412 @@ if __name__ == "__main__":
 """
 
 
+def _kwin_input_isolation_script(state: Dict[str, Any]) -> str:
+    python_executable = sys.executable or "/usr/bin/env python3"
+    return f"""#!{python_executable}
+import json
+import os
+import re
+import signal
+import subprocess
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+STATUS_PATH = Path({state["paths"]["kwin_input_isolation_status_file"]!r})
+SERVICE_CANDIDATES = ["org.kde.KWin", "org.kde.KWin.InputDevice"]
+ROOT_PATHS = ["/org/kde/KWin/InputDevice", "/org/kde/KWin"]
+DEVICE_INTERFACE = "org.kde.KWin.InputDevice"
+SUNSHINE_VENDOR_ID = {SUNSHINE_INPUT_VENDOR_ID}
+SUNSHINE_PRODUCT_ID = {SUNSHINE_INPUT_PRODUCT_ID}
+NAME_MARKERS = {SUNSHINE_INPUT_NAME_MARKERS!r}
+STOP = False
+
+
+def safe_string(value):
+    return str(value or "").strip()
+
+
+def is_plasma_session():
+    current_desktop = safe_string(os.environ.get("XDG_CURRENT_DESKTOP")).lower()
+    session_desktop = safe_string(os.environ.get("XDG_SESSION_DESKTOP")).lower()
+    desktop_session = safe_string(os.environ.get("DESKTOP_SESSION")).lower()
+    kde_full_session = safe_string(os.environ.get("KDE_FULL_SESSION")).lower()
+    plasma_markers = ("kde", "plasma", "kwin")
+    return (
+        kde_full_session in {{"1", "true", "yes", "on"}}
+        or any(marker in current_desktop for marker in plasma_markers)
+        or any(marker in session_desktop for marker in plasma_markers)
+        or any(marker in desktop_session for marker in plasma_markers)
+    )
+
+
+def write_status(state="inactive", service="", disabled_devices=None, failed_devices=None, seen_device_count=0, last_error=""):
+    payload = {{
+        "state": state,
+        "service": service,
+        "disabled_devices": disabled_devices or [],
+        "failed_devices": failed_devices or [],
+        "seen_device_count": seen_device_count,
+        "last_error": safe_string(last_error),
+    }}
+    STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATUS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def handle_signal(_signum, _frame):
+    global STOP
+    STOP = True
+
+
+def run_gdbus(*args):
+    result = subprocess.run(
+        ["gdbus", *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(safe_string(result.stderr) or f"gdbus exit {{result.returncode}}")
+    stdout = result.stdout.strip()
+    if not stdout:
+        raise RuntimeError("gdbus returned no output")
+    return stdout
+
+
+def unbox_variant(output):
+    text = safe_string(output)
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    if text.endswith(","):
+        text = text[:-1].strip()
+    while text.startswith("<") and text.endswith(">"):
+        text = text[1:-1].strip()
+    if text.startswith("'") and text.endswith("'"):
+        return text[1:-1]
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if text.startswith("uint") or text.startswith("int"):
+        parts = text.split(None, 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return int(parts[1])
+    if text.isdigit():
+        return int(text)
+    return text
+
+
+def introspect_xml(service, path):
+    return run_gdbus("introspect", "--session", "--dest", service, "--object-path", path, "--xml")
+
+
+def discover_roots(service):
+    roots = []
+    last_error = ""
+    for path in ROOT_PATHS:
+        try:
+            xml_text = introspect_xml(service, path)
+            if xml_text:
+                roots.append(path)
+        except Exception as exc:
+            last_error = safe_string(exc)
+    return roots, last_error
+
+
+def find_device_paths(service, roots):
+    paths = []
+    seen = set()
+    queue = list(roots)
+    while queue:
+        path = queue.pop(0)
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            xml_text = introspect_xml(service, path)
+        except Exception:
+            continue
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            continue
+        if path.endswith(tuple(f"/event{{index}}" for index in range(0, 512))):
+            paths.append(path)
+        for node in root.findall("node"):
+            name = safe_string(node.attrib.get("name"))
+            if not name:
+                continue
+            child = path.rstrip("/") + "/" + name
+            if re.fullmatch(r"event\\d+", name):
+                paths.append(child)
+            elif child not in seen and child not in queue and child.count("/") <= 6:
+                queue.append(child)
+    return sorted(set(paths))
+
+
+def interface_properties(service, path):
+    xml_text = introspect_xml(service, path)
+    root = ET.fromstring(xml_text)
+    props = {{}}
+    for iface in root.findall("interface"):
+        if iface.attrib.get("name") != DEVICE_INTERFACE:
+            continue
+        for prop in iface.findall("property"):
+            name = safe_string(prop.attrib.get("name"))
+            if name:
+                props[name] = safe_string(prop.attrib.get("type"))
+    return props
+
+
+def get_property(service, path, name):
+    value = run_gdbus(
+        "call",
+        "--session",
+        "--dest",
+        service,
+        "--object-path",
+        path,
+        "--method",
+        "org.freedesktop.DBus.Properties.Get",
+        DEVICE_INTERFACE,
+        name,
+    )
+    return unbox_variant(value)
+
+
+def set_enabled(service, path, enabled, property_name="enabled"):
+    variant = "<true>" if enabled else "<false>"
+    run_gdbus(
+        "call",
+        "--session",
+        "--dest",
+        service,
+        "--object-path",
+        path,
+        "--method",
+        "org.freedesktop.DBus.Properties.Set",
+        DEVICE_INTERFACE,
+        property_name,
+        variant,
+    )
+
+
+def normalize_hex(value):
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return f"{{value:04x}}"
+    text = safe_string(value).lower()
+    if not text:
+        return ""
+    if text.startswith("0x"):
+        text = text[2:]
+    if text.isdigit():
+        return f"{{int(text):04x}}"
+    return text
+
+
+def normalize_name(value):
+    text = safe_string(value).replace("_", " ").lower()
+    return " ".join(part for part in text.split() if part)
+
+
+def device_details(service, path):
+    props = interface_properties(service, path)
+    if not props:
+        return {{}}
+    values = {{}}
+    for prop_name in props:
+        try:
+            values[prop_name] = get_property(service, path, prop_name)
+        except Exception:
+            continue
+    name = ""
+    for candidate in ["Name", "name", "SysName", "sysName", "sys_name"]:
+        if candidate in values:
+            name = safe_string(values[candidate])
+            if name:
+                break
+    vendor = ""
+    for candidate in ["Vendor", "vendor", "VendorId", "vendorId", "vendor_id"]:
+        if candidate in values:
+            vendor = normalize_hex(values[candidate])
+            if vendor:
+                break
+    product = ""
+    for candidate in ["Product", "product", "ProductId", "productId", "product_id"]:
+        if candidate in values:
+            product = normalize_hex(values[candidate])
+            if product:
+                break
+    enabled = values.get("enabled")
+    enabled_property = "enabled" if "enabled" in values else ""
+    if not isinstance(enabled, bool):
+        enabled = values.get("Enabled")
+        if isinstance(enabled, bool):
+            enabled_property = "Enabled"
+    if not isinstance(enabled, bool):
+        enabled = True
+    if not enabled_property and "Enabled" in props:
+        enabled_property = "Enabled"
+    if not enabled_property and "enabled" in props:
+        enabled_property = "enabled"
+    supports_disable_events = values.get("supportsDisableEvents")
+    if not isinstance(supports_disable_events, bool):
+        supports_disable_events = values.get("SupportsDisableEvents")
+    if not isinstance(supports_disable_events, bool):
+        supports_disable_events = False
+    return {{
+        "name": name,
+        "vendor": vendor,
+        "product": product,
+        "enabled": enabled,
+        "enabled_property": enabled_property or "enabled",
+        "supports_disable_events": supports_disable_events,
+        "path": path,
+    }}
+
+
+def is_sunshine_device(info):
+    name = normalize_name(info.get("name"))
+    vendor = normalize_hex(info.get("vendor"))
+    product = normalize_hex(info.get("product"))
+    vendor_match = vendor == f"{{SUNSHINE_VENDOR_ID:04x}}"
+    product_match = product == f"{{SUNSHINE_PRODUCT_ID:04x}}"
+    name_match = any(normalize_name(marker) in name for marker in NAME_MARKERS)
+    return name_match or (vendor_match and product_match)
+
+
+def kwin_service():
+    last_error = ""
+    for service in SERVICE_CANDIDATES:
+        roots, error = discover_roots(service)
+        if roots:
+            return service, roots, ""
+        if error:
+            last_error = error
+    return "", [], last_error
+
+
+def main():
+    write_status(state="starting")
+    if not is_plasma_session():
+        write_status(state="inactive")
+        return 0
+
+    service, roots, discovery_error = kwin_service()
+    if not service:
+        write_status(state="failed", last_error=discovery_error or "KWin InputDevice DBus service not found.")
+        return 0
+
+    disabled = {{}}
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGHUP, handle_signal)
+
+    try:
+        while not STOP:
+            seen_count = 0
+            current_paths = set()
+            failed_devices = []
+            try:
+                for path in find_device_paths(service, roots):
+                    try:
+                        info = device_details(service, path)
+                    except Exception:
+                        continue
+                    if not is_sunshine_device(info):
+                        continue
+                    seen_count += 1
+                    current_paths.add(path)
+                    if not info.get("enabled", True):
+                        if path not in disabled:
+                            disabled[path] = {{
+                                "path": path,
+                                "name": safe_string(info.get("name")),
+                                "enabled_before": False,
+                                "enabled_property": safe_string(info.get("enabled_property")) or "enabled",
+                            }}
+                        continue
+                    if not info.get("supports_disable_events", False):
+                        failed_devices.append({{
+                            "path": path,
+                            "name": safe_string(info.get("name")),
+                            "error": "KWin reports supportsDisableEvents=false",
+                        }})
+                        continue
+                    if info.get("enabled", True):
+                        try:
+                            set_enabled(
+                                service,
+                                path,
+                                False,
+                                safe_string(info.get("enabled_property")) or "enabled",
+                            )
+                            disabled[path] = {{
+                                "path": path,
+                                "name": safe_string(info.get("name")),
+                                "enabled_before": True,
+                                "enabled_property": safe_string(info.get("enabled_property")) or "enabled",
+                            }}
+                        except Exception as exc:
+                            failed_devices.append({{
+                                "path": path,
+                                "name": safe_string(info.get("name")),
+                                "error": safe_string(exc),
+                            }})
+                disabled_devices = []
+                for path, details in list(disabled.items()):
+                    if path not in current_paths:
+                        continue
+                    disabled_devices.append({{"path": path, "name": details["name"]}})
+                write_status(
+                    state="active",
+                    service=service,
+                    disabled_devices=disabled_devices,
+                    failed_devices=failed_devices,
+                    seen_device_count=seen_count,
+                )
+            except Exception as exc:
+                write_status(
+                    state="failed",
+                    service=service,
+                    disabled_devices=[{{"path": path, "name": details["name"]}} for path, details in disabled.items()],
+                    failed_devices=failed_devices,
+                    seen_device_count=0,
+                    last_error=safe_string(exc),
+                )
+            time.sleep(1.0)
+    finally:
+        restore_error = ""
+        for path, details in list(disabled.items()):
+            try:
+                set_enabled(
+                    service,
+                    path,
+                    bool(details.get("enabled_before", True)),
+                    safe_string(details.get("enabled_property")) or "enabled",
+                )
+            except Exception as exc:
+                restore_error = safe_string(exc)
+        write_status(
+            state="restored" if not restore_error else "failed",
+            service=service,
+            disabled_devices=[],
+            failed_devices=[],
+            seen_device_count=0,
+            last_error=restore_error,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
 def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
     sunshine_command = _sunshine_binary() or "sunshine"
@@ -2143,7 +2681,6 @@ input "48879:57005:Mouse_passthrough" events enabled
 input "48879:57005:Mouse_passthrough_(absolute)" events enabled
 input "48879:57005:Touch_passthrough" events enabled
 input "48879:57005:Pen_passthrough" events enabled
-input "1356:3302:Sunshine_PS5_(virtual)_pad_Touchpad" events enabled
 
 input "48879:57005:Mouse_passthrough" accel_profile flat
 input "48879:57005:Mouse_passthrough_(absolute)" accel_profile flat
@@ -2267,10 +2804,12 @@ audio_create_script="{paths['audio_create_script']}"
 audio_cleanup_script="{paths['audio_cleanup_script']}"
 audio_guard_script="{paths['audio_guard_script']}"
 input_bridge_script="{paths['input_bridge_script']}"
+kwin_input_isolation_script="{paths['kwin_input_isolation_script']}"
 sway_start_script="{paths['sway_start_script']}"
 sunshine_start_script="{paths['sunshine_start_script']}"
 display_file="{paths['wayland_display_file']}"
 bridge_status_file="{paths['input_bridge_status_file']}"
+kwin_input_isolation_status_file="{paths['kwin_input_isolation_status_file']}"
 sway_socket="{state['sway_socket']}"
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
@@ -2278,6 +2817,7 @@ pulse_server_value="${{PULSE_SERVER:-}}"
 pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
 audio_guard_pid=""
 input_bridge_pid=""
+kwin_input_isolation_pid=""
 sway_pid=""
 sunshine_pid=""
 sunshine_status=0
@@ -2479,9 +3019,10 @@ cleanup() {{
     local exit_code=$?
     stop_child "$sunshine_pid"
     stop_child "$input_bridge_pid"
+    stop_child "$kwin_input_isolation_pid"
     stop_child "$audio_guard_pid"
     stop_child "$sway_pid"
-    rm -f "$bridge_status_file" "$display_file"
+    rm -f "$bridge_status_file" "$kwin_input_isolation_status_file" "$display_file"
     "$audio_cleanup_script" >/dev/null 2>&1 || true
     restore_audio_state >/dev/null 2>&1 || true
     exit "$exit_code"
@@ -2516,6 +3057,9 @@ if input_bridge_enabled; then
     setsid python3 "$input_bridge_script" &
     input_bridge_pid=$!
 fi
+
+setsid python3 "$kwin_input_isolation_script" &
+kwin_input_isolation_pid=$!
 
 setsid "$sunshine_start_script" &
 sunshine_pid=$!
@@ -2683,6 +3227,7 @@ poll_host_defaults() {{
 poll_host_defaults
 """,
         Path(paths["input_bridge_script"]): _input_bridge_script(state),
+        Path(paths["kwin_input_isolation_script"]): _kwin_input_isolation_script(state),
         Path(paths["launch_app_script"]): f"""#!/bin/bash
 set -euo pipefail
 
@@ -3380,7 +3925,7 @@ ExecStart={paths['sunshine_wrapper_script']}
     }
 
 
-def _udev_rule() -> str:
+def _udev_rule(isolation_mode: Optional[str] = None) -> str:
     user_name = current_user_name()
     group_name = current_user_group()
     sunshine_input_permissions = [
@@ -3711,6 +4256,10 @@ def stop_virtual_display() -> int:
         return 1
     _systemctl_user("stop", SUNSHINE_UNIT)
     _clear_input_bridge_status_file(state)
+    try:
+        Path(state["paths"]["kwin_input_isolation_status_file"]).unlink()
+    except OSError:
+        pass
     _restore_sunshine_audio_sink(state)
     _restore_host_audio_defaults(state)
     save_state(state)
@@ -3722,6 +4271,8 @@ def virtual_display_snapshot() -> Dict[str, Any]:
     state = load_state()
     configured = bool(state.get("enabled"))
     sunshine_active = _sunshine_service_active() if configured else False
+    host_session = _host_session_name()
+    input_isolation_mode = _input_isolation_mode()
     host_defaults = state.get("host_audio_defaults") or {}
     wayland_display = ""
     if WAYLAND_DISPLAY_PATH.exists():
@@ -3734,6 +4285,8 @@ def virtual_display_snapshot() -> Dict[str, Any]:
     )
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
     audio_guard_state = "active" if sunshine_active and Path(state["paths"]["audio_module_file"]).exists() else "inactive"
+    kwin_status = _kwin_input_isolation_status(state) if configured else _empty_kwin_input_isolation_status()
+    sunshine_input_devices = _sunshine_virtual_input_devices() if configured else []
     selections = state["exclusive_input_devices"]["devices"]
     devices, device_error = _list_controller_devices() if configured and selections else ([], None)
     runtime_status = _input_bridge_status(state) if configured else {}
@@ -3785,6 +4338,8 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "configured": configured,
         "dynamic_mangohud_fps_limit": bool(state.get("dynamic_mangohud_fps_limit")),
         "profile": state["profile"],
+        "host_session": host_session,
+        "input_isolation_mode": input_isolation_mode,
         "sunshine_unit": SUNSHINE_UNIT,
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
@@ -3799,6 +4354,14 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "sway_socket": state["sway_socket"],
         "udev_rule_path": state["udev_rule_path"],
         "udev_rule_present": Path(state["udev_rule_path"]).exists(),
+        "kwin_isolation_state": kwin_status["state"],
+        "kwin_isolation_service": kwin_status["service"],
+        "kwin_isolation_error": kwin_status["last_error"],
+        "kwin_isolation_seen_device_count": kwin_status["seen_device_count"],
+        "kwin_isolation_devices": kwin_status["disabled_devices"],
+        "kwin_isolation_failed_devices": kwin_status["failed_devices"],
+        "sunshine_input_devices": sunshine_input_devices,
+        "sunshine_input_device_count": len(sunshine_input_devices),
         "portal_handoff_active": portal_handoff_active,
         "last_launch_log_file": state["paths"]["last_launch_log_file"],
         "controllers": controller_rows,
@@ -3824,6 +4387,17 @@ def virtual_display_doctor_report() -> Dict[str, Any]:
     snapshot = virtual_display_snapshot()
     checks = []
     missing = snapshot["dependencies_missing"]
+    checks.append(
+        {
+            "label": "Host session",
+            "status": "pass" if snapshot["host_session"] != "unknown" else "info",
+            "message": (
+                f"{snapshot['host_session']} detected; using {snapshot['input_isolation_mode']}."
+                if snapshot["host_session"] != "unknown"
+                else f"Host session not detected; using {snapshot['input_isolation_mode']}."
+            ),
+        }
+    )
     if missing:
         checks.append(
             {
@@ -3860,10 +4434,60 @@ def virtual_display_doctor_report() -> Dict[str, Any]:
         checks.append(
             {
                 "label": "Managed udev rule",
-                "status": "pass" if snapshot["udev_rule_present"] else "warn",
-                "message": "Input permissions rule is present." if snapshot["udev_rule_present"] else "Managed udev rule is missing.",
+                "status": (
+                    "pass" if snapshot["udev_rule_present"] else "warn"
+                ),
+                "message": (
+                    "Input permissions rule is present." if snapshot["udev_rule_present"] else "Managed udev rule is missing."
+                ),
             }
         )
+        if snapshot["input_isolation_mode"] == "kwin-runtime-disable":
+            kwin_active_but_not_isolated = (
+                snapshot["kwin_isolation_state"] == "active"
+                and snapshot["sunshine_input_device_count"] > 0
+                and not snapshot["kwin_isolation_devices"]
+            )
+            checks.append(
+                {
+                    "label": "KWin isolation",
+                    "status": (
+                        "warn"
+                        if snapshot["kwin_isolation_state"] in {"inactive", "failed"} or kwin_active_but_not_isolated
+                        else "pass"
+                    ),
+                    "message": (
+                        snapshot["kwin_isolation_error"]
+                        if snapshot["kwin_isolation_state"] == "failed" and snapshot["kwin_isolation_error"]
+                        else (
+                            "KWin helper is not running."
+                            if snapshot["kwin_isolation_state"] == "inactive"
+                            else (
+                                "KWin helper is starting."
+                                if snapshot["kwin_isolation_state"] == "starting"
+                                else (
+                                    (
+                                        f"KWin helper active via {snapshot['kwin_isolation_service'] or 'gdbus'}; "
+                                        f"disabled {len(snapshot['kwin_isolation_devices'])} of "
+                                        f"{snapshot['sunshine_input_device_count']} Sunshine input device(s)."
+                                    )
+                                    if snapshot["kwin_isolation_state"] == "active" and snapshot["kwin_isolation_devices"]
+                                    else (
+                                        (
+                                            f"KWin helper active via {snapshot['kwin_isolation_service'] or 'gdbus'}; "
+                                            f"matched {snapshot['kwin_isolation_seen_device_count']} of "
+                                            f"{snapshot['sunshine_input_device_count']} host Sunshine input device(s), "
+                                            "but disabled 0."
+                                        )
+                                        if kwin_active_but_not_isolated
+                                        else "KWin helper is waiting for Sunshine virtual input devices to appear."
+                                    )
+                                )
+                            )
+                        )
+                    ),
+                }
+            )
         checks.append(
             {
                 "label": "Sunshine service",
@@ -3927,6 +4551,9 @@ def virtual_display_status() -> int:
 
     print("Virtual display status")
     print(f"Profile: {snapshot['profile']}")
+    print(f"Host session: {snapshot['host_session']}")
+    isolation_state = snapshot["kwin_isolation_state"] if snapshot["input_isolation_mode"] == "kwin-runtime-disable" else "ready"
+    print(f"Input isolation: {snapshot['input_isolation_mode']} ({isolation_state})")
     print(
         "Runtime: "
         f"Sunshine={'active' if snapshot['sunshine_active'] else 'inactive'}, "
@@ -3940,6 +4567,29 @@ def virtual_display_status() -> int:
     )
     print(f"Audio sink: {snapshot['audio_sink']}")
     print(f"Headless display: {snapshot['wayland_display'] or 'not detected'}")
+    if snapshot["input_isolation_mode"] == "kwin-runtime-disable":
+        print(f"Host Sunshine inputs: {snapshot['sunshine_input_device_count']}")
+        if snapshot["kwin_isolation_error"]:
+            print(f"KWin isolation error: {snapshot['kwin_isolation_error']}")
+        elif snapshot["kwin_isolation_state"] == "inactive":
+            print("KWin-isolated devices: helper not running")
+        elif snapshot["kwin_isolation_state"] == "starting":
+            print("KWin-isolated devices: helper starting")
+        elif snapshot["kwin_isolation_devices"]:
+            print(
+                "KWin-isolated devices: "
+                f"{len(snapshot['kwin_isolation_devices'])} "
+                f"(matched {snapshot['kwin_isolation_seen_device_count']})"
+            )
+        elif snapshot["sunshine_input_device_count"] > 0:
+            print(
+                "KWin-isolated devices: 0 "
+                f"(matched {snapshot['kwin_isolation_seen_device_count']} of {snapshot['sunshine_input_device_count']})"
+            )
+        else:
+            print("KWin-isolated devices: waiting for Sunshine virtual inputs")
+        if snapshot["kwin_isolation_failed_devices"]:
+            print(f"KWin isolation failures: {len(snapshot['kwin_isolation_failed_devices'])}")
     print(f"Portal handoff: {'active' if snapshot['portal_handoff_active'] else 'idle'}")
     print(f"Controllers: {snapshot['controller_count']} configured")
     if snapshot["controller_detection_error"]:
@@ -3987,6 +4637,7 @@ def remove_virtual_display() -> int:
     for path_key in [
         "sunshine_override",
         "input_bridge_script",
+        "kwin_input_isolation_script",
         "audio_guard_script",
         "sunshine_wrapper_script",
     ]:
@@ -4002,6 +4653,7 @@ def remove_virtual_display() -> int:
         "portal_active_file",
         "portal_lock_file",
         "input_bridge_status_file",
+        "kwin_input_isolation_status_file",
         "wayland_display_file",
         "audio_module_file",
     ]:

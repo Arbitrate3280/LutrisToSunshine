@@ -1,7 +1,9 @@
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from virtualdisplay import manager
 
@@ -151,7 +153,7 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         try:
             manager.current_user_name = lambda: "alice"
             manager.current_user_group = lambda: "streaming"
-            rule = manager._udev_rule()
+            rule = manager._udev_rule("permissions-only")
         finally:
             manager.current_user_name = original_user
             manager.current_user_group = original_group
@@ -159,12 +161,83 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertIn('GROUP="streaming"', rule)
         self.assertIn('MODE="0660"', rule)
 
-    def test_udev_rule_preserves_input_classification(self) -> None:
-        rule = manager._udev_rule()
+    def test_udev_rule_preserves_input_classification_outside_plasma(self) -> None:
+        rule = manager._udev_rule("permissions-only")
         self.assertNotIn('ENV{ID_INPUT}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_KEYBOARD}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_MOUSE}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_TOUCHPAD}=""', rule)
+
+    def test_udev_rule_preserves_input_classification_on_plasma(self) -> None:
+        rule = manager._udev_rule("kwin-runtime-disable")
+        self.assertNotIn('ENV{ID_INPUT}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_KEYBOARD}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_MOUSE}=""', rule)
+        self.assertNotIn('ENV{ID_INPUT_TOUCHPAD}=""', rule)
+
+    def test_input_isolation_mode_detects_plasma(self) -> None:
+        with patch.dict(
+            manager.os.environ,
+            {
+                "XDG_CURRENT_DESKTOP": "KDE",
+                "XDG_SESSION_DESKTOP": "KDE",
+                "DESKTOP_SESSION": "plasma",
+                "KDE_FULL_SESSION": "true",
+            },
+            clear=False,
+        ):
+            self.assertEqual(manager._input_isolation_mode(), "kwin-runtime-disable")
+
+    def test_kwin_input_isolation_status_defaults_when_missing(self) -> None:
+        state = manager._default_state()
+        state["paths"] = dict(state["paths"])
+        state["paths"]["kwin_input_isolation_status_file"] = str(Path(tempfile.mkdtemp()) / "missing-status.json")
+        status = manager._kwin_input_isolation_status(state)
+        self.assertEqual(status["state"], "inactive")
+        self.assertEqual(status["disabled_devices"], [])
+        self.assertEqual(status["failed_devices"], [])
+        self.assertEqual(status["last_error"], "")
+
+    def test_kwin_input_isolation_script_bakes_host_session_family(self) -> None:
+        with patch.dict(
+            manager.os.environ,
+            {
+                "XDG_CURRENT_DESKTOP": "KDE",
+                "DESKTOP_SESSION": "plasma",
+                "KDE_FULL_SESSION": "true",
+            },
+            clear=False,
+        ):
+            script = manager._kwin_input_isolation_script(manager._default_state())
+        self.assertIn("HOST_SESSION_FAMILY = 'plasma'", script)
+        self.assertIn('write_status(state="starting")', script)
+        self.assertIn('DEVICE_INTERFACE,\n        "enabled",', script)
+        self.assertIn('return f"{value:04x}"', script)
+        self.assertIn('replace("_", " ")', script)
+
+    def test_sunshine_virtual_input_devices_detects_beef_dead_entries(self) -> None:
+        input_listing = """
+I: Bus=0003 Vendor=beef Product=dead Version=0111
+N: Name="Mouse passthrough"
+H: Handlers=mouse2 event27
+
+I: Bus=0003 Vendor=1234 Product=5678 Version=0001
+N: Name="Other device"
+H: Handlers=kbd event2
+
+I: Bus=0003 Vendor=beef Product=dead Version=0111
+N: Name="Keyboard passthrough"
+H: Handlers=sysrq kbd event29
+"""
+        with patch.object(manager.Path, "read_text", return_value=input_listing):
+            devices = manager._sunshine_virtual_input_devices()
+        self.assertEqual(
+            devices,
+            [
+                {"name": "Mouse passthrough", "event_path": "/dev/input/event27"},
+                {"name": "Keyboard passthrough", "event_path": "/dev/input/event29"},
+            ],
+        )
 
     def test_ensure_dependencies_requires_setfacl(self) -> None:
         original = manager.shutil.which
@@ -359,22 +432,26 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         state["paths"]["sunshine_override_dir"] = str(override_dir)
         state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
         state["paths"]["input_bridge_script"] = str(base / "lutristosunshine-input-bridge.py")
+        state["paths"]["kwin_input_isolation_script"] = str(base / "lutristosunshine-kwin-input-isolation.py")
         state["paths"]["audio_guard_script"] = str(base / "lutristosunshine-guard-audio-defaults.sh")
         state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-virtualdisplay-service.sh")
         state["paths"]["portal_active_file"] = str(base / "portal-active")
         state["paths"]["portal_lock_file"] = str(base / "portal-lock")
         state["paths"]["input_bridge_status_file"] = str(base / "input-bridge-status.json")
+        state["paths"]["kwin_input_isolation_status_file"] = str(base / "kwin-input-isolation-status.json")
         state["paths"]["wayland_display_file"] = str(base / "wayland-display")
         state["paths"]["audio_module_file"] = str(base / "audio-module-id")
 
         for key in [
             "sunshine_override",
             "input_bridge_script",
+            "kwin_input_isolation_script",
             "audio_guard_script",
             "sunshine_wrapper_script",
             "portal_active_file",
             "portal_lock_file",
             "input_bridge_status_file",
+            "kwin_input_isolation_status_file",
             "wayland_display_file",
             "audio_module_file",
         ]:
@@ -439,6 +516,132 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
 
         self.assertEqual(report["summary"], "needs_attention")
         self.assertTrue(any(check["status"] == "fail" for check in report["checks"]))
+
+    def test_virtual_display_doctor_report_reports_kwin_runtime_state(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        base = Path(tempdir.name)
+        rule_path = base / "85-lutristosunshine-sunshine-input.rules"
+        rule_path.write_text(manager._udev_rule("permissions-only"), encoding="utf-8")
+        kwin_status_path = base / "kwin-input-isolation-status.json"
+        kwin_status_path.write_text(
+            json.dumps(
+                {
+                    "state": "active",
+                    "service": "org.kde.KWin",
+                    "disabled_devices": [{"path": "/org/kde/KWin/InputDevice/event30", "name": "Keyboard_passthrough"}],
+                    "seen_device_count": 1,
+                    "last_error": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        state = manager._default_state()
+        state["enabled"] = True
+        state["udev_rule_path"] = str(rule_path)
+        state["paths"] = dict(state["paths"])
+        state["paths"]["kwin_input_isolation_status_file"] = str(kwin_status_path)
+
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        original_sunshine_service_active = manager._sunshine_service_active
+        original_bridge_service_state = manager._bridge_service_state
+        original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            manager._sunshine_service_active = lambda: False
+            manager._bridge_service_state = lambda: "inactive"
+            manager._sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
+            with patch.dict(
+                manager.os.environ,
+                {
+                    "XDG_CURRENT_DESKTOP": "KDE",
+                    "XDG_SESSION_DESKTOP": "KDE",
+                    "DESKTOP_SESSION": "plasma",
+                    "KDE_FULL_SESSION": "true",
+                },
+                clear=False,
+            ):
+                report = manager.virtual_display_doctor_report()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+            manager._sunshine_service_active = original_sunshine_service_active
+            manager._bridge_service_state = original_bridge_service_state
+            manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
+
+        self.assertEqual(report["summary"], "degraded")
+        kwin_check = next(check for check in report["checks"] if check["label"] == "KWin isolation")
+        self.assertEqual(kwin_check["status"], "pass")
+        self.assertIn("disabled 1 of 1 Sunshine input device", kwin_check["message"])
+
+    def test_virtual_display_doctor_report_warns_when_host_has_sunshine_inputs_but_kwin_disabled_zero(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        base = Path(tempdir.name)
+        rule_path = base / "85-lutristosunshine-sunshine-input.rules"
+        rule_path.write_text(manager._udev_rule("permissions-only"), encoding="utf-8")
+        kwin_status_path = base / "kwin-input-isolation-status.json"
+        kwin_status_path.write_text(
+            json.dumps(
+                {
+                    "state": "active",
+                    "service": "org.kde.KWin",
+                    "disabled_devices": [],
+                    "failed_devices": [],
+                    "seen_device_count": 5,
+                    "last_error": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        state = manager._default_state()
+        state["enabled"] = True
+        state["udev_rule_path"] = str(rule_path)
+        state["paths"] = dict(state["paths"])
+        state["paths"]["kwin_input_isolation_status_file"] = str(kwin_status_path)
+
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        original_sunshine_service_active = manager._sunshine_service_active
+        original_bridge_service_state = manager._bridge_service_state
+        original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            manager._sunshine_service_active = lambda: False
+            manager._bridge_service_state = lambda: "inactive"
+            manager._sunshine_virtual_input_devices = lambda: [
+                {"name": "Mouse passthrough", "event_path": "/dev/input/event27"},
+                {"name": "Mouse passthrough (absolute)", "event_path": "/dev/input/event28"},
+                {"name": "Keyboard passthrough", "event_path": "/dev/input/event29"},
+                {"name": "Touch passthrough", "event_path": "/dev/input/event30"},
+                {"name": "Pen passthrough", "event_path": "/dev/input/event31"},
+            ]
+            with patch.dict(
+                manager.os.environ,
+                {
+                    "XDG_CURRENT_DESKTOP": "KDE",
+                    "XDG_SESSION_DESKTOP": "KDE",
+                    "DESKTOP_SESSION": "plasma",
+                    "KDE_FULL_SESSION": "true",
+                },
+                clear=False,
+            ):
+                report = manager.virtual_display_doctor_report()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+            manager._sunshine_service_active = original_sunshine_service_active
+            manager._bridge_service_state = original_bridge_service_state
+            manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
+
+        kwin_check = next(check for check in report["checks"] if check["label"] == "KWin isolation")
+        self.assertEqual(kwin_check["status"], "warn")
+        self.assertIn("matched 5 of 5 host Sunshine input device(s), but disabled 0", kwin_check["message"])
 
     def test_managed_sunshine_templates_do_not_force_global_pulse_sink(self) -> None:
         state = manager._default_state()

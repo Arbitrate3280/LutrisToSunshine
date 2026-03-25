@@ -168,6 +168,39 @@ def handle_virtualdisplay_command(args) -> int:
         ]
         print(_format_kv("Status:", ", ".join(status_parts)))
         print(_format_kv("Runtime:", ", ".join(runtime_parts)))
+        isolation_level = "success"
+        isolation_detail = "rule ready"
+        if snapshot["input_isolation_mode"] == "kwin-runtime-disable":
+            if snapshot["kwin_isolation_error"]:
+                isolation_level = "error"
+                isolation_detail = snapshot["kwin_isolation_error"]
+            elif snapshot["kwin_isolation_state"] == "inactive":
+                isolation_level = "warning"
+                isolation_detail = "KWin helper is not running"
+            elif snapshot["kwin_isolation_state"] == "starting":
+                isolation_level = "info"
+                isolation_detail = "KWin helper is starting"
+            elif snapshot["kwin_isolation_devices"]:
+                isolation_detail = (
+                    f"disabled {len(snapshot['kwin_isolation_devices'])} of "
+                    f"{snapshot['sunshine_input_device_count']} Sunshine device(s) in KWin"
+                )
+            elif snapshot["sunshine_input_device_count"] > 0:
+                isolation_level = "warning"
+                isolation_detail = (
+                    f"matched {snapshot['kwin_isolation_seen_device_count']} of "
+                    f"{snapshot['sunshine_input_device_count']} Sunshine device(s), but disabled 0"
+                )
+            else:
+                isolation_level = "warning"
+                isolation_detail = "waiting for Sunshine virtual inputs"
+        print(_format_kv("Host session:", snapshot["host_session"]))
+        print(
+            _format_kv(
+                "Input isolation:",
+                f"{state_text(snapshot['input_isolation_mode'], isolation_level)} {muted('- ' + isolation_detail)}",
+            )
+        )
         mangohud_status = (
             f"{badge('ENABLED', 'success')} wrapped launches that already use MangoHud follow the client FPS"
             if snapshot["dynamic_mangohud_fps_limit"]
