@@ -24,7 +24,7 @@ LutrisToSunshine imports games from supported launchers into Sunshine and can op
 - Import games from multiple launchers into Sunshine from one CLI
 - Avoid duplicate Sunshine entries
 - Optionally fetch game covers from SteamGridDB
-- Run streamed games in a separate headless desktop with optional host-controller passthrough
+- Run streamed games in a virtual display that dynamically matches resolution/refresh rate of the client with optional host-controller passthrough
 
 ## Supported Launchers
 
@@ -108,13 +108,14 @@ When you run `python3 lutristosunshine.py`, the tool:
 
 ### What It Is
 
-Virtual display creates a separate headless desktop for streamed games. Sunshine captures that desktop instead of your main one, so you can keep using your normal desktop while a game is running remotely.
+Virtual display creates a separate headless desktop for streamed games. Sunshine captures that desktop instead of your main one, so you can keep using your normal desktop while a stream is running.
 
 ### Why It Is Useful
 
 - Keep your main desktop usable while streaming
 - Run Sunshine on headless systems
 - Keep client input isolated from the host desktop
+- Dynamically matches resolution/refresh rate of the client
 - Route streamed-game audio separately from normal desktop audio
 - Host controller passthrough: optional. Use the `controllers` command only if you want physical controllers connected to the host PC to be reserved for streamed games and hidden from the host desktop while streaming.
 
@@ -205,7 +206,7 @@ python3 lutristosunshine.py virtualdisplay logs
 Virtual display is still a work in progress. It has currently been tested only on:
 
 - Aurora (Ublue)
-- AMD GPU configurations
+- AMD GPU
 
 Other environments, distributions, or GPU setups may need extra troubleshooting.
 
