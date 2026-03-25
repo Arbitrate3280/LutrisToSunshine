@@ -236,6 +236,48 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         manager._restore_sunshine_audio_sink(state)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
 
+    def test_snapshot_host_audio_defaults_ignores_managed_defaults(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        try:
+            values = {
+                "Default Sink": "lts-sunshine-stereo",
+                "Default Source": "lts-sunshine-stereo.monitor",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+
+        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
+
+    def test_start_virtual_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
+        state, _conf_path = self._temp_audio_state()
+        original_load_state = manager.load_state
+        original_refresh_managed_files = manager.refresh_managed_files
+        original_save_state = manager.save_state
+        original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
+        original_systemctl_user = manager._systemctl_user
+        try:
+            manager.load_state = lambda: state
+            manager.refresh_managed_files = lambda current=None: current if current is not None else state
+            manager.save_state = lambda current: None
+            manager._snapshot_host_audio_defaults = lambda current: current.update(
+                {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
+            )
+            manager._systemctl_user = lambda action, unit: subprocess.CompletedProcess([action, unit], 0, "", "")
+
+            result = manager.start_virtual_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.refresh_managed_files = original_refresh_managed_files
+            manager.save_state = original_save_state
+            manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
+            manager._systemctl_user = original_systemctl_user
+
+        self.assertEqual(result, 0)
+        self.assertEqual(state["host_audio_defaults"], {"sink": "host-sink", "source": "host-source"})
+
     def test_start_virtual_display_restores_audio_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
@@ -406,6 +448,8 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         sway_start = scripts[Path(state["paths"]["sway_start_script"])]
         sunshine_start = scripts[Path(state["paths"]["sunshine_start_script"])]
         sunshine_wrapper = scripts[Path(state["paths"]["sunshine_wrapper_script"])]
+        audio_create = scripts[Path(state["paths"]["audio_create_script"])]
+        audio_cleanup = scripts[Path(state["paths"]["audio_cleanup_script"])]
         audio_guard = scripts[Path(state["paths"]["audio_guard_script"])]
         launch_script = scripts[Path(state["paths"]["launch_app_script"])]
         sunshine_override = units[Path(state["paths"]["sunshine_override"])]
@@ -414,10 +458,33 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertIn("sleep 0.1", sway_start)
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sunshine_start)
         self.assertIn('audio_sink = {managed_sink}', sunshine_wrapper)
+        self.assertIn('export XDG_RUNTIME_DIR="$runtime_dir"', sunshine_wrapper)
+        self.assertIn('export DBUS_SESSION_BUS_ADDRESS="$dbus_value"', sunshine_wrapper)
+        self.assertIn('env=pactl_env()', sunshine_wrapper)
+        self.assertIn('run_audio_command() {', audio_create)
+        self.assertIn('local command=(/usr/bin/env', audio_create)
+        self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_create)
+        self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_create)
+        self.assertIn('run_audio_command pactl list short sinks', audio_create)
+        self.assertIn('run_audio_command pactl load-module', audio_create)
+        self.assertIn('run_audio_command() {', audio_cleanup)
+        self.assertIn('local command=(/usr/bin/env', audio_cleanup)
+        self.assertIn('run_audio_command pactl unload-module', audio_cleanup)
         self.assertIn("sink-sunshine-stereo", audio_guard)
         self.assertIn("sink-sunshine-surround51", audio_guard)
         self.assertIn("sink-sunshine-surround71", audio_guard)
         self.assertIn('poll_interval="0.5"', audio_guard)
+        self.assertIn('run_audio_command() {', audio_guard)
+        self.assertIn('local command=(/usr/bin/env', audio_guard)
+        self.assertIn('"DBUS_SESSION_BUS_ADDRESS=$dbus_value"', audio_guard)
+        self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_guard)
+        self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_guard)
+        self.assertIn("enforce_host_defaults", audio_guard)
+        self.assertIn("while true; do", audio_guard)
+        self.assertIn("run_audio_command pactl info", audio_guard)
+        self.assertIn("run_audio_command pactl set-default-sink", audio_guard)
+        self.assertIn("run_audio_command pactl set-default-source", audio_guard)
+        self.assertNotIn("pactl subscribe", audio_guard)
         self.assertIn('PULSE_SINK="lts-sunshine-stereo"', launch_script)
         self.assertIn("ExecStart=", sunshine_override)
         self.assertIn(state["paths"]["sunshine_wrapper_script"], sunshine_override)

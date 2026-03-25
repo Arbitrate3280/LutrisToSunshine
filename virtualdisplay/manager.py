@@ -854,11 +854,15 @@ def _set_runtime_sunshine_audio_sink(state: Dict[str, Any]) -> None:
 
 
 def _pactl_info_value(key: str) -> str:
+    probe_env = dict(os.environ)
+    probe_env["LANG"] = "C"
+    probe_env["LC_ALL"] = "C"
     result = subprocess.run(
         ["pactl", "info"],
         text=True,
         capture_output=True,
         check=False,
+        env=probe_env,
     )
     if result.returncode != 0:
         return ""
@@ -872,16 +876,10 @@ def _pactl_info_value(key: str) -> str:
 def _snapshot_host_audio_defaults(state: Dict[str, Any]) -> None:
     current_sink = _pactl_info_value("Default Sink")
     current_source = _pactl_info_value("Default Source")
-    existing_defaults = state.get("host_audio_defaults") or {}
-
-    if (
-        current_sink in _managed_audio_sink_names(state)
-        and current_source in _managed_audio_source_names(state)
-        and existing_defaults.get("sink")
-        and existing_defaults.get("source")
-    ):
+    if not current_sink or not current_source:
         return
-
+    if current_sink in _managed_audio_sink_names(state) or current_source in _managed_audio_source_names(state):
+        return
     state["host_audio_defaults"] = {
         "sink": current_sink,
         "source": current_source,
@@ -2249,14 +2247,33 @@ sunshine_start_script="{paths['sunshine_start_script']}"
 display_file="{paths['wayland_display_file']}"
 bridge_status_file="{paths['input_bridge_status_file']}"
 sway_socket="{state['sway_socket']}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
 audio_guard_pid=""
 input_bridge_pid=""
 sway_pid=""
+sunshine_pid=""
 sunshine_status=0
+
+export XDG_RUNTIME_DIR="$runtime_dir"
+export DBUS_SESSION_BUS_ADDRESS="$dbus_value"
+if [ -n "$pulse_server_value" ]; then
+    export PULSE_SERVER="$pulse_server_value"
+else
+    unset PULSE_SERVER
+fi
+if [ -n "$pulse_clientconfig_value" ]; then
+    export PULSE_CLIENTCONFIG="$pulse_clientconfig_value"
+else
+    unset PULSE_CLIENTCONFIG
+fi
 
 prepare_audio_state() {{
     python3 - "$state_path" "$sunshine_conf" "$audio_sink" <<'PY'
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -2277,6 +2294,13 @@ if not isinstance(state, dict):
 host_defaults = state.get("host_audio_defaults") or {{}}
 if not isinstance(host_defaults, dict):
     host_defaults = {{}}
+
+
+def pactl_env():
+    env = dict(os.environ)
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
 
 lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
 current_value = ""
@@ -2319,6 +2343,7 @@ try:
         text=True,
         capture_output=True,
         check=False,
+        env=pactl_env(),
     )
 except OSError:
     pactl = None
@@ -2331,12 +2356,7 @@ if pactl and pactl.returncode == 0:
         elif line.startswith("Default Source: "):
             current_source = line.split(": ", 1)[1].strip()
     if current_sink and current_source:
-        if not (
-            current_sink in managed_sinks
-            and current_source in managed_sources
-            and host_defaults.get("sink")
-            and host_defaults.get("source")
-        ):
+        if not (current_sink in managed_sinks or current_source in managed_sources):
             state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
 
 state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2347,6 +2367,7 @@ PY
 restore_audio_state() {{
     python3 - "$state_path" "$sunshine_conf" <<'PY'
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -2366,6 +2387,13 @@ if not isinstance(original, dict):
     original = {{}}
 if not isinstance(host_defaults, dict):
     host_defaults = {{}}
+
+
+def pactl_env():
+    env = dict(os.environ)
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
 
 lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
 updated_lines = []
@@ -2390,9 +2418,9 @@ conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
 sink_name = str(host_defaults.get("sink") or "").strip()
 source_name = str(host_defaults.get("source") or "").strip()
 if sink_name:
-    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False)
+    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False, env=pactl_env())
 if source_name:
-    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False)
+    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False, env=pactl_env())
 state["host_audio_defaults"] = {{"sink": "", "source": ""}}
 state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 PY
@@ -2475,26 +2503,67 @@ set -euo pipefail
 
 sink_name="{audio_sink}"
 module_file="{paths['audio_module_file']}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
 
-if pactl list short sinks | awk '{{print $2}}' | grep -Fx "$sink_name" >/dev/null 2>&1; then
+run_audio_command() {{
+    local command=(/usr/bin/env
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "LANG=C"
+        "LC_ALL=C"
+    )
+    if [ -n "$pulse_server_value" ]; then
+        command+=("PULSE_SERVER=$pulse_server_value")
+    fi
+    if [ -n "$pulse_clientconfig_value" ]; then
+        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
+    fi
+    "${{command[@]}}" "$@"
+}}
+
+if run_audio_command pactl list short sinks | awk '{{print $2}}' | grep -Fx "$sink_name" >/dev/null 2>&1; then
     rm -f "$module_file"
     exit 0
 fi
 
-module_id="$(pactl load-module module-null-sink sink_name="$sink_name" sink_properties=device.description='LutrisToSunshine Virtual Display')"
+module_id="$(run_audio_command pactl load-module module-null-sink sink_name="$sink_name" sink_properties=device.description='LutrisToSunshine Virtual Display')"
 printf '%s\\n' "$module_id" > "$module_file"
 """,
         Path(paths["audio_cleanup_script"]): f"""#!/bin/bash
 set -euo pipefail
 
 module_file="{paths['audio_module_file']}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
+
+run_audio_command() {{
+    local command=(/usr/bin/env
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "LANG=C"
+        "LC_ALL=C"
+    )
+    if [ -n "$pulse_server_value" ]; then
+        command+=("PULSE_SERVER=$pulse_server_value")
+    fi
+    if [ -n "$pulse_clientconfig_value" ]; then
+        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
+    fi
+    "${{command[@]}}" "$@"
+}}
+
 if [ ! -f "$module_file" ]; then
     exit 0
 fi
 
 module_id="$(cat "$module_file")"
 if [ -n "$module_id" ]; then
-    pactl unload-module "$module_id" >/dev/null 2>&1 || true
+    run_audio_command pactl unload-module "$module_id" >/dev/null 2>&1 || true
 fi
 rm -f "$module_file"
 """,
@@ -2503,6 +2572,26 @@ set -euo pipefail
 
 state_path="{paths['state_path']}"
 poll_interval="{AUDIO_GUARD_POLL_INTERVAL_SECONDS}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
+
+run_audio_command() {{
+    local command=(/usr/bin/env
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "LANG=C"
+        "LC_ALL=C"
+    )
+    if [ -n "$pulse_server_value" ]; then
+        command+=("PULSE_SERVER=$pulse_server_value")
+    fi
+    if [ -n "$pulse_clientconfig_value" ]; then
+        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
+    fi
+    "${{command[@]}}" "$@"
+}}
 
 is_managed_sink() {{
     local value="${{1:-}}"
@@ -2539,10 +2628,9 @@ print(str(defaults.get("source") or ""))
 PY
 }}
 
-while true; do
-    if ! pactl_info="$(pactl info 2>/dev/null)"; then
-        sleep "$poll_interval"
-        continue
+enforce_host_defaults() {{
+    if ! pactl_info="$(run_audio_command pactl info 2>/dev/null)"; then
+        return 0
     fi
 
     current_sink="$(printf '%s\\n' "$pactl_info" | awk -F': ' '/^Default Sink:/ {{print $2; exit}}')"
@@ -2553,14 +2641,21 @@ while true; do
     host_source="${{host_defaults[1]:-}}"
 
     if [ -n "$host_sink" ] && [ "$current_sink" != "$host_sink" ] && is_managed_sink "$current_sink"; then
-        pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
+        run_audio_command pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
     fi
     if [ -n "$host_source" ] && [ "$current_source" != "$host_source" ] && is_managed_source "$current_source"; then
-        pactl set-default-source "$host_source" >/dev/null 2>&1 || true
+        run_audio_command pactl set-default-source "$host_source" >/dev/null 2>&1 || true
     fi
+}}
 
-    sleep "$poll_interval"
-done
+poll_host_defaults() {{
+    while true; do
+        enforce_host_defaults
+        sleep "$poll_interval"
+    done
+}}
+
+poll_host_defaults
 """,
         Path(paths["input_bridge_script"]): _input_bridge_script(state),
         Path(paths["launch_app_script"]): f"""#!/bin/bash
@@ -3562,6 +3657,7 @@ def start_virtual_display() -> int:
         return 1
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
+    _snapshot_host_audio_defaults(state)
     save_state(state)
     result = _systemctl_user("start", SUNSHINE_UNIT)
     if result.returncode != 0:
@@ -3596,6 +3692,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
     state = load_state()
     configured = bool(state.get("enabled"))
     sunshine_active = _sunshine_service_active() if configured else False
+    host_defaults = state.get("host_audio_defaults") or {}
     wayland_display = ""
     if WAYLAND_DISPLAY_PATH.exists():
         wayland_display = WAYLAND_DISPLAY_PATH.read_text(encoding="utf-8").strip()
@@ -3654,7 +3751,6 @@ def virtual_display_snapshot() -> Dict[str, Any]:
                 }
             )
 
-    host_defaults = state.get("host_audio_defaults") or {}
     snapshot = {
         "configured": configured,
         "profile": state["profile"],
@@ -3664,7 +3760,6 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "bridge_state": _bridge_service_state() if configured else "inactive",
         "audio_guard_state": audio_guard_state,
         "audio_sink": state["audio_sink"],
-        "sunshine_audio_target": _sunshine_audio_capture_target(state),
         "host_audio_defaults": {
             "sink": _safe_string(host_defaults.get("sink")),
             "source": _safe_string(host_defaults.get("source")),
@@ -3821,12 +3916,6 @@ def virtual_display_status() -> int:
     else:
         print("- Client inputs from Moonlight/Sunshine work automatically.")
         print("- No host controllers are currently reserved for passthrough.")
-    defaults = snapshot["host_audio_defaults"]
-    if defaults["sink"] or defaults["source"]:
-        print(
-            "Saved host audio defaults: "
-            f"sink={defaults['sink'] or 'unset'}, source={defaults['source'] or 'unset'}"
-        )
     print(f"Logs: {snapshot['last_launch_log_file']}")
     print(f"Next step: {snapshot['next_step']}")
     return 0
