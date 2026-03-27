@@ -41,6 +41,7 @@ from virtualdisplay.manager import (
     set_refresh_rate_sync_mode,
     setup_virtual_display,
     start_virtual_display,
+    restart_virtual_display,
     stop_virtual_display,
     virtual_display_doctor_report,
     virtual_display_snapshot,
@@ -127,7 +128,12 @@ def parse_args(argv=None):
     virtualdisplay_parser.set_defaults(command="virtualdisplay")
     virtualdisplay_subparsers = virtualdisplay_parser.add_subparsers(dest="virtualdisplay_action")
     virtualdisplay_subparsers.add_parser("enable", help="Set up, start, and sync the virtual display stack.")
-    virtualdisplay_subparsers.add_parser("doctor", help="Inspect the virtual display setup and suggest fixes.")
+    virtualdisplay_subparsers.add_parser("start", help="Start the managed Sunshine service for the virtual display without reinstalling.")
+    virtualdisplay_subparsers.add_parser("restart", help="Restart the managed Sunshine service for the virtual display without reinstalling.")
+    virtualdisplay_subparsers.add_parser(
+        "doctor",
+        help="Legacy detailed checks view. Most users should use 'virtualdisplay status'.",
+    )
     virtualdisplay_subparsers.add_parser("controllers", help="Choose which host controllers are reserved for the virtual display.")
     virtualdisplay_subparsers.add_parser("status", help="Show the current virtual display status.")
     mangohud_parser = virtualdisplay_subparsers.add_parser(
@@ -161,7 +167,7 @@ def parse_args(argv=None):
         type=float,
         help="Custom fixed refresh rate in Hz. Used with mode=custom.",
     )
-    virtualdisplay_subparsers.add_parser("stop", help="Stop the managed headless Sway and Sunshine services.")
+    virtualdisplay_subparsers.add_parser("stop", help="Stop the managed Sunshine service for the virtual display.")
     rumble_parser = virtualdisplay_subparsers.add_parser(
         "rumble",
         help="Send a test rumble signal through the bridged virtual controller path.",
@@ -226,6 +232,68 @@ def handle_virtualdisplay_command(args) -> int:
     def get_blocked_apps_report():
         blocked_apps, error = get_virtual_display_blocked_apps()
         return blocked_apps, error
+
+    def _hub_status_summary(snapshot: dict) -> str:
+        if snapshot["dependencies_missing"]:
+            return f"{badge('NEEDS SETUP', 'error')} missing required dependencies"
+        if not snapshot["configured"]:
+            return f"{badge('NOT SET UP', 'warning')} run enable to install the managed stack"
+        if snapshot["sunshine_active"] and snapshot["sway_active"]:
+            if snapshot["controller_count"] and snapshot["bridge_state"] != "active":
+                return f"{badge('PARTIAL', 'warning')} stack is running, but host-controller bridging needs attention"
+            return f"{badge('READY', 'success')} stack is running"
+        if snapshot["sunshine_active"] or snapshot["sway_active"]:
+            return f"{badge('PARTIAL', 'warning')} only part of the stack is running"
+        return f"{badge('STOPPED', 'info')} setup is installed but not running"
+
+    def _hub_display_sync_summary(snapshot: dict) -> str:
+        mode_summary = _refresh_rate_sync_mode_summary(snapshot["refresh_rate_sync_mode"])
+        if snapshot["refresh_rate_sync_mode"] == "custom":
+            mode_summary = f"{mode_summary} ({_custom_display_mode_summary(snapshot['custom_display_mode'])})"
+        mangohud_state = "MangoHud FPS sync on" if snapshot["dynamic_mangohud_fps_limit"] else "MangoHud FPS sync off"
+        return f"{mode_summary}; {mangohud_state}"
+
+    def _hub_controller_summary(snapshot: dict) -> str:
+        if snapshot["controller_detection_error"]:
+            return f"{badge('WARN', 'warning')} {snapshot['controller_detection_error']}"
+        if snapshot["controller_count"]:
+            suffix = "" if snapshot["controller_count"] == 1 else "s"
+            return f"{badge('RESERVED', 'success')} {snapshot['controller_count']} host controller{suffix}"
+        return f"{badge('AUTO', 'info')} Moonlight/Sunshine client inputs work automatically"
+
+    def _hub_attention_items(snapshot: dict, blocked_apps, blocked_error) -> list[str]:
+        items = []
+        if snapshot["dependencies_missing"]:
+            items.append(f"Missing dependencies: {', '.join(snapshot['dependencies_missing'])}.")
+        if snapshot["configured"] and not snapshot["sunshine_active"]:
+            items.append("Managed Sunshine is not running.")
+        if snapshot["configured"] and not snapshot["sway_active"]:
+            items.append("Headless Sway is not ready.")
+        if snapshot["controller_count"] and snapshot["bridge_state"] != "active":
+            items.append(f"Reserved host controllers are configured, but the bridge is {snapshot['bridge_state']}.")
+        if blocked_error:
+            items.append(f"Flatpak launch audit unavailable: {blocked_error}")
+        elif blocked_apps:
+            items.append(
+                f"{len(blocked_apps)} Sunshine app(s) cannot launch in virtual-display mode. Use 'status' for details."
+            )
+        return items
+
+    def print_hub_overview() -> None:
+        snapshot = virtual_display_snapshot()
+        blocked_apps, blocked_error = get_blocked_apps_report()
+        print(heading("Virtual display"))
+        print(_format_kv("Status:", _hub_status_summary(snapshot)))
+        print(_format_kv("Display sync:", _hub_display_sync_summary(snapshot)))
+        print(_format_kv("Controllers:", _hub_controller_summary(snapshot)))
+        attention_items = _hub_attention_items(snapshot, blocked_apps, blocked_error)
+        if attention_items:
+            print(_format_kv("Attention:", badge("CHECK", "warning")))
+            for item in attention_items:
+                print(f"- {item}")
+        else:
+            print(_format_kv("Attention:", f"{badge('OK', 'success')} nothing needs action right now"))
+        print(_format_kv("Next step:", state_text(snapshot['next_step'], "accent")))
 
     def print_dashboard(include_blocked_apps: bool = True) -> None:
         snapshot = virtual_display_snapshot()
@@ -416,7 +484,7 @@ def handle_virtualdisplay_command(args) -> int:
         reconcile_status = reconcile_apps(True)
         if reconcile_status != 0:
             print(f"{badge('WARN', 'warning')} the virtual display stack is running, but Sunshine app sync did not complete.")
-            print("Run 'python3 lutristosunshine.py virtualdisplay doctor' or '... virtualdisplay enable' again after fixing the issue.")
+            print("Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs', then try '... virtualdisplay enable' again if needed.")
             return 0
 
         if interactive:
@@ -434,6 +502,12 @@ def handle_virtualdisplay_command(args) -> int:
         if remove_status == 0:
             print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
         return remove_status
+
+    def run_start() -> int:
+        return start_virtual_display()
+
+    def run_restart() -> int:
+        return restart_virtual_display()
 
     def update_mangohud_fps_limit(enabled: bool) -> int:
         previous = dynamic_mangohud_fps_limit_enabled()
@@ -505,22 +579,75 @@ def handle_virtualdisplay_command(args) -> int:
         return update_refresh_rate_mode("custom")
 
     def run_hub() -> int:
+        def run_advanced_tools_menu() -> int:
+            while True:
+                print("")
+                print(heading("Advanced tools"))
+                print(f"{accent('1.')} Start Sunshine service")
+                print(f"{accent('2.')} Stop Sunshine service")
+                print(f"{accent('3.')} Restart Sunshine service")
+                print(f"{accent('4.')} Toggle dynamic MangoHud FPS limit")
+                print(f"{accent('5.')} Test controller rumble")
+                print(f"{accent('6.')} Show logs")
+                print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
+                print(f"{muted('0.')} Back")
+                tool_choice = get_menu_choice(
+                    f"{accent('Choose a tool: ')}",
+                    ["0", "1", "2", "3", "4", "5", "6", "7"],
+                )
+                if tool_choice == "0":
+                    return 0
+                if tool_choice == "1":
+                    result = run_start()
+                    if result != 0:
+                        return result
+                elif tool_choice == "2":
+                    result = stop_virtual_display()
+                    if result != 0:
+                        return result
+                elif tool_choice == "3":
+                    result = run_restart()
+                    if result != 0:
+                        return result
+                elif tool_choice == "4":
+                    enabling = not dynamic_mangohud_fps_limit_enabled()
+                    prompt = (
+                        "Enable dynamic MangoHud FPS limit for virtual-display launches?"
+                        if enabling
+                        else "Disable dynamic MangoHud FPS limit for virtual-display launches?"
+                    )
+                    if get_yes_no_input(prompt, default=True):
+                        result = update_mangohud_fps_limit(enabling)
+                        if result != 0:
+                            return result
+                elif tool_choice == "5":
+                    result = test_bridge_rumble(selector="", mode="auto")
+                    if result != 0:
+                        return result
+                elif tool_choice == "6":
+                    result = virtual_display_logs(80)
+                    if result != 0:
+                        return result
+                elif tool_choice == "7":
+                    confirmed = get_yes_no_input(
+                        "Turn off virtual display and restore Sunshine app launches to normal mode? This removes the managed headless setup.",
+                        default=False,
+                    )
+                    if confirmed:
+                        return run_reset()
+
         while True:
             print("")
-            print_dashboard()
+            print_hub_overview()
             print("")
             print(heading("Actions"))
-            print(f"{accent('1.')} Enable virtual display")
-            print(f"{accent('2.')} Configure host controllers")
-            print(f"{accent('3.')} Run doctor")
-            print(f"{accent('4.')} Test controller rumble")
-            print(f"{accent('5.')} Show logs")
-            print(f"{accent('6.')} Stop virtual display")
-            print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
-            print(f"{accent('8.')} Toggle dynamic MangoHud FPS limit")
-            print(f"{accent('9.')} Configure display sync mode")
+            print(f"{accent('1.')} Setup or update virtual display")
+            print(f"{accent('2.')} Show full status")
+            print(f"{accent('3.')} Configure host controllers")
+            print(f"{accent('4.')} Configure display sync mode")
+            print(f"{accent('5.')} Advanced tools")
             print(f"{muted('0.')} Exit")
-            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
+            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5"])
             if choice == "0":
                 return 0
             if choice == "1":
@@ -529,45 +656,15 @@ def handle_virtualdisplay_command(args) -> int:
                     return result
             elif choice == "2":
                 print("")
+                print_dashboard()
+            elif choice == "3":
+                print("")
                 print("Client inputs from Moonlight/Sunshine do not need any extra setup.")
                 print("Use this only if you want physical controllers connected to the host PC to be reserved for streamed games.")
                 result = configure_exclusive_input_devices()
                 if result != 0:
                     return result
-            elif choice == "3":
-                print("")
-                print_doctor_report()
             elif choice == "4":
-                result = test_bridge_rumble(selector="", mode="auto")
-                if result != 0:
-                    return result
-            elif choice == "5":
-                result = virtual_display_logs(80)
-                if result != 0:
-                    return result
-            elif choice == "6":
-                result = stop_virtual_display()
-                if result != 0:
-                    return result
-            elif choice == "7":
-                confirmed = get_yes_no_input(
-                    "Turn off virtual display and restore Sunshine app launches to normal mode? This removes the managed headless setup.",
-                    default=False,
-                )
-                if confirmed:
-                    return run_reset()
-            elif choice == "8":
-                enabling = not dynamic_mangohud_fps_limit_enabled()
-                prompt = (
-                    "Enable dynamic MangoHud FPS limit for virtual-display launches?"
-                    if enabling
-                    else "Disable dynamic MangoHud FPS limit for virtual-display launches?"
-                )
-                if get_yes_no_input(prompt, default=True):
-                    result = update_mangohud_fps_limit(enabling)
-                    if result != 0:
-                        return result
-            elif choice == "9":
                 print("")
                 print("Display sync mode")
                 print("1. Follow Moonlight's requested resolution and FPS")
@@ -587,12 +684,20 @@ def handle_virtualdisplay_command(args) -> int:
                     result = configure_custom_display_mode(interactive=True)
                     if result != 0:
                         return result
+            elif choice == "5":
+                result = run_advanced_tools_menu()
+                if result != 0:
+                    return result
 
     action = args.virtualdisplay_action
     if action is None:
         return run_hub()
     if action == "enable":
         return run_enable(interactive=True)
+    if action == "start":
+        return run_start()
+    if action == "restart":
+        return run_restart()
     if action == "doctor":
         print_doctor_report()
         return 0

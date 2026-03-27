@@ -161,10 +161,24 @@ Open the guided hub:
 python3 lutristosunshine.py virtualdisplay
 ```
 
+The guided hub now keeps the default view short and moves secondary actions under `Advanced tools`.
+
 Set up, start, and sync the full virtual-display flow:
 
 ```bash
 python3 lutristosunshine.py virtualdisplay enable
+```
+
+Start the managed virtual-display services without reinstalling:
+
+```bash
+python3 lutristosunshine.py virtualdisplay start
+```
+
+Restart the managed virtual-display services without reinstalling:
+
+```bash
+python3 lutristosunshine.py virtualdisplay restart
 ```
 
 Configure optional host-controller passthrough:
@@ -173,16 +187,16 @@ Configure optional host-controller passthrough:
 python3 lutristosunshine.py virtualdisplay controllers
 ```
 
-Inspect problems and suggested fixes:
-
-```bash
-python3 lutristosunshine.py virtualdisplay doctor
-```
-
 Show current virtual-display state:
 
 ```bash
 python3 lutristosunshine.py virtualdisplay status
+```
+
+Show the legacy detailed checks view:
+
+```bash
+python3 lutristosunshine.py virtualdisplay doctor
 ```
 
 Enable the dynamic MangoHud FPS limit so it dynamically sets it to the client's refresh rate:

@@ -4859,7 +4859,7 @@ def setup_virtual_display() -> int:
 def start_virtual_display() -> int:
     state = load_state()
     if not state.get("enabled"):
-        print("Virtual display is not set up. Run 'virtualdisplay setup' first.")
+        print("Virtual display is not set up. Run 'python3 lutristosunshine.py virtualdisplay enable' first.")
         return 1
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
@@ -4879,6 +4879,15 @@ def start_virtual_display() -> int:
         return 1
     print("Virtual display started.")
     return 0
+
+
+def restart_virtual_display() -> int:
+    state = load_state()
+    if not state.get("enabled"):
+        print("Virtual display is not set up. Run 'python3 lutristosunshine.py virtualdisplay enable' first.")
+        return 1
+    stop_virtual_display()
+    return start_virtual_display()
 
 
 def stop_virtual_display() -> int:
@@ -5013,11 +5022,11 @@ def virtual_display_snapshot() -> Dict[str, Any]:
     if not configured:
         snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay enable' to set up the headless stack."
     elif not sunshine_active:
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay enable' to start the stack and sync apps."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay start' to start the managed stack."
     elif not sway_active:
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay doctor' to inspect why headless Sway is not ready."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs' to inspect why headless Sway is not ready."
     elif selections and snapshot["bridge_state"] != "active":
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay doctor' if selected controllers are not being bridged."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs' if selected controllers are not being bridged."
     else:
         snapshot["next_step"] = "Virtual display is ready. Use 'controllers', 'rumble', or 'logs' for follow-up actions."
     return snapshot

@@ -18,6 +18,18 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(args.command, "virtualdisplay")
         self.assertEqual(args.virtualdisplay_action, "enable")
 
+    def test_parse_virtualdisplay_start_command(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "start"])
+
+        self.assertEqual(args.command, "virtualdisplay")
+        self.assertEqual(args.virtualdisplay_action, "start")
+
+    def test_parse_virtualdisplay_restart_command(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "restart"])
+
+        self.assertEqual(args.command, "virtualdisplay")
+        self.assertEqual(args.virtualdisplay_action, "restart")
+
     def test_parse_virtualdisplay_mangohud_fps_limit_enable_command(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay", "mangohud-fps-limit", "enable"])
 
@@ -140,6 +152,36 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("Sunshine app launches were restored to normal mode", rendered)
 
+    def test_handle_virtualdisplay_start_runs_service_start_only(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "start"])
+        calls = []
+
+        original_start_virtual_display = lutristosunshine.start_virtual_display
+        try:
+            lutristosunshine.start_virtual_display = lambda: calls.append("start") or 0
+
+            result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.start_virtual_display = original_start_virtual_display
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["start"])
+
+    def test_handle_virtualdisplay_restart_runs_service_restart_only(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "restart"])
+        calls = []
+
+        original_restart_virtual_display = lutristosunshine.restart_virtual_display
+        try:
+            lutristosunshine.restart_virtual_display = lambda: calls.append("restart") or 0
+
+            result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.restart_virtual_display = original_restart_virtual_display
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["restart"])
+
     def test_handle_virtualdisplay_mangohud_fps_limit_enable_updates_setting(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay", "mangohud-fps-limit", "enable"])
         calls = []
@@ -252,14 +294,66 @@ class VirtualDisplayCliTests(unittest.TestCase):
             }
             lutristosunshine.get_virtual_display_blocked_apps = lambda: ([], None)
             lutristosunshine.get_menu_choice = lambda prompt, valid_choices: "0"
-
-            result = lutristosunshine.handle_virtualdisplay_command(args)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
         finally:
             lutristosunshine.virtual_display_snapshot = original_virtual_display_snapshot
             lutristosunshine.get_virtual_display_blocked_apps = original_get_virtual_display_blocked_apps
             lutristosunshine.get_menu_choice = original_get_menu_choice
 
+        rendered = output.getvalue()
         self.assertEqual(result, 0)
+        self.assertIn("Show full status", rendered)
+        self.assertIn("Advanced tools", rendered)
+        self.assertNotIn("Run doctor", rendered)
+        self.assertNotIn("Host session:", rendered)
+
+    def test_handle_virtualdisplay_advanced_tools_lists_service_controls_together(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay"])
+
+        original_virtual_display_snapshot = lutristosunshine.virtual_display_snapshot
+        original_get_virtual_display_blocked_apps = lutristosunshine.get_virtual_display_blocked_apps
+        original_get_menu_choice = lutristosunshine.get_menu_choice
+        choices = iter(["5", "0", "0"])
+        try:
+            lutristosunshine.virtual_display_snapshot = lambda: {
+                "configured": True,
+                "dynamic_mangohud_fps_limit": False,
+                "current_mangohud_config": "",
+                "refresh_rate_sync_mode": "client",
+                "custom_display_mode": {"width": 1920, "height": 1080, "refresh": 60.0},
+                "host_session": "unknown",
+                "input_isolation_mode": "permissions-only",
+                "sunshine_active": False,
+                "sway_active": False,
+                "bridge_state": "inactive",
+                "audio_guard_state": "inactive",
+                "portal_handoff_active": False,
+                "dependencies_missing": [],
+                "wayland_display": "",
+                "current_headless_mode": "",
+                "controller_detection_error": None,
+                "controller_count": 0,
+                "controllers": [],
+                "next_step": "Run start.",
+            }
+            lutristosunshine.get_virtual_display_blocked_apps = lambda: ([], None)
+            lutristosunshine.get_menu_choice = lambda prompt, valid_choices: next(choices)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.virtual_display_snapshot = original_virtual_display_snapshot
+            lutristosunshine.get_virtual_display_blocked_apps = original_get_virtual_display_blocked_apps
+            lutristosunshine.get_menu_choice = original_get_menu_choice
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("Advanced tools", rendered)
+        self.assertIn("Start Sunshine service", rendered)
+        self.assertIn("Stop Sunshine service", rendered)
+        self.assertIn("Restart Sunshine service", rendered)
 
     def test_handle_virtualdisplay_status_renders_plain_dashboard_without_ansi(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay", "status"])
