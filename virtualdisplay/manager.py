@@ -25,7 +25,7 @@ PROFILE_ROOT = VIRTUALDISPLAY_ROOT / PROFILE_NAME
 BIN_ROOT = CONFIG_ROOT / "bin"
 STATE_PATH = VIRTUALDISPLAY_ROOT / "virtualdisplay.json"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
-LEGACY_SWAY_UNIT = "lutristosunshine-virtualdisplay-sway.service"
+FALLBACK_SUNSHINE_UNIT = "sunshine.service"
 LEGACY_SUNSHINE_UNIT = "lutristosunshine-virtualdisplay-sunshine.service"
 LEGACY_INPUT_BRIDGE_UNIT = "lutristosunshine-virtualdisplay-inputbridge.service"
 LEGACY_AUDIO_GUARD_UNIT = "lutristosunshine-virtualdisplay-audioguard.service"
@@ -471,7 +471,7 @@ def _input_bridge_status(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def _state_paths() -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
-    override_dir = systemd_user_dir / f"{SUNSHINE_UNIT}.d"
+    override_dir = systemd_user_dir / f"{_sunshine_unit()}.d"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
@@ -496,7 +496,6 @@ def _state_paths() -> Dict[str, str]:
         "systemd_user_dir": str(systemd_user_dir),
         "sunshine_override_dir": str(override_dir),
         "sunshine_override": str(override_dir / "override.conf"),
-        "legacy_sway_unit": str(systemd_user_dir / LEGACY_SWAY_UNIT),
         "legacy_sunshine_unit": str(systemd_user_dir / LEGACY_SUNSHINE_UNIT),
         "legacy_input_bridge_unit": str(systemd_user_dir / LEGACY_INPUT_BRIDGE_UNIT),
         "legacy_audio_guard_unit": str(systemd_user_dir / LEGACY_AUDIO_GUARD_UNIT),
@@ -4313,7 +4312,6 @@ def _legacy_unit_names() -> List[str]:
         LEGACY_INPUT_BRIDGE_UNIT,
         LEGACY_AUDIO_GUARD_UNIT,
         LEGACY_SUNSHINE_UNIT,
-        LEGACY_SWAY_UNIT,
     ]
 
 
@@ -4323,7 +4321,6 @@ def _legacy_unit_paths(state: Dict[str, Any]) -> List[Path]:
         Path(paths["legacy_input_bridge_unit"]),
         Path(paths["legacy_audio_guard_unit"]),
         Path(paths["legacy_sunshine_unit"]),
-        Path(paths["legacy_sway_unit"]),
     ]
 
 
@@ -4338,8 +4335,20 @@ def _cleanup_legacy_virtualdisplay_units(state: Dict[str, Any]) -> None:
             pass
 
 
+def _sunshine_unit_exists(unit: str) -> bool:
+    result = _systemctl_user("show", "--property=LoadState", "--value", unit)
+    return result.returncode == 0 and _safe_string(result.stdout) not in {"", "not-found"}
+
+
+def _sunshine_unit() -> str:
+    for unit in (SUNSHINE_UNIT, FALLBACK_SUNSHINE_UNIT):
+        if _sunshine_unit_exists(unit):
+            return unit
+    return SUNSHINE_UNIT
+
+
 def _sunshine_service_active() -> bool:
-    return _systemctl_user("is-active", SUNSHINE_UNIT).returncode == 0
+    return _systemctl_user("is-active", _sunshine_unit()).returncode == 0
 
 
 def _daemon_reload() -> None:
@@ -4375,7 +4384,7 @@ def _apply_input_bridge_runtime_state(state: Dict[str, Any]) -> None:
 
     # The input bridge now runs as a child of the Sunshine override wrapper.
     # Restart the service so the wrapper can re-read the saved controller selection.
-    _systemctl_user("restart", SUNSHINE_UNIT)
+    _systemctl_user("restart", _sunshine_unit())
 
 
 def _parse_selection_numbers(value: str, total_items: int) -> List[int]:
@@ -4519,7 +4528,7 @@ def setup_virtual_display() -> int:
     state["enabled"] = True
     save_state(state)
     if sunshine_was_active:
-        _systemctl_user("restart", SUNSHINE_UNIT)
+        _systemctl_user("restart", _sunshine_unit())
 
     print("Virtual display files installed.")
     return 0
@@ -4534,10 +4543,11 @@ def start_virtual_display() -> int:
     _remember_sunshine_audio_sink(state)
     _snapshot_host_audio_defaults(state)
     save_state(state)
-    result = _systemctl_user("start", SUNSHINE_UNIT)
+    sunshine_unit = _sunshine_unit()
+    result = _systemctl_user("start", sunshine_unit)
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
-        _systemctl_user("stop", SUNSHINE_UNIT)
+        _systemctl_user("stop", sunshine_unit)
         _restore_sunshine_audio_sink(state)
         _restore_host_audio_defaults(state)
         save_state(state)
@@ -4554,7 +4564,7 @@ def stop_virtual_display() -> int:
     if not state.get("enabled"):
         print("Virtual display is not set up.")
         return 1
-    _systemctl_user("stop", SUNSHINE_UNIT)
+    _systemctl_user("stop", _sunshine_unit())
     _clear_input_bridge_status_file(state)
     try:
         Path(state["paths"]["kwin_input_isolation_status_file"]).unlink()
@@ -4640,7 +4650,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "profile": state["profile"],
         "host_session": host_session,
         "input_isolation_mode": input_isolation_mode,
-        "sunshine_unit": SUNSHINE_UNIT,
+        "sunshine_unit": _sunshine_unit(),
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
         "bridge_state": _bridge_service_state() if configured else "inactive",
@@ -4912,7 +4922,7 @@ def virtual_display_logs(lines: int = 80) -> int:
             "journalctl",
             "--user",
             "-u",
-            SUNSHINE_UNIT,
+            _sunshine_unit(),
             "-n",
             str(lines),
             "--no-pager",

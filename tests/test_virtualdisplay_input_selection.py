@@ -215,6 +215,23 @@ class VirtualDisplayInputSelectionTests(unittest.TestCase):
         self.assertIn('return f"{value:04x}"', script)
         self.assertIn('replace("_", " ")', script)
 
+    def test_sunshine_unit_falls_back_to_legacy_name_when_preferred_unit_missing(self) -> None:
+        original_systemctl_user = manager._systemctl_user
+        try:
+            def fake_systemctl_user(*args, check=False):
+                unit = args[-1]
+                if args[:3] == ("show", "--property=LoadState", "--value"):
+                    if unit == manager.SUNSHINE_UNIT:
+                        return subprocess.CompletedProcess(list(args), 1, "", "missing")
+                    if unit == manager.FALLBACK_SUNSHINE_UNIT:
+                        return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+
+            manager._systemctl_user = fake_systemctl_user
+            self.assertEqual(manager._sunshine_unit(), manager.FALLBACK_SUNSHINE_UNIT)
+        finally:
+            manager._systemctl_user = original_systemctl_user
+
     def test_sunshine_virtual_input_devices_detects_beef_dead_entries(self) -> None:
         input_listing = """
 I: Bus=0003 Vendor=beef Product=dead Version=0111
@@ -338,7 +355,7 @@ H: Handlers=sysrq kbd event29
             manager._snapshot_host_audio_defaults = lambda current: current.update(
                 {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
             )
-            manager._systemctl_user = lambda action, unit: subprocess.CompletedProcess([action, unit], 0, "", "")
+            manager._systemctl_user = lambda *args, check=False: subprocess.CompletedProcess(list(args), 0, "", "")
 
             result = manager.start_virtual_display()
         finally:
@@ -372,10 +389,14 @@ H: Handlers=sysrq kbd event29
                 {"host_audio_defaults": {"sink": "", "source": ""}}
             )
 
-            def fake_systemctl_user(action, unit):
+            def fake_systemctl_user(*args, check=False):
+                action = args[0]
+                unit = args[-1]
                 if action == "start" and unit == manager.SUNSHINE_UNIT:
-                    return subprocess.CompletedProcess([action, unit], 1, "", "boom")
-                return subprocess.CompletedProcess([action, unit], 0, "", "")
+                    return subprocess.CompletedProcess(list(args), 1, "", "boom")
+                if args[:3] == ("show", "--property=LoadState", "--value") and unit == manager.SUNSHINE_UNIT:
+                    return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
+                return subprocess.CompletedProcess(list(args), 0, "", "")
 
             manager._systemctl_user = fake_systemctl_user
 
@@ -404,7 +425,7 @@ H: Handlers=sysrq kbd event29
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
-            manager._systemctl_user = lambda action, unit: subprocess.CompletedProcess([action, unit], 0, "", "")
+            manager._systemctl_user = lambda *args, check=False: subprocess.CompletedProcess(list(args), 0, "", "")
             manager._clear_input_bridge_status_file = lambda current: None
             manager._restore_host_audio_defaults = lambda current: None
 
@@ -425,7 +446,7 @@ H: Handlers=sysrq kbd event29
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
-        override_dir = base / "app-dev.lizardbyte.app.Sunshine.service.d"
+        override_dir = base / f"{manager.SUNSHINE_UNIT}.d"
         override_dir.mkdir(parents=True)
 
         state["paths"] = dict(state["paths"])
