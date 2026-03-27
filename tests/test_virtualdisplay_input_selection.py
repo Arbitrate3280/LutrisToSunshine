@@ -522,6 +522,116 @@ H: Handlers=sysrq kbd event29
 
         self.assertFalse(snapshot["configured"])
         self.assertIn("virtualdisplay enable", snapshot["next_step"])
+        self.assertEqual(snapshot["current_headless_mode"], "")
+        self.assertEqual(snapshot["refresh_rate_sync_mode"], "client")
+        self.assertEqual(snapshot["custom_display_mode"]["width"], manager.FALLBACK_WIDTH)
+        self.assertEqual(snapshot["custom_display_mode"]["height"], manager.FALLBACK_HEIGHT)
+        self.assertEqual(snapshot["custom_display_mode"]["refresh"], float(manager.FALLBACK_FPS))
+        self.assertEqual(snapshot["current_mangohud_config"], "")
+
+    def test_virtual_display_snapshot_reads_active_mangohud_config(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        state = manager._default_state()
+        state["paths"] = dict(state["paths"])
+        state["paths"]["portal_active_file"] = str(Path(tempdir.name) / "portal-active")
+
+        Path(state["paths"]["portal_active_file"]).write_text(
+            "phase=running\nmangohud_config=read_cfg,fps_limit=59.94\n",
+            encoding="utf-8",
+        )
+
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            snapshot = manager.virtual_display_snapshot()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+
+        self.assertEqual(snapshot["current_mangohud_config"], "read_cfg,fps_limit=59.94")
+
+    def test_current_headless_mode_formats_refresh_in_millihz(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        state["sway_socket"] = "/tmp/lts-sway.sock"
+
+        original_run = manager._run
+        original_path_exists = manager.Path.exists
+        try:
+            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "name": "HEADLESS-1",
+                            "current_mode": {
+                                "width": 2560,
+                                "height": 1440,
+                                "refresh": 119987,
+                            },
+                        }
+                    ]
+                ),
+                stderr="",
+            )
+            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+
+            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
+        finally:
+            manager._run = original_run
+            manager.Path.exists = original_path_exists
+
+        self.assertEqual(mode, "2560x1440 @ 119.99 Hz")
+
+    def test_current_headless_mode_returns_empty_when_headless_output_missing(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        state["sway_socket"] = "/tmp/lts-sway.sock"
+
+        original_run = manager._run
+        original_path_exists = manager.Path.exists
+        try:
+            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps([{"name": "HDMI-A-1", "current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}]),
+                stderr="",
+            )
+            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+
+            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
+        finally:
+            manager._run = original_run
+            manager.Path.exists = original_path_exists
+
+        self.assertEqual(mode, "")
+
+    def test_current_headless_mode_returns_empty_when_swaymsg_fails(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        state["sway_socket"] = "/tmp/lts-sway.sock"
+
+        original_run = manager._run
+        original_path_exists = manager.Path.exists
+        try:
+            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="failed",
+            )
+            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+
+            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
+        finally:
+            manager._run = original_run
+            manager.Path.exists = original_path_exists
+
+        self.assertEqual(mode, "")
 
     def test_virtual_display_doctor_report_flags_missing_dependencies(self) -> None:
         state = manager._default_state()
@@ -722,9 +832,102 @@ H: Handlers=sysrq kbd event29
         scripts = manager._script_templates(state)
         launch_script = scripts[Path(state["paths"]["launch_app_script"])]
 
-        self.assertIn('local mangohud_config_value=""', launch_script)
-        self.assertIn('mangohud_config_value="read_cfg,fps_limit=${SUNSHINE_CLIENT_FPS}"', launch_script)
+        self.assertIn('mangohud_config_value=""', launch_script)
+        self.assertNotIn('local mangohud_config_value=""', launch_script)
+        self.assertIn(
+            f'resolved_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" "client" fallback)"',
+            launch_script,
+        )
+        self.assertIn('mangohud_config_value="read_cfg,fps_limit=$resolved_stream_fps"', launch_script)
         self.assertIn('launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")', launch_script)
+
+    def test_launch_script_waits_for_exact_stream_fps_before_launch(self) -> None:
+        state = manager._default_state()
+        state["dynamic_mangohud_fps_limit"] = True
+        state["refresh_rate_sync_mode"] = "exact"
+
+        scripts = manager._script_templates(state)
+        launch_script = scripts[Path(state["paths"]["launch_app_script"])]
+
+        self.assertIn(
+            f'resolved_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" "exact" fallback)"',
+            launch_script,
+        )
+        self.assertNotIn('stream_sync_since', launch_script)
+        self.assertIn('mangohud_config_value=""', launch_script)
+        self.assertNotIn('local mangohud_config_value=""', launch_script)
+
+    def test_set_resolution_script_uses_resolved_stream_fps(self) -> None:
+        state = manager._default_state()
+        state["refresh_rate_sync_mode"] = "exact"
+
+        scripts = manager._script_templates(state)
+        set_resolution_script = scripts[Path(state["paths"]["set_resolution_script"])]
+
+        self.assertIn(
+            'swaymsg "output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
+            set_resolution_script,
+        )
+        self.assertIn('target_width="${SUNSHINE_CLIENT_WIDTH:-}"', set_resolution_script)
+        self.assertIn('target_height="${SUNSHINE_CLIENT_HEIGHT:-}"', set_resolution_script)
+        self.assertIn('target_fps="${SUNSHINE_CLIENT_FPS:-}"', set_resolution_script)
+        self.assertIn('sync_since="$(python3 - <<\'PY\'', set_resolution_script)
+        self.assertIn('print(f"{time.time():.6f}")', set_resolution_script)
+        self.assertIn(
+            f'setsid "{state["paths"]["apply_exact_refresh_script"]}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &',
+            set_resolution_script,
+        )
+
+    def test_custom_mode_set_resolution_script_uses_fixed_target(self) -> None:
+        state = manager._default_state()
+        state["refresh_rate_sync_mode"] = "custom"
+        state["custom_display_mode"] = {
+            "width": 3440,
+            "height": 1440,
+            "refresh": 59.94,
+        }
+
+        scripts = manager._script_templates(state)
+        set_resolution_script = scripts[Path(state["paths"]["set_resolution_script"])]
+        resolver_script = scripts[Path(state["paths"]["resolve_stream_fps_script"])]
+
+        self.assertIn('target_width="3440"', set_resolution_script)
+        self.assertIn('target_height="1440"', set_resolution_script)
+        self.assertIn('target_fps="59.94"', set_resolution_script)
+        self.assertIn('if [ "$mode" = "exact" ]; then', set_resolution_script)
+        self.assertIn('custom_fps="59.94"', resolver_script)
+
+    def test_resolve_stream_fps_script_uses_exact_mode_when_requested(self) -> None:
+        state = manager._default_state()
+        state["refresh_rate_sync_mode"] = "exact"
+
+        scripts = manager._script_templates(state)
+        resolver_script = scripts[Path(state["paths"]["resolve_stream_fps_script"])]
+
+        self.assertIn('mode="exact"', resolver_script)
+        self.assertIn("Requested frame rate", resolver_script)
+        self.assertIn('print(f"{fps:.2f}")', resolver_script)
+        self.assertIn('attempts=100', resolver_script)
+        self.assertIn('if [ "$fallback_mode" = "none" ]; then', resolver_script)
+        self.assertIn('since_time="${3:-}"', resolver_script)
+        self.assertIn('journalctl --user -u "', resolver_script)
+        self.assertIn('line_epoch is not None and line_epoch >= since_epoch', resolver_script)
+
+    def test_apply_exact_refresh_script_waits_for_exact_fps(self) -> None:
+        state = manager._default_state()
+
+        scripts = manager._script_templates(state)
+        apply_exact_refresh_script = scripts[Path(state["paths"]["apply_exact_refresh_script"])]
+
+        self.assertIn('since_time="${3:-}"', apply_exact_refresh_script)
+        self.assertIn(
+            f'exact_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" exact none "$since_time")"',
+            apply_exact_refresh_script,
+        )
+        self.assertIn(
+            'swaymsg "output HEADLESS-1 mode ${width}x${height}@${exact_stream_fps}Hz"',
+            apply_exact_refresh_script,
+        )
 
     def test_input_bridge_script_includes_acl_user_helpers(self) -> None:
         state = manager._default_state()

@@ -41,6 +41,7 @@ UDEV_RULE_PATH = "/etc/udev/rules.d/85-lutristosunshine-sunshine-input.rules"
 FALLBACK_WIDTH = 1920
 FALLBACK_HEIGHT = 1080
 FALLBACK_FPS = 60
+REFRESH_RATE_SYNC_MODES = {"client", "exact", "custom"}
 SUNSHINE_FLATPAK_ID = "dev.lizardbyte.app.Sunshine"
 SUNSHINE_INPUT_VENDOR_ID = 0xBEEF
 SUNSHINE_INPUT_PRODUCT_ID = 0xDEAD
@@ -207,6 +208,49 @@ def _evdev_import_error() -> Optional[str]:
 
 def _safe_string(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _normalized_refresh_rate_sync_mode(value: Any) -> str:
+    normalized = _safe_string(value).lower()
+    if normalized in REFRESH_RATE_SYNC_MODES:
+        return normalized
+    return "client"
+
+
+def _normalized_custom_display_mode(value: Any) -> Dict[str, Any]:
+    default_mode = {
+        "width": FALLBACK_WIDTH,
+        "height": FALLBACK_HEIGHT,
+        "refresh": float(FALLBACK_FPS),
+    }
+    if not isinstance(value, dict):
+        return default_mode
+
+    try:
+        width = int(value.get("width", default_mode["width"]))
+    except (TypeError, ValueError):
+        width = default_mode["width"]
+    try:
+        height = int(value.get("height", default_mode["height"]))
+    except (TypeError, ValueError):
+        height = default_mode["height"]
+    try:
+        refresh = float(value.get("refresh", default_mode["refresh"]))
+    except (TypeError, ValueError):
+        refresh = default_mode["refresh"]
+
+    if width <= 0:
+        width = default_mode["width"]
+    if height <= 0:
+        height = default_mode["height"]
+    if refresh <= 0:
+        refresh = default_mode["refresh"]
+
+    return {
+        "width": width,
+        "height": height,
+        "refresh": refresh,
+    }
 
 
 def _preferred_event_symlink(event_path: str, directory: str) -> str:
@@ -469,6 +513,81 @@ def _input_bridge_status(state: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _active_launch_status(state: Dict[str, Any]) -> Dict[str, str]:
+    portal_active_path = Path(state["paths"]["portal_active_file"])
+    if not portal_active_path.exists():
+        return {}
+    try:
+        lines = portal_active_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    payload: Dict[str, str] = {}
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = _safe_string(key)
+        if key:
+            payload[key] = value.strip()
+    return payload
+
+
+def _format_refresh_rate_hz(refresh_value: Any) -> str:
+    try:
+        refresh = float(refresh_value)
+    except (TypeError, ValueError):
+        return ""
+    if refresh <= 0:
+        return ""
+    if refresh > 1000:
+        refresh /= 1000.0
+    nearest = round(refresh)
+    if abs(refresh - nearest) < 0.01:
+        return str(int(nearest))
+    return f"{refresh:.2f}"
+
+
+def _current_headless_mode(state: Dict[str, Any], sunshine_active: bool, sway_active: bool) -> str:
+    if not state.get("enabled") or not sunshine_active or not sway_active:
+        return ""
+    sway_socket = _safe_string(state.get("sway_socket"))
+    if not sway_socket or not Path(sway_socket).exists():
+        return ""
+    result = _run(
+        ["swaymsg", "-s", sway_socket, "-t", "get_outputs", "-r"],
+        check=False,
+    )
+    if result.returncode != 0 or not _safe_string(result.stdout):
+        return ""
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, list):
+        return ""
+    for output in payload:
+        if not isinstance(output, dict) or _safe_string(output.get("name")) != "HEADLESS-1":
+            continue
+        current_mode = output.get("current_mode")
+        if not isinstance(current_mode, dict):
+            return ""
+        width = current_mode.get("width")
+        height = current_mode.get("height")
+        refresh_hz = _format_refresh_rate_hz(current_mode.get("refresh"))
+        if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0 or not refresh_hz:
+            return ""
+        return f"{width}x{height} @ {refresh_hz} Hz"
+    return ""
+
+
+def _custom_display_mode_string(value: Any) -> str:
+    mode = _normalized_custom_display_mode(value)
+    refresh_hz = _format_refresh_rate_hz(mode["refresh"])
+    if not refresh_hz:
+        return ""
+    return f"{mode['width']}x{mode['height']} @ {refresh_hz} Hz"
+
+
 def _state_paths() -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
     override_dir = systemd_user_dir / f"{_sunshine_unit()}.d"
@@ -484,6 +603,8 @@ def _state_paths() -> Dict[str, str]:
         "audio_cleanup_script": str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
         "audio_guard_script": str(BIN_ROOT / "lutristosunshine-guard-audio-defaults.sh"),
         "launch_app_script": str(BIN_ROOT / "lutristosunshine-launch-app.sh"),
+        "resolve_stream_fps_script": str(BIN_ROOT / "lutristosunshine-resolve-stream-fps.sh"),
+        "apply_exact_refresh_script": str(BIN_ROOT / "lutristosunshine-apply-exact-refresh.sh"),
         "headless_prep_script": str(BIN_ROOT / "lutristosunshine-run-headless-prep.sh"),
         "set_resolution_script": str(BIN_ROOT / "lutristosunshine-set-resolution.sh"),
         "reset_resolution_script": str(BIN_ROOT / "lutristosunshine-reset-resolution.sh"),
@@ -511,6 +632,8 @@ def _default_state() -> Dict[str, Any]:
     return {
         "enabled": False,
         "dynamic_mangohud_fps_limit": False,
+        "refresh_rate_sync_mode": "client",
+        "custom_display_mode": _normalized_custom_display_mode(None),
         "profile": PROFILE_NAME,
         "audio_sink": "lts-sunshine-stereo",
         "host_audio_defaults": {"sink": "", "source": ""},
@@ -531,6 +654,12 @@ def load_state() -> Dict[str, Any]:
         return _default_state()
     state = _default_state()
     state.update(data)
+    state["refresh_rate_sync_mode"] = _normalized_refresh_rate_sync_mode(
+        state.get("refresh_rate_sync_mode")
+    )
+    state["custom_display_mode"] = _normalized_custom_display_mode(
+        state.get("custom_display_mode")
+    )
     state["exclusive_input_devices"] = _normalized_exclusive_input_state(
         state.get("exclusive_input_devices")
     )
@@ -543,6 +672,9 @@ def save_state(state: Dict[str, Any]) -> None:
     state["exclusive_input_devices"] = _normalized_exclusive_input_state(
         state.get("exclusive_input_devices")
     )
+    state["custom_display_mode"] = _normalized_custom_display_mode(
+        state.get("custom_display_mode")
+    )
     STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
@@ -554,9 +686,35 @@ def dynamic_mangohud_fps_limit_enabled() -> bool:
     return bool(load_state().get("dynamic_mangohud_fps_limit"))
 
 
+def refresh_rate_sync_mode() -> str:
+    return _normalized_refresh_rate_sync_mode(load_state().get("refresh_rate_sync_mode"))
+
+
+def custom_display_mode() -> Dict[str, Any]:
+    return _normalized_custom_display_mode(load_state().get("custom_display_mode"))
+
+
 def set_dynamic_mangohud_fps_limit(enabled: bool) -> Dict[str, Any]:
     state = load_state()
     state["dynamic_mangohud_fps_limit"] = bool(enabled)
+    return refresh_managed_files(state)
+
+
+def set_refresh_rate_sync_mode(mode: str) -> Dict[str, Any]:
+    state = load_state()
+    state["refresh_rate_sync_mode"] = _normalized_refresh_rate_sync_mode(mode)
+    return refresh_managed_files(state)
+
+
+def set_custom_display_mode(width: int, height: int, refresh: float) -> Dict[str, Any]:
+    state = load_state()
+    state["custom_display_mode"] = _normalized_custom_display_mode(
+        {
+            "width": width,
+            "height": height,
+            "refresh": refresh,
+        }
+    )
     return refresh_managed_files(state)
 
 
@@ -2698,18 +2856,26 @@ if __name__ == "__main__":
 def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
     sunshine_command = _sunshine_binary() or "sunshine"
+    sunshine_unit = _sunshine_unit()
     audio_sink = state["audio_sink"]
+    refresh_rate_sync_mode = _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode"))
+    custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
+    custom_width = custom_mode["width"]
+    custom_height = custom_mode["height"]
+    custom_refresh = _format_refresh_rate_hz(custom_mode["refresh"]) or str(FALLBACK_FPS)
     managed_audio_sinks = _managed_audio_sink_names(state)
     managed_audio_sources = _managed_audio_source_names(state)
     mangohud_fps_limit_block = ""
     mangohud_env_append_block = ""
     if state.get("dynamic_mangohud_fps_limit"):
         mangohud_fps_limit_block = """
-    local mangohud_config_value=""
-    if [[ "${SUNSHINE_CLIENT_FPS:-}" =~ ^[0-9]+$ ]]; then
-        mangohud_config_value="read_cfg,fps_limit=${SUNSHINE_CLIENT_FPS}"
+    mangohud_config_value=""
+    local resolved_stream_fps
+    resolved_stream_fps="$("{resolve_stream_fps_script}" "{refresh_rate_sync_mode}" fallback)"
+    if [ -n "$resolved_stream_fps" ]; then
+        mangohud_config_value="read_cfg,fps_limit=$resolved_stream_fps"
     fi
-"""
+""".replace("{resolve_stream_fps_script}", paths["resolve_stream_fps_script"]).replace("{refresh_rate_sync_mode}", refresh_rate_sync_mode)
         mangohud_env_append_block = """
     if [ -n "$mangohud_config_value" ]; then
         launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
@@ -3600,6 +3766,7 @@ tracked_pids_value=""
 tracked_groups_value=""
 last_snapshot_value=""
 last_tracked_pids_value=""
+mangohud_config_value=""
 
 mkdir -p "$(dirname "$launch_log_file")"
 : > "$launch_log_file"
@@ -3829,6 +3996,7 @@ PY
 write_active_state() {{
     local phase="${{1:-running}}"
     local tracked_count="0"
+    local mangohud_config_value_field="${{mangohud_config_value:-}}"
     if [ -n "$tracked_pids_value" ]; then
         tracked_count="$(wc -w <<<"$tracked_pids_value" | awk '{{print $1}}')"
     fi
@@ -3839,6 +4007,7 @@ launch_id=$launch_id
 phase=$phase
 tracked_count=$tracked_count
 command=$decoded_command
+mangohud_config=$mangohud_config_value_field
 launch_log=$launch_log_file
 EOF
 }}
@@ -4188,6 +4357,142 @@ rm -f "$host_env_file" "$systemd_env_dump"
 log_debug "wrapper final exit status=$child_status"
 exit "$child_status"
 """,
+        Path(paths["resolve_stream_fps_script"]): f"""#!/bin/bash
+set -euo pipefail
+
+requested_fps="${{SUNSHINE_CLIENT_FPS:-}}"
+mode_override="${{1:-}}"
+fallback_mode="${{2:-fallback}}"
+since_time="${{3:-}}"
+mode="{refresh_rate_sync_mode}"
+custom_fps="{custom_refresh}"
+
+if [ -n "$mode_override" ]; then
+    mode="$mode_override"
+fi
+
+if [ "$mode" = "custom" ]; then
+    printf '%s\\n' "$custom_fps"
+    exit 0
+fi
+
+if [ -z "$requested_fps" ]; then
+    exit 0
+fi
+
+if [ "$mode" != "exact" ]; then
+    printf '%s\\n' "$requested_fps"
+    exit 0
+fi
+
+if ! command -v journalctl >/dev/null 2>&1; then
+    printf '%s\\n' "$requested_fps"
+    exit 0
+fi
+
+attempts=100
+while [ "$attempts" -gt 0 ]; do
+    journal_output_file="$(mktemp)"
+    journalctl --user -u "{sunshine_unit}" -n 200 --no-pager -o cat >"$journal_output_file" 2>/dev/null || true
+    resolved_fps="$(python3 - "$requested_fps" "$journal_output_file" "$since_time" <<'PY'
+from datetime import datetime
+import re
+import sys
+
+journal_output_path = sys.argv[2]
+since_time = sys.argv[3].strip()
+since_epoch = None
+if since_time:
+    try:
+        since_epoch = float(since_time)
+    except ValueError:
+        since_epoch = None
+
+timestamp_pattern = re.compile(r"^\\[(\\d{{4}}-\\d{{2}}-\\d{{2}} \\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?)\\]:")
+
+def parse_epoch(line: str):
+    match = timestamp_pattern.match(line)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S.%f").timestamp()
+    except ValueError:
+        try:
+            return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+        except ValueError:
+            return None
+
+with open(journal_output_path, "r", encoding="utf-8", errors="replace") as handle:
+    raw_lines = [line.strip() for line in handle.read().splitlines() if line.strip()]
+
+lines = []
+for line in raw_lines:
+    if since_epoch is None:
+        lines.append(line)
+        continue
+    line_epoch = parse_epoch(line)
+    if line_epoch is not None and line_epoch >= since_epoch:
+        lines.append(line)
+
+connect_index = -1
+for index, line in enumerate(lines):
+    if "CLIENT CONNECTED" in line:
+        connect_index = index
+
+pattern = re.compile(r"Requested frame rate \\[(\\d+)/(\\d+)(?:, approx\\. [^\\]]+)?\\]")
+search_lines = lines[connect_index + 1 :] if connect_index >= 0 else lines
+for line in reversed(search_lines):
+    match = pattern.search(line)
+    if not match:
+        continue
+    numerator = int(match.group(1))
+    denominator = int(match.group(2))
+    if denominator <= 0:
+        break
+    fps = numerator / denominator
+    nearest = round(fps)
+    if abs(fps - nearest) < 0.005:
+        print(str(int(nearest)))
+    else:
+        print(f"{{fps:.2f}}")
+    raise SystemExit(0)
+
+print("")
+PY
+)"
+    rm -f "$journal_output_file"
+    if [ -n "$resolved_fps" ]; then
+        printf '%s\\n' "$resolved_fps"
+        exit 0
+    fi
+    attempts=$((attempts - 1))
+    sleep 0.1
+done
+
+if [ "$fallback_mode" = "none" ]; then
+    exit 0
+fi
+
+printf '%s\\n' "$requested_fps"
+""".replace("{custom_refresh}", custom_refresh),
+        Path(paths["apply_exact_refresh_script"]): f"""#!/bin/bash
+set -euo pipefail
+
+if [ "${{#}}" -lt 2 ]; then
+    exit 0
+fi
+
+width="${{1}}"
+height="${{2}}"
+since_time="${{3:-}}"
+
+exact_stream_fps="$("{paths['resolve_stream_fps_script']}" exact none "$since_time")"
+if [ -z "$exact_stream_fps" ]; then
+    exit 0
+fi
+
+SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{width}}x${{height}}@${{exact_stream_fps}}Hz" >/dev/null 2>&1 || true
+""",
         Path(paths["set_resolution_script"]): f"""#!/bin/bash
 set -euo pipefail
 
@@ -4195,13 +4500,30 @@ if [ ! -S "{state['sway_socket']}" ]; then
     exit 0
 fi
 
-if [ -z "${{SUNSHINE_CLIENT_WIDTH:-}}" ] || [ -z "${{SUNSHINE_CLIENT_HEIGHT:-}}" ] || [ -z "${{SUNSHINE_CLIENT_FPS:-}}" ]; then
+mode="{refresh_rate_sync_mode}"
+target_width="${{SUNSHINE_CLIENT_WIDTH:-}}"
+target_height="${{SUNSHINE_CLIENT_HEIGHT:-}}"
+target_fps="${{SUNSHINE_CLIENT_FPS:-}}"
+
+if [ "$mode" = "custom" ]; then
+    target_width="{custom_width}"
+    target_height="{custom_height}"
+    target_fps="{custom_refresh}"
+elif [ -z "$target_width" ] || [ -z "$target_height" ] || [ -z "$target_fps" ]; then
     exit 0
 fi
 
-SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{SUNSHINE_CLIENT_WIDTH}}x${{SUNSHINE_CLIENT_HEIGHT}}@${{SUNSHINE_CLIENT_FPS}}Hz" >/dev/null 2>&1 || true
+sync_since="$(python3 - <<'PY'
+import time
+print(f"{{time.time():.6f}}")
+PY
+)"
+SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{target_width}}x${{target_height}}@${{target_fps}}Hz" >/dev/null 2>&1 || true
+if [ "$mode" = "exact" ]; then
+    setsid "{paths['apply_exact_refresh_script']}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &
+fi
 # Removed sleep after resolution change for faster startup
-""",
+""".replace("{custom_width}", str(custom_width)).replace("{custom_height}", str(custom_height)).replace("{custom_refresh}", custom_refresh),
         Path(paths["reset_resolution_script"]): f"""#!/bin/bash
 set -euo pipefail
 
@@ -4580,6 +4902,8 @@ def stop_virtual_display() -> int:
 def virtual_display_snapshot() -> Dict[str, Any]:
     state = load_state()
     configured = bool(state.get("enabled"))
+    custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
+    active_launch_status = _active_launch_status(state)
     sunshine_active = _sunshine_service_active() if configured else False
     host_session = _host_session_name()
     input_isolation_mode = _input_isolation_mode()
@@ -4593,6 +4917,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         and Path(state["sway_socket"]).exists()
         and WAYLAND_DISPLAY_PATH.exists()
     )
+    current_headless_mode = _current_headless_mode(state, sunshine_active, sway_active)
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
     audio_guard_state = "active" if sunshine_active and Path(state["paths"]["audio_module_file"]).exists() else "inactive"
     kwin_status = _kwin_input_isolation_status(state) if configured else _empty_kwin_input_isolation_status()
@@ -4647,6 +4972,9 @@ def virtual_display_snapshot() -> Dict[str, Any]:
     snapshot = {
         "configured": configured,
         "dynamic_mangohud_fps_limit": bool(state.get("dynamic_mangohud_fps_limit")),
+        "refresh_rate_sync_mode": _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode")),
+        "custom_display_mode": custom_mode,
+        "custom_display_mode_summary": _custom_display_mode_string(custom_mode),
         "profile": state["profile"],
         "host_session": host_session,
         "input_isolation_mode": input_isolation_mode,
@@ -4661,6 +4989,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
             "source": _safe_string(host_defaults.get("source")),
         },
         "wayland_display": wayland_display,
+        "current_headless_mode": current_headless_mode,
         "sway_socket": state["sway_socket"],
         "udev_rule_path": state["udev_rule_path"],
         "udev_rule_present": Path(state["udev_rule_path"]).exists(),
@@ -4673,6 +5002,7 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "sunshine_input_devices": sunshine_input_devices,
         "sunshine_input_device_count": len(sunshine_input_devices),
         "portal_handoff_active": portal_handoff_active,
+        "current_mangohud_config": _safe_string(active_launch_status.get("mangohud_config")),
         "last_launch_log_file": state["paths"]["last_launch_log_file"],
         "controllers": controller_rows,
         "controller_count": len(selections),
@@ -4875,8 +5205,13 @@ def virtual_display_status() -> int:
         "Dynamic MangoHud FPS limit: "
         f"{'enabled' if snapshot['dynamic_mangohud_fps_limit'] else 'disabled'}"
     )
+    print(f"MangoHud env value: {snapshot['current_mangohud_config'] or 'not active'}")
+    print(f"Refresh rate sync mode: {snapshot['refresh_rate_sync_mode']}")
+    if snapshot["refresh_rate_sync_mode"] == "custom":
+        print(f"Custom display target: {snapshot['custom_display_mode_summary'] or 'not configured'}")
     print(f"Audio sink: {snapshot['audio_sink']}")
     print(f"Headless display: {snapshot['wayland_display'] or 'not detected'}")
+    print(f"Current headless mode: {snapshot['current_headless_mode'] or 'not detected'}")
     if snapshot["input_isolation_mode"] == "kwin-runtime-disable":
         print(f"Host Sunshine inputs: {snapshot['sunshine_input_device_count']}")
         if snapshot["kwin_isolation_error"]:

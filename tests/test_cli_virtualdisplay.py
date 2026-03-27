@@ -25,6 +25,25 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(args.virtualdisplay_action, "mangohud-fps-limit")
         self.assertEqual(args.mangohud_fps_limit_action, "enable")
 
+    def test_parse_virtualdisplay_refresh_rate_mode_exact_command(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "refresh-rate-mode", "exact"])
+
+        self.assertEqual(args.command, "virtualdisplay")
+        self.assertEqual(args.virtualdisplay_action, "refresh-rate-mode")
+        self.assertEqual(args.mode, "exact")
+
+    def test_parse_virtualdisplay_refresh_rate_mode_custom_command(self) -> None:
+        args = lutristosunshine.parse_args(
+            ["virtualdisplay", "refresh-rate-mode", "custom", "--width", "3440", "--height", "1440", "--refresh", "59.94"]
+        )
+
+        self.assertEqual(args.command, "virtualdisplay")
+        self.assertEqual(args.virtualdisplay_action, "refresh-rate-mode")
+        self.assertEqual(args.mode, "custom")
+        self.assertEqual(args.width, 3440)
+        self.assertEqual(args.height, 1440)
+        self.assertEqual(args.refresh, 59.94)
+
     def test_virtualdisplay_help_describes_reset_clearly(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -145,6 +164,65 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(calls, [True])
         self.assertIn("Dynamic MangoHud FPS limit enabled", rendered)
 
+    def test_handle_virtualdisplay_refresh_rate_mode_exact_updates_setting(self) -> None:
+        args = lutristosunshine.parse_args(["virtualdisplay", "refresh-rate-mode", "exact"])
+        calls = []
+
+        original_refresh_rate_sync_mode = lutristosunshine.refresh_rate_sync_mode
+        original_set_refresh_rate_sync_mode = lutristosunshine.set_refresh_rate_sync_mode
+        try:
+            lutristosunshine.refresh_rate_sync_mode = lambda: "client"
+            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(mode) or {
+                "refresh_rate_sync_mode": mode
+            }
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.refresh_rate_sync_mode = original_refresh_rate_sync_mode
+            lutristosunshine.set_refresh_rate_sync_mode = original_set_refresh_rate_sync_mode
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["exact"])
+        self.assertIn("Refresh rate sync mode set to client's refresh rate", rendered)
+
+    def test_handle_virtualdisplay_refresh_rate_mode_custom_updates_setting(self) -> None:
+        args = lutristosunshine.parse_args(
+            ["virtualdisplay", "refresh-rate-mode", "custom", "--width", "3440", "--height", "1440", "--refresh", "59.94"]
+        )
+        calls = []
+
+        original_refresh_rate_sync_mode = lutristosunshine.refresh_rate_sync_mode
+        original_set_refresh_rate_sync_mode = lutristosunshine.set_refresh_rate_sync_mode
+        original_set_custom_display_mode = lutristosunshine.set_custom_display_mode
+        original_custom_display_mode = lutristosunshine.custom_display_mode
+        try:
+            lutristosunshine.refresh_rate_sync_mode = lambda: "client"
+            lutristosunshine.set_custom_display_mode = lambda width, height, refresh: calls.append(
+                ("custom", width, height, refresh)
+            ) or {"custom_display_mode": {"width": width, "height": height, "refresh": refresh}}
+            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(("mode", mode)) or {
+                "refresh_rate_sync_mode": mode
+            }
+            lutristosunshine.custom_display_mode = lambda: {"width": 3440, "height": 1440, "refresh": 59.94}
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = lutristosunshine.handle_virtualdisplay_command(args)
+        finally:
+            lutristosunshine.refresh_rate_sync_mode = original_refresh_rate_sync_mode
+            lutristosunshine.set_refresh_rate_sync_mode = original_set_refresh_rate_sync_mode
+            lutristosunshine.set_custom_display_mode = original_set_custom_display_mode
+            lutristosunshine.custom_display_mode = original_custom_display_mode
+
+        rendered = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [("custom", 3440, 1440, 59.94), ("mode", "custom")])
+        self.assertIn("Refresh rate sync mode set to custom fixed display mode", rendered)
+        self.assertIn("Custom display target: 3440x1440 @ 59.94 Hz", rendered)
+
     def test_handle_virtualdisplay_without_subcommand_opens_hub(self) -> None:
         args = lutristosunshine.parse_args(["virtualdisplay"])
 
@@ -155,6 +233,10 @@ class VirtualDisplayCliTests(unittest.TestCase):
             lutristosunshine.virtual_display_snapshot = lambda: {
                 "configured": False,
                 "dynamic_mangohud_fps_limit": False,
+                "current_mangohud_config": "",
+                "refresh_rate_sync_mode": "client",
+                "host_session": "unknown",
+                "input_isolation_mode": "permissions-only",
                 "sunshine_active": False,
                 "sway_active": False,
                 "bridge_state": "inactive",
@@ -162,6 +244,7 @@ class VirtualDisplayCliTests(unittest.TestCase):
                 "portal_handoff_active": False,
                 "dependencies_missing": [],
                 "wayland_display": "",
+                "current_headless_mode": "",
                 "controller_detection_error": None,
                 "controller_count": 0,
                 "controllers": [],
@@ -187,6 +270,10 @@ class VirtualDisplayCliTests(unittest.TestCase):
             lutristosunshine.virtual_display_snapshot = lambda: {
                 "configured": True,
                 "dynamic_mangohud_fps_limit": True,
+                "current_mangohud_config": "read_cfg,fps_limit=59.94",
+                "refresh_rate_sync_mode": "exact",
+                "host_session": "plasma",
+                "input_isolation_mode": "kwin-runtime-disable",
                 "sunshine_active": True,
                 "sway_active": False,
                 "bridge_state": "starting",
@@ -194,6 +281,13 @@ class VirtualDisplayCliTests(unittest.TestCase):
                 "portal_handoff_active": False,
                 "dependencies_missing": [],
                 "wayland_display": "",
+                "current_headless_mode": "2560x1440 @ 120 Hz",
+                "kwin_isolation_error": "",
+                "kwin_isolation_state": "inactive",
+                "kwin_isolation_devices": [],
+                "kwin_isolation_seen_device_count": 0,
+                "sunshine_input_device_count": 0,
+                "kwin_isolation_failed_devices": [],
                 "controller_detection_error": None,
                 "controller_count": 1,
                 "controllers": [
@@ -218,6 +312,9 @@ class VirtualDisplayCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("Virtual display", rendered)
         self.assertIn("Dynamic MangoHud FPS limit: [ENABLED]", rendered)
+        self.assertIn("MangoHud env value: read_cfg,fps_limit=59.94", rendered)
+        self.assertIn("Refresh rate sync mode: client's refresh rate", rendered)
+        self.assertIn("Current headless mode: 2560x1440 @ 120 Hz", rendered)
         self.assertIn("Dependencies: [OK]", rendered)
         self.assertIn("Wireless Controller [DETECTED]", rendered)
         self.assertNotIn("\033[", rendered)

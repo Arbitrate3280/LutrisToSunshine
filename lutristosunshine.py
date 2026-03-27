@@ -30,11 +30,15 @@ from launchers.retroarch import detect_retroarch_installation, list_retroarch_ga
 from launchers.eden import detect_eden_installation, list_eden_games
 from virtualdisplay.manager import (
     configure_exclusive_input_devices,
+    custom_display_mode,
     dynamic_mangohud_fps_limit_enabled,
     is_enabled as virtual_display_is_enabled,
     refresh_managed_files,
+    refresh_rate_sync_mode,
     remove_virtual_display,
+    set_custom_display_mode,
     set_dynamic_mangohud_fps_limit,
+    set_refresh_rate_sync_mode,
     setup_virtual_display,
     start_virtual_display,
     stop_virtual_display,
@@ -62,6 +66,26 @@ def _format_status_value(value: str) -> str:
 
 def _format_kv(label: str, value: str) -> str:
     return f"{accent(label)} {value}"
+
+
+def _refresh_rate_sync_mode_summary(mode: str) -> str:
+    if mode == "exact":
+        return "client's refresh rate"
+    if mode == "custom":
+        return "custom fixed display mode"
+    return "follow Moonlight requested FPS"
+
+
+def _custom_display_mode_summary(mode: dict) -> str:
+    width = int(mode.get("width", 0) or 0)
+    height = int(mode.get("height", 0) or 0)
+    refresh = float(mode.get("refresh", 0) or 0)
+    if refresh <= 0:
+        refresh_text = "unknown"
+    else:
+        nearest = round(refresh)
+        refresh_text = str(int(nearest)) if abs(refresh - nearest) < 0.01 else f"{refresh:.2f}"
+    return f"{width}x{height} @ {refresh_text} Hz"
 
 
 def parse_args(argv=None):
@@ -113,6 +137,30 @@ def parse_args(argv=None):
     mangohud_subparsers = mangohud_parser.add_subparsers(dest="mangohud_fps_limit_action")
     mangohud_subparsers.add_parser("enable", help="Enable the dynamic MangoHud FPS limit.")
     mangohud_subparsers.add_parser("disable", help="Disable the dynamic MangoHud FPS limit.")
+    refresh_rate_parser = virtualdisplay_subparsers.add_parser(
+        "refresh-rate-mode",
+        help="Choose whether virtual-display refresh follows Moonlight's requested FPS, the client's refresh rate, or a custom fixed mode.",
+    )
+    refresh_rate_parser.add_argument(
+        "mode",
+        choices=["client", "exact", "custom"],
+        help="Use 'client' to follow Moonlight's requested FPS, 'exact' to use the client's refresh rate, or 'custom' for a fixed display mode.",
+    )
+    refresh_rate_parser.add_argument(
+        "--width",
+        type=int,
+        help="Custom fixed width in pixels. Used with mode=custom.",
+    )
+    refresh_rate_parser.add_argument(
+        "--height",
+        type=int,
+        help="Custom fixed height in pixels. Used with mode=custom.",
+    )
+    refresh_rate_parser.add_argument(
+        "--refresh",
+        type=float,
+        help="Custom fixed refresh rate in Hz. Used with mode=custom.",
+    )
     virtualdisplay_subparsers.add_parser("stop", help="Stop the managed headless Sway and Sunshine services.")
     rumble_parser = virtualdisplay_subparsers.add_parser(
         "rumble",
@@ -228,11 +276,25 @@ def handle_virtualdisplay_command(args) -> int:
             )
         )
         mangohud_status = (
-            f"{badge('ENABLED', 'success')} wrapped launches that already use MangoHud follow the client FPS"
+            f"{badge('ENABLED', 'success')} wrapped launches that already use MangoHud follow the selected refresh source"
             if snapshot["dynamic_mangohud_fps_limit"]
             else f"{badge('DISABLED', 'info')} wrapped launches keep their normal MangoHud FPS behavior"
         )
         print(_format_kv("Dynamic MangoHud FPS limit:", mangohud_status))
+        print(
+            _format_kv(
+                "MangoHud env value:",
+                snapshot["current_mangohud_config"] or state_text("not active", "warning"),
+            )
+        )
+        print(
+            _format_kv(
+                "Refresh rate sync mode:",
+                _refresh_rate_sync_mode_summary(snapshot["refresh_rate_sync_mode"]),
+            )
+        )
+        if snapshot["refresh_rate_sync_mode"] == "custom":
+            print(_format_kv("Custom display target:", _custom_display_mode_summary(snapshot["custom_display_mode"])))
         if snapshot["dependencies_missing"]:
             print(
                 _format_kv(
@@ -243,6 +305,12 @@ def handle_virtualdisplay_command(args) -> int:
         else:
             print(_format_kv("Dependencies:", f"{badge('OK', 'success')} all required commands available"))
         print(_format_kv("Headless display:", snapshot['wayland_display'] or state_text("not detected", "warning")))
+        print(
+            _format_kv(
+                "Current headless mode:",
+                snapshot["current_headless_mode"] or state_text("not detected", "warning"),
+            )
+        )
         if snapshot["controller_detection_error"]:
             print(
                 _format_kv(
@@ -379,6 +447,63 @@ def handle_virtualdisplay_command(args) -> int:
         print("This only affects wrapped launches that already use MangoHud.")
         return 0
 
+    def update_refresh_rate_mode(mode: str) -> int:
+        normalized_mode = mode if mode in {"exact", "custom"} else "client"
+        previous = refresh_rate_sync_mode()
+        set_refresh_rate_sync_mode(normalized_mode)
+        summary = _refresh_rate_sync_mode_summary(normalized_mode)
+        if previous == normalized_mode:
+            print(f"Refresh rate sync mode is already set to {summary} for virtual-display launches.")
+        else:
+            print(f"Refresh rate sync mode set to {summary} for virtual-display launches.")
+        if normalized_mode == "custom":
+            print(f"Custom display target: {_custom_display_mode_summary(custom_display_mode())}")
+        print("This controls both the virtual-display output mode and the dynamic MangoHud FPS limit source.")
+        return 0
+
+    def read_positive_int(prompt: str, current_value: int) -> int:
+        return get_user_input(
+            prompt,
+            lambda value: current_value if value.strip() == "" else _validate_positive_int(value),
+            "Enter a whole number greater than 0.",
+        )
+
+    def read_positive_refresh(prompt: str, current_value: float) -> float:
+        return get_user_input(
+            prompt,
+            lambda value: current_value if value.strip() == "" else _validate_positive_refresh(value),
+            "Enter a refresh rate greater than 0, for example 59.94 or 120.",
+        )
+
+    def _validate_positive_int(value: str) -> int:
+        parsed = int(value.strip())
+        if parsed <= 0:
+            raise ValueError()
+        return parsed
+
+    def _validate_positive_refresh(value: str) -> float:
+        parsed = float(value.strip())
+        if parsed <= 0:
+            raise ValueError()
+        return parsed
+
+    def configure_custom_display_mode(interactive: bool) -> int:
+        current_mode = custom_display_mode()
+        width = args.width if getattr(args, "width", None) is not None else current_mode["width"]
+        height = args.height if getattr(args, "height", None) is not None else current_mode["height"]
+        refresh = args.refresh if getattr(args, "refresh", None) is not None else current_mode["refresh"]
+
+        if interactive:
+            print("")
+            print("Custom fixed display mode")
+            print(f"Current target: {_custom_display_mode_summary(current_mode)}")
+            width = read_positive_int(f"Width [{current_mode['width']}]: ", current_mode["width"])
+            height = read_positive_int(f"Height [{current_mode['height']}]: ", current_mode["height"])
+            refresh = read_positive_refresh(f"Refresh Hz [{current_mode['refresh']:.2f}]: ", current_mode["refresh"])
+
+        set_custom_display_mode(width, height, refresh)
+        return update_refresh_rate_mode("custom")
+
     def run_hub() -> int:
         while True:
             print("")
@@ -393,8 +518,9 @@ def handle_virtualdisplay_command(args) -> int:
             print(f"{accent('6.')} Stop virtual display")
             print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
             print(f"{accent('8.')} Toggle dynamic MangoHud FPS limit")
+            print(f"{accent('9.')} Configure display sync mode")
             print(f"{muted('0.')} Exit")
-            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7", "8"])
+            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
             if choice == "0":
                 return 0
             if choice == "1":
@@ -441,6 +567,26 @@ def handle_virtualdisplay_command(args) -> int:
                     result = update_mangohud_fps_limit(enabling)
                     if result != 0:
                         return result
+            elif choice == "9":
+                print("")
+                print("Display sync mode")
+                print("1. Follow Moonlight's requested resolution and FPS")
+                print("2. Use the client's refresh rate")
+                print(f"3. Use a custom fixed mode ({_custom_display_mode_summary(custom_display_mode())})")
+                print("0. Cancel")
+                mode_choice = get_menu_choice("Choose a mode: ", ["0", "1", "2", "3"])
+                if mode_choice == "1":
+                    result = update_refresh_rate_mode("client")
+                    if result != 0:
+                        return result
+                elif mode_choice == "2":
+                    result = update_refresh_rate_mode("exact")
+                    if result != 0:
+                        return result
+                elif mode_choice == "3":
+                    result = configure_custom_display_mode(interactive=True)
+                    if result != 0:
+                        return result
 
     action = args.virtualdisplay_action
     if action is None:
@@ -464,6 +610,18 @@ def handle_virtualdisplay_command(args) -> int:
             return update_mangohud_fps_limit(False)
         print("Choose 'enable' or 'disable' for 'virtualdisplay mangohud-fps-limit'.")
         return 1
+    if action == "refresh-rate-mode":
+        if args.mode == "custom":
+            supplied = [getattr(args, "width", None), getattr(args, "height", None), getattr(args, "refresh", None)]
+            if any(value is not None for value in supplied) and not all(value is not None for value in supplied):
+                print("Provide --width, --height, and --refresh together when choosing custom mode.")
+                return 1
+            if all(value is not None for value in supplied):
+                if args.width <= 0 or args.height <= 0 or args.refresh <= 0:
+                    print("Custom width, height, and refresh must all be greater than 0.")
+                    return 1
+                set_custom_display_mode(args.width, args.height, args.refresh)
+        return update_refresh_rate_mode(args.mode)
     if action == "stop":
         return stop_virtual_display()
     if action == "rumble":
