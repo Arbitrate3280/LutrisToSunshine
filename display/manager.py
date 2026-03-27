@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import shlex
 import shutil
 import stat
@@ -29,10 +30,6 @@ DISPLAY_STATE_PATH = DISPLAY_ROOT / "display.json"
 LEGACY_STATE_PATH = LEGACY_DISPLAY_ROOT / f"{LEGACY_DISPLAY_DIRNAME}.json"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
 FALLBACK_SUNSHINE_UNIT = "sunshine.service"
-LEGACY_UNIT_PREFIX = f"lutristosunshine-{LEGACY_DISPLAY_DIRNAME}"
-LEGACY_SUNSHINE_UNIT = f"{LEGACY_UNIT_PREFIX}-sunshine.service"
-LEGACY_INPUT_BRIDGE_UNIT = f"{LEGACY_UNIT_PREFIX}-inputbridge.service"
-LEGACY_AUDIO_GUARD_UNIT = f"{LEGACY_UNIT_PREFIX}-audioguard.service"
 FLATPAK_PORTAL_UNIT = "flatpak-portal.service"
 DISPLAY_SOCKET_PATH = f"/run/user/{os.getuid()}/lutristosunshine-display.sock"
 WAYLAND_DISPLAY_PATH = PROFILE_ROOT / "wayland-display"
@@ -595,8 +592,6 @@ def _custom_display_mode_string(value: Any) -> str:
 def _state_paths() -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
     override_dir = systemd_user_dir / f"{_sunshine_unit()}.d"
-    legacy_start_script_name = f"lutristosunshine-start-{LEGACY_DISPLAY_DIRNAME}-sunshine.sh"
-    legacy_wrapper_script_name = f"lutristosunshine-run-{LEGACY_DISPLAY_DIRNAME}-service.sh"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
@@ -605,8 +600,6 @@ def _state_paths() -> Dict[str, str]:
         "sway_start_script": str(BIN_ROOT / "lutristosunshine-start-headless-sway.sh"),
         "sunshine_start_script": str(BIN_ROOT / "lutristosunshine-start-display-sunshine.sh"),
         "sunshine_wrapper_script": str(BIN_ROOT / "lutristosunshine-run-display-service.sh"),
-        "legacy_sunshine_start_script": str(BIN_ROOT / legacy_start_script_name),
-        "legacy_sunshine_wrapper_script": str(BIN_ROOT / legacy_wrapper_script_name),
         "audio_create_script": str(BIN_ROOT / "lutristosunshine-create-audio-sink.sh"),
         "audio_cleanup_script": str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
         "audio_guard_script": str(BIN_ROOT / "lutristosunshine-guard-audio-defaults.sh"),
@@ -625,9 +618,6 @@ def _state_paths() -> Dict[str, str]:
         "systemd_user_dir": str(systemd_user_dir),
         "sunshine_override_dir": str(override_dir),
         "sunshine_override": str(override_dir / "override.conf"),
-        "legacy_sunshine_unit": str(systemd_user_dir / LEGACY_SUNSHINE_UNIT),
-        "legacy_input_bridge_unit": str(systemd_user_dir / LEGACY_INPUT_BRIDGE_UNIT),
-        "legacy_audio_guard_unit": str(systemd_user_dir / LEGACY_AUDIO_GUARD_UNIT),
         "input_bridge_script": str(BIN_ROOT / "lutristosunshine-input-bridge.py"),
         "kwin_input_isolation_script": str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
         "sunshine_conf": str(detect_sunshine_config_root() / "sunshine.conf"),
@@ -642,6 +632,8 @@ def _default_state() -> Dict[str, Any]:
         "dynamic_mangohud_fps_limit": False,
         "refresh_rate_sync_mode": "client",
         "custom_display_mode": _normalized_custom_display_mode(None),
+        "sunshine_execstart": "",
+        "sunshine_unit_name": "",
         "profile": PROFILE_NAME,
         "audio_sink": "lts-sunshine-stereo",
         "host_audio_defaults": {"sink": "", "source": ""},
@@ -974,6 +966,80 @@ def analyze_flatpak_command_for_display(command: Optional[str]) -> Optional[str]
 
 def _systemctl_user(*args: str, check: bool = False) -> subprocess.CompletedProcess:
     return _run(["systemctl", "--user", *args], check=check)
+
+
+def _parse_systemd_execstart(value: str) -> str:
+    raw_value = _safe_string(value)
+    if not raw_value:
+        return ""
+
+    for line in raw_value.splitlines():
+        match = re.search(r"argv\[]=(.*?) ;", line)
+        if match:
+            return _safe_string(match.group(1))
+
+    if "argv[]=" in raw_value:
+        match = re.search(r"argv\[]=(.*)", raw_value, re.DOTALL)
+        if match:
+            return _safe_string(match.group(1))
+
+    return raw_value
+
+
+def _current_sunshine_execstart(unit: str) -> str:
+    result = _systemctl_user("show", "--property=ExecStart", "--value", unit)
+    if result.returncode != 0:
+        return ""
+    return _parse_systemd_execstart(result.stdout or "")
+
+
+def _fragment_sunshine_execstart(unit: str) -> str:
+    fragment_result = _systemctl_user("show", "--property=FragmentPath", "--value", unit)
+    if fragment_result.returncode != 0:
+        return ""
+
+    fragment_path = Path(_safe_string(fragment_result.stdout))
+    if not fragment_path.is_file():
+        return ""
+
+    in_service_section = False
+    try:
+        for raw_line in fragment_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                in_service_section = line == "[Service]"
+                continue
+            if not in_service_section or not line.startswith("ExecStart="):
+                continue
+            execstart = _safe_string(line.split("=", 1)[1])
+            if execstart:
+                return execstart
+    except OSError:
+        return ""
+
+    return ""
+
+
+def _remember_sunshine_execstart(state: Dict[str, Any], unit: Optional[str] = None) -> Dict[str, Any]:
+    target_unit = unit or _sunshine_unit()
+    current_execstart = _current_sunshine_execstart(target_unit) or _fragment_sunshine_execstart(target_unit)
+    wrapper_path = _safe_string(state.get("paths", {}).get("sunshine_wrapper_script"))
+
+    if current_execstart and wrapper_path and current_execstart != wrapper_path:
+        state["sunshine_execstart"] = current_execstart
+        state["sunshine_unit_name"] = target_unit
+        return state
+
+    if _safe_string(state.get("sunshine_execstart")):
+        state["sunshine_unit_name"] = target_unit
+        return state
+
+    fallback_execstart = _sunshine_binary() or "sunshine"
+    state["sunshine_execstart"] = fallback_execstart
+    state["sunshine_unit_name"] = target_unit
+    return state
 
 
 def _sudo_prefix() -> Optional[List[str]]:
@@ -2869,7 +2935,7 @@ if __name__ == "__main__":
 
 def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
-    sunshine_command = _sunshine_binary() or "sunshine"
+    sunshine_command = _safe_string(state.get("sunshine_execstart")) or _sunshine_binary() or "sunshine"
     sunshine_unit = _sunshine_unit()
     audio_sink = state["audio_sink"]
     refresh_rate_sync_mode = _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode"))
@@ -2895,7 +2961,6 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
         launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
     fi
 """
-    sunshine_conf_root = Path(paths["sunshine_conf"]).parent
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
@@ -2998,30 +3063,19 @@ if [ ! -s "$display_file" ]; then
 fi
 
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-path_value="${{PATH:-/usr/local/bin:/usr/bin:/bin}}"
-lang_value="${{LANG:-C.UTF-8}}"
-home_value="${{HOME:-/home/$(id -un)}}"
-user_value="${{USER:-$(id -un)}}"
-logname_value="${{LOGNAME:-$user_value}}"
-shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 wayland_value="$(cat "$display_file")"
-cd "{sunshine_conf_root}"
-exec /usr/bin/env -i \
-    HOME="$home_value" \
-    USER="$user_value" \
-    LOGNAME="$logname_value" \
-    SHELL="$shell_value" \
-    PATH="$path_value" \
-    LANG="$lang_value" \
-    XDG_RUNTIME_DIR="$runtime_dir" \
-    DBUS_SESSION_BUS_ADDRESS="$dbus_value" \
-    WAYLAND_DISPLAY="$wayland_value" \
-    SWAYSOCK="{state['sway_socket']}" \
-    XDG_SESSION_TYPE=wayland \
-    XDG_CURRENT_DESKTOP=sway \
-    XDG_SESSION_DESKTOP=sway \
-    {sunshine_command}
+
+unset DISPLAY
+export XDG_RUNTIME_DIR="$runtime_dir"
+export DBUS_SESSION_BUS_ADDRESS="$dbus_value"
+export WAYLAND_DISPLAY="$wayland_value"
+export SWAYSOCK="{state['sway_socket']}"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=sway
+export XDG_SESSION_DESKTOP=sway
+
+exec /bin/sh -lc {shlex.quote(sunshine_command)}
 """,
         Path(paths["sunshine_wrapper_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -4606,7 +4660,7 @@ def _ensure_dependencies() -> List[str]:
     for binary in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaybg", "swaymsg", "systemctl"]:
         if shutil.which(binary) is None:
             missing.append(binary)
-    if _sunshine_binary() is None:
+    if _sunshine_binary() is None and not _current_sunshine_execstart(_sunshine_unit()):
         missing.append("sunshine")
     evdev_error = _evdev_import_error()
     if evdev_error:
@@ -4628,6 +4682,8 @@ def _write_managed_files(state: Dict[str, Any]) -> None:
 def refresh_managed_files(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if state is None:
         state = load_state()
+    if not _safe_string(state.get("sunshine_execstart")):
+        state = _remember_sunshine_execstart(state)
     _write_managed_files(state)
     save_state(state)
     _daemon_reload()
@@ -4643,44 +4699,64 @@ def _restore_sunshine_audio_sink(state: Dict[str, Any]) -> None:
         _remove_key(sunshine_conf, "audio_sink")
 
 
-def _legacy_unit_names() -> List[str]:
-    return [
-        LEGACY_INPUT_BRIDGE_UNIT,
-        LEGACY_AUDIO_GUARD_UNIT,
-        LEGACY_SUNSHINE_UNIT,
-    ]
-
-
-def _legacy_unit_paths(state: Dict[str, Any]) -> List[Path]:
-    paths = state["paths"]
-    return [
-        Path(paths["legacy_input_bridge_unit"]),
-        Path(paths["legacy_audio_guard_unit"]),
-        Path(paths["legacy_sunshine_unit"]),
-    ]
-
-
-def _cleanup_legacy_display_units(state: Dict[str, Any]) -> None:
-    for unit in _legacy_unit_names():
-        _systemctl_user("stop", unit)
-        _systemctl_user("disable", unit)
-    for path in _legacy_unit_paths(state):
-        try:
-            path.unlink()
-        except OSError:
-            pass
-
-
 def _sunshine_unit_exists(unit: str) -> bool:
     result = _systemctl_user("show", "--property=LoadState", "--value", unit)
     return result.returncode == 0 and _safe_string(result.stdout) not in {"", "not-found"}
 
 
 def _sunshine_unit() -> str:
-    for unit in (SUNSHINE_UNIT, FALLBACK_SUNSHINE_UNIT):
+    candidates = (
+        FALLBACK_SUNSHINE_UNIT,
+        SUNSHINE_UNIT,
+    )
+    for unit in candidates:
+        if _sunshine_unit_exists(unit) and _systemctl_user("is-active", unit).returncode == 0:
+            return unit
+    for unit in candidates:
         if _sunshine_unit_exists(unit):
             return unit
-    return SUNSHINE_UNIT
+    return FALLBACK_SUNSHINE_UNIT
+
+
+def _managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
+    units = [FALLBACK_SUNSHINE_UNIT, SUNSHINE_UNIT]
+    if state is not None:
+        saved_unit = _safe_string(state.get("sunshine_unit_name"))
+        if saved_unit and saved_unit not in units:
+            units.insert(0, saved_unit)
+    return units
+
+
+def _managed_override_paths(state: Dict[str, Any]) -> List[Path]:
+    systemd_user_dir = Path(state["paths"]["systemd_user_dir"])
+    paths: List[Path] = []
+    for unit in _managed_sunshine_units(state):
+        override_dir = systemd_user_dir / f"{unit}.d"
+        paths.append(override_dir / "override.conf")
+        paths.append(override_dir)
+    return paths
+
+
+def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
+    paths = state["paths"]
+    keys = [
+        "sway_config",
+        "sway_start_script",
+        "sunshine_start_script",
+        "sunshine_wrapper_script",
+        "audio_create_script",
+        "audio_cleanup_script",
+        "audio_guard_script",
+        "launch_app_script",
+        "resolve_stream_fps_script",
+        "apply_exact_refresh_script",
+        "headless_prep_script",
+        "set_resolution_script",
+        "reset_resolution_script",
+        "input_bridge_script",
+        "kwin_input_isolation_script",
+    ]
+    return [Path(paths[key]) for key in keys if _safe_string(paths.get(key))]
 
 
 def _sunshine_service_active() -> bool:
@@ -4847,6 +4923,7 @@ def setup_display() -> int:
 
     state = load_state()
     sunshine_was_active = _sunshine_service_active()
+    state = _remember_sunshine_execstart(state)
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
     save_state(state)
@@ -4859,7 +4936,6 @@ def setup_display() -> int:
         print("Install sudo or pkexec, then rerun the command.")
         return 1
 
-    _cleanup_legacy_display_units(state)
     _daemon_reload()
     state["enabled"] = True
     save_state(state)
@@ -5297,29 +5373,24 @@ def remove_display() -> int:
         return 1
 
     stop_display()
-    _cleanup_legacy_display_units(state)
-
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
 
-    for path_key in [
-        "sunshine_override",
-        "input_bridge_script",
-        "kwin_input_isolation_script",
-        "audio_guard_script",
-        "sunshine_wrapper_script",
-        "sunshine_start_script",
-        "legacy_sunshine_wrapper_script",
-        "legacy_sunshine_start_script",
-    ]:
+    for path in _managed_setup_paths(state):
         try:
-            Path(state["paths"][path_key]).unlink()
+            path.unlink()
         except OSError:
             pass
-    try:
-        Path(state["paths"]["sunshine_override_dir"]).rmdir()
-    except OSError:
-        pass
+
+    for path in _managed_override_paths(state):
+        try:
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()
+        except OSError:
+            pass
+
     for path_key in [
         "portal_active_file",
         "portal_lock_file",
@@ -5329,17 +5400,34 @@ def remove_display() -> int:
         "audio_module_file",
     ]:
         try:
-            Path(state["paths"][path_key]).unlink()
+            path_value = state["paths"].get(path_key)
+            if not path_value:
+                continue
+            Path(path_value).unlink()
         except OSError:
             pass
 
-    state["enabled"] = False
-    save_state(state)
+    try:
+        Path(state["paths"]["state_path"]).unlink()
+    except OSError:
+        pass
+    try:
+        PROFILE_ROOT.rmdir()
+    except OSError:
+        pass
+    try:
+        BIN_ROOT.rmdir()
+    except OSError:
+        pass
+    try:
+        DISPLAY_ROOT.rmdir()
+    except OSError:
+        pass
     try:
         LEGACY_DISPLAY_ROOT.rmdir()
     except OSError:
         pass
     _daemon_reload()
 
-    print("Virtual display removed.")
+    print("Virtual display setup removed.")
     return 0

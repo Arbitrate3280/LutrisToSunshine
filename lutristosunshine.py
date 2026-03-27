@@ -215,7 +215,7 @@ def parse_args(argv=None):
     )
     display_subparsers.add_parser(
         "reset",
-        help="Turn off virtual display, restore Sunshine app launches to normal mode, and remove the managed setup.",
+        help="Remove the virtual-display setup, restore normal Sunshine app launches, and uninstall the managed files and overrides.",
     )
     logs_parser = display_subparsers.add_parser("logs", help="Show recent logs for the managed services.")
     logs_parser.add_argument(
@@ -589,7 +589,7 @@ def handle_display_command(args) -> int:
                 print(f"{accent('4.')} Toggle dynamic MangoHud FPS limit")
                 print(f"{accent('5.')} Test controller rumble")
                 print(f"{accent('6.')} Show logs")
-                print(f"{accent('7.')} Turn off virtual display and restore Sunshine")
+                print(f"{accent('7.')} Remove virtual-display setup")
                 print(f"{muted('0.')} Back")
                 tool_choice = get_menu_choice(
                     f"{accent('Choose a tool: ')}",
@@ -630,7 +630,7 @@ def handle_display_command(args) -> int:
                         return result
                 elif tool_choice == "7":
                     confirmed = get_yes_no_input(
-                        "Turn off virtual display and restore Sunshine app launches to normal mode? This removes the managed headless setup.",
+                        "Remove the virtual-display setup and restore normal Sunshine app launches? This uninstalls the managed headless files, scripts, and service overrides.",
                         default=False,
                     )
                     if confirmed:
