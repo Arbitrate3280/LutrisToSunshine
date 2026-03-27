@@ -158,7 +158,7 @@ sudo pacman -S sway swaybg xdg-desktop-portal-wlr
 Open the guided hub:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay
+python3 lutristosunshine.py display
 ```
 
 The guided hub now keeps the default view short and moves secondary actions under `Advanced tools`.
@@ -166,67 +166,67 @@ The guided hub now keeps the default view short and moves secondary actions unde
 Set up, start, and sync the full virtual-display flow:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay enable
+python3 lutristosunshine.py display enable
 ```
 
 Start the managed virtual-display services without reinstalling:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay start
+python3 lutristosunshine.py display start
 ```
 
 Restart the managed virtual-display services without reinstalling:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay restart
+python3 lutristosunshine.py display restart
 ```
 
 Configure optional host-controller passthrough:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay controllers
+python3 lutristosunshine.py display controllers
 ```
 
 Show current virtual-display state:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay status
+python3 lutristosunshine.py display status
 ```
 
 Show the legacy detailed checks view:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay doctor
+python3 lutristosunshine.py display doctor
 ```
 
 Enable the dynamic MangoHud FPS limit so it dynamically sets it to the client's refresh rate:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay mangohud-fps-limit enable
+python3 lutristosunshine.py display mangohud-fps-limit enable
 ```
 
 Test controller rumble through the bridged path:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay rumble
+python3 lutristosunshine.py display rumble
 ```
 
 Stop the running virtual-display stack without removing setup:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay stop
+python3 lutristosunshine.py display stop
 ```
 
 Undo virtual display changes, restore Sunshine to original state, and remove the managed setup:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay reset
+python3 lutristosunshine.py display reset
 ```
 
 Show recent virtual-display logs:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay logs
+python3 lutristosunshine.py display logs
 ```
 
 ## Headless Prep Commands
@@ -248,7 +248,7 @@ Example:
 After editing the app entry, run:
 
 ```bash
-python3 lutristosunshine.py virtualdisplay enable
+python3 lutristosunshine.py display enable
 ```
 
 That reconciles the Sunshine app list and rewrites `headless:` prep commands to the managed helper that launches them with the virtual-display environment and Flatpak portal handoff when needed.

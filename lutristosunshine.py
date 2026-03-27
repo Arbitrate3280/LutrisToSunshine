@@ -18,7 +18,7 @@ from sunshine.sunshine import (
 from utils.utils import handle_interrupt, get_games_found_message
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection
 from utils.terminal import accent, badge, heading, muted, state_text
-from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_virtual_display_apps, get_virtual_display_blocked_apps
+from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_display_apps, get_display_blocked_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
 from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
@@ -28,26 +28,26 @@ from launchers.faugus import detect_faugus_installation, list_faugus_games
 from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
 from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
 from launchers.eden import detect_eden_installation, list_eden_games
-from virtualdisplay.manager import (
+from display.manager import (
     configure_exclusive_input_devices,
     custom_display_mode,
     dynamic_mangohud_fps_limit_enabled,
-    is_enabled as virtual_display_is_enabled,
+    is_enabled as display_is_enabled,
     refresh_managed_files,
     refresh_rate_sync_mode,
-    remove_virtual_display,
+    remove_display,
     set_custom_display_mode,
     set_dynamic_mangohud_fps_limit,
     set_refresh_rate_sync_mode,
-    setup_virtual_display,
-    start_virtual_display,
-    restart_virtual_display,
-    stop_virtual_display,
-    virtual_display_doctor_report,
-    virtual_display_snapshot,
-    virtual_display_logs,
+    setup_display,
+    start_display,
+    restart_display,
+    stop_display,
+    display_doctor_report,
+    display_snapshot,
+    display_logs,
 )
-from virtualdisplay.rumble import test_bridge_rumble
+from display.rumble import test_bridge_rumble
 
 
 def _status_level(value: str) -> str:
@@ -121,29 +121,29 @@ def parse_args(argv=None):
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    virtualdisplay_parser = subparsers.add_parser(
-        "virtualdisplay",
+    display_parser = subparsers.add_parser(
+        "display",
         help="Guided management for the isolated headless virtual display stack.",
     )
-    virtualdisplay_parser.set_defaults(command="virtualdisplay")
-    virtualdisplay_subparsers = virtualdisplay_parser.add_subparsers(dest="virtualdisplay_action")
-    virtualdisplay_subparsers.add_parser("enable", help="Set up, start, and sync the virtual display stack.")
-    virtualdisplay_subparsers.add_parser("start", help="Start the managed Sunshine service for the virtual display without reinstalling.")
-    virtualdisplay_subparsers.add_parser("restart", help="Restart the managed Sunshine service for the virtual display without reinstalling.")
-    virtualdisplay_subparsers.add_parser(
+    display_parser.set_defaults(command="display")
+    display_subparsers = display_parser.add_subparsers(dest="display_action")
+    display_subparsers.add_parser("enable", help="Set up, start, and sync the virtual display stack.")
+    display_subparsers.add_parser("start", help="Start the managed Sunshine service for the virtual display without reinstalling.")
+    display_subparsers.add_parser("restart", help="Restart the managed Sunshine service for the virtual display without reinstalling.")
+    display_subparsers.add_parser(
         "doctor",
-        help="Legacy detailed checks view. Most users should use 'virtualdisplay status'.",
+        help="Legacy detailed checks view. Most users should use 'display status'.",
     )
-    virtualdisplay_subparsers.add_parser("controllers", help="Choose which host controllers are reserved for the virtual display.")
-    virtualdisplay_subparsers.add_parser("status", help="Show the current virtual display status.")
-    mangohud_parser = virtualdisplay_subparsers.add_parser(
+    display_subparsers.add_parser("controllers", help="Choose which host controllers are reserved for the virtual display.")
+    display_subparsers.add_parser("status", help="Show the current virtual display status.")
+    mangohud_parser = display_subparsers.add_parser(
         "mangohud-fps-limit",
         help="Enable or disable the dynamic MangoHud FPS limit for virtual-display launches.",
     )
     mangohud_subparsers = mangohud_parser.add_subparsers(dest="mangohud_fps_limit_action")
     mangohud_subparsers.add_parser("enable", help="Enable the dynamic MangoHud FPS limit.")
     mangohud_subparsers.add_parser("disable", help="Disable the dynamic MangoHud FPS limit.")
-    refresh_rate_parser = virtualdisplay_subparsers.add_parser(
+    refresh_rate_parser = display_subparsers.add_parser(
         "refresh-rate-mode",
         help="Choose whether virtual-display refresh follows Moonlight's requested FPS, the client's refresh rate, or a custom fixed mode.",
     )
@@ -167,8 +167,8 @@ def parse_args(argv=None):
         type=float,
         help="Custom fixed refresh rate in Hz. Used with mode=custom.",
     )
-    virtualdisplay_subparsers.add_parser("stop", help="Stop the managed Sunshine service for the virtual display.")
-    rumble_parser = virtualdisplay_subparsers.add_parser(
+    display_subparsers.add_parser("stop", help="Stop the managed Sunshine service for the virtual display.")
+    rumble_parser = display_subparsers.add_parser(
         "rumble",
         help="Send a test rumble signal through the bridged virtual controller path.",
     )
@@ -213,11 +213,11 @@ def parse_args(argv=None):
         default=0x8000,
         help="Weak motor magnitude from 0 to 65535.",
     )
-    virtualdisplay_subparsers.add_parser(
+    display_subparsers.add_parser(
         "reset",
         help="Turn off virtual display, restore Sunshine app launches to normal mode, and remove the managed setup.",
     )
-    logs_parser = virtualdisplay_subparsers.add_parser("logs", help="Show recent logs for the managed services.")
+    logs_parser = display_subparsers.add_parser("logs", help="Show recent logs for the managed services.")
     logs_parser.add_argument(
         "--lines",
         type=int,
@@ -228,9 +228,9 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def handle_virtualdisplay_command(args) -> int:
+def handle_display_command(args) -> int:
     def get_blocked_apps_report():
-        blocked_apps, error = get_virtual_display_blocked_apps()
+        blocked_apps, error = get_display_blocked_apps()
         return blocked_apps, error
 
     def _hub_status_summary(snapshot: dict) -> str:
@@ -280,7 +280,7 @@ def handle_virtualdisplay_command(args) -> int:
         return items
 
     def print_hub_overview() -> None:
-        snapshot = virtual_display_snapshot()
+        snapshot = display_snapshot()
         blocked_apps, blocked_error = get_blocked_apps_report()
         print(heading("Virtual display"))
         print(_format_kv("Status:", _hub_status_summary(snapshot)))
@@ -296,7 +296,7 @@ def handle_virtualdisplay_command(args) -> int:
         print(_format_kv("Next step:", state_text(snapshot['next_step'], "accent")))
 
     def print_dashboard(include_blocked_apps: bool = True) -> None:
-        snapshot = virtual_display_snapshot()
+        snapshot = display_snapshot()
         print(heading("Virtual display"))
         status_parts = [
             f"setup={_format_status_value('configured' if snapshot['configured'] else 'not configured')}",
@@ -416,7 +416,7 @@ def handle_virtualdisplay_command(args) -> int:
         print(_format_kv("Next step:", state_text(snapshot['next_step'], "accent")))
 
     def print_doctor_report() -> None:
-        report = virtual_display_doctor_report()
+        report = display_doctor_report()
         status_labels = {
             "pass": "PASS",
             "warn": "WARN",
@@ -443,25 +443,25 @@ def handle_virtualdisplay_command(args) -> int:
             print(f"{badge('PASS', 'success')} Flatpak launch audit: no blocked apps detected.")
         print(_format_kv("Next step:", state_text(report['next_step'], "accent")))
 
-    def reconcile_apps(enable_virtual_display: bool) -> int:
-        if enable_virtual_display and virtual_display_is_enabled():
+    def reconcile_apps(enable_display: bool) -> int:
+        if enable_display and display_is_enabled():
             refresh_managed_files()
 
         started_here = False
         if not is_server_running("sunshine"):
-            start_status = start_virtual_display()
+            start_status = start_display()
             if start_status != 0:
                 return start_status
             started_here = True
 
-        updated, error = reconcile_virtual_display_apps(enable_virtual_display=enable_virtual_display)
+        updated, error = reconcile_display_apps(enable_display=enable_display)
         if error:
             print(error)
             return 1
 
-        verb = "Reconciled" if enable_virtual_display else "Restored"
-        print(f"{verb} {updated} Sunshine app(s) {'for' if enable_virtual_display else 'from'} virtual display mode.")
-        if enable_virtual_display:
+        verb = "Reconciled" if enable_display else "Restored"
+        print(f"{verb} {updated} Sunshine app(s) {'for' if enable_display else 'from'} virtual display mode.")
+        if enable_display:
             blocked_apps, blocked_error = get_blocked_apps_report()
             if blocked_error:
                 print(f"{badge('WARN', 'warning')} unable to inspect Sunshine apps for blocked Flatpak launches. {blocked_error}")
@@ -470,21 +470,21 @@ def handle_virtualdisplay_command(args) -> int:
                 for app_name, issue in blocked_apps:
                     print(f"- {app_name}: {issue}")
 
-        if started_here and not enable_virtual_display:
-            stop_virtual_display()
+        if started_here and not enable_display:
+            stop_display()
         return 0
 
     def run_enable(interactive: bool) -> int:
-        setup_status = setup_virtual_display()
+        setup_status = setup_display()
         if setup_status != 0:
             return setup_status
-        start_status = start_virtual_display()
+        start_status = start_display()
         if start_status != 0:
             return start_status
         reconcile_status = reconcile_apps(True)
         if reconcile_status != 0:
             print(f"{badge('WARN', 'warning')} the virtual display stack is running, but Sunshine app sync did not complete.")
-            print("Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs', then try '... virtualdisplay enable' again if needed.")
+            print("Run 'python3 lutristosunshine.py display status' or '... display logs', then try '... display enable' again if needed.")
             return 0
 
         if interactive:
@@ -498,16 +498,16 @@ def handle_virtualdisplay_command(args) -> int:
         reconcile_status = reconcile_apps(False)
         if reconcile_status != 0:
             return reconcile_status
-        remove_status = remove_virtual_display()
+        remove_status = remove_display()
         if remove_status == 0:
             print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
         return remove_status
 
     def run_start() -> int:
-        return start_virtual_display()
+        return start_display()
 
     def run_restart() -> int:
-        return restart_virtual_display()
+        return restart_display()
 
     def update_mangohud_fps_limit(enabled: bool) -> int:
         previous = dynamic_mangohud_fps_limit_enabled()
@@ -602,7 +602,7 @@ def handle_virtualdisplay_command(args) -> int:
                     if result != 0:
                         return result
                 elif tool_choice == "2":
-                    result = stop_virtual_display()
+                    result = stop_display()
                     if result != 0:
                         return result
                 elif tool_choice == "3":
@@ -625,7 +625,7 @@ def handle_virtualdisplay_command(args) -> int:
                     if result != 0:
                         return result
                 elif tool_choice == "6":
-                    result = virtual_display_logs(80)
+                    result = display_logs(80)
                     if result != 0:
                         return result
                 elif tool_choice == "7":
@@ -689,7 +689,7 @@ def handle_virtualdisplay_command(args) -> int:
                 if result != 0:
                     return result
 
-    action = args.virtualdisplay_action
+    action = args.display_action
     if action is None:
         return run_hub()
     if action == "enable":
@@ -707,13 +707,13 @@ def handle_virtualdisplay_command(args) -> int:
         return configure_exclusive_input_devices()
     if action == "status":
         print_dashboard()
-        return 0 if virtual_display_snapshot()["configured"] else 1
+        return 0 if display_snapshot()["configured"] else 1
     if action == "mangohud-fps-limit":
         if args.mangohud_fps_limit_action == "enable":
             return update_mangohud_fps_limit(True)
         if args.mangohud_fps_limit_action == "disable":
             return update_mangohud_fps_limit(False)
-        print("Choose 'enable' or 'disable' for 'virtualdisplay mangohud-fps-limit'.")
+        print("Choose 'enable' or 'disable' for 'display mangohud-fps-limit'.")
         return 1
     if action == "refresh-rate-mode":
         if args.mode == "custom":
@@ -728,7 +728,7 @@ def handle_virtualdisplay_command(args) -> int:
                 set_custom_display_mode(args.width, args.height, args.refresh)
         return update_refresh_rate_mode(args.mode)
     if action == "stop":
-        return stop_virtual_display()
+        return stop_display()
     if action == "rumble":
         return test_bridge_rumble(
             selector=args.controller,
@@ -742,8 +742,8 @@ def handle_virtualdisplay_command(args) -> int:
     if action == "reset":
         return run_reset()
     if action == "logs":
-        return virtual_display_logs(args.lines)
-    print(f"Unknown virtualdisplay action: {action}")
+        return display_logs(args.lines)
+    print(f"Unknown display action: {action}")
     return 1
 
 
@@ -789,8 +789,8 @@ def main(argv=None):
                 return True
 
     args = parse_args(argv)
-    if args.command == "virtualdisplay":
-        raise SystemExit(handle_virtualdisplay_command(args))
+    if args.command == "display":
+        raise SystemExit(handle_display_command(args))
     try:
         sunshine_installed, sunshine_install_type = detect_sunshine_installation()
         apollo_installed = detect_apollo_installation()

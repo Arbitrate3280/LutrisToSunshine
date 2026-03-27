@@ -1,9 +1,9 @@
 import unittest
 
-from virtualdisplay import rumble
+from display import rumble
 
 
-class VirtualDisplayRumbleTests(unittest.TestCase):
+class DisplayRumbleTests(unittest.TestCase):
     def test_selection_id_from_phys_uses_bridge_prefix(self) -> None:
         self.assertEqual(
             rumble._selection_id_from_phys("lts-inputbridge/controller-1"),

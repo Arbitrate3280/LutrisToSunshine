@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from utils.input import get_user_input
 from utils.terminal import accent, badge, heading, muted
-from virtualdisplay import manager
+from display import manager
 
 
 BUS_BLUETOOTH = 0x05

@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from virtualdisplay import manager
+from display import manager
 
 
-class VirtualDisplayInputSelectionTests(unittest.TestCase):
+class DisplayInputSelectionTests(unittest.TestCase):
     def _temp_audio_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
@@ -285,7 +285,7 @@ H: Handlers=sysrq kbd event29
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_install_udev_rule = manager._install_udev_rule
-        original_cleanup_legacy_virtualdisplay_units = manager._cleanup_legacy_virtualdisplay_units
+        original_cleanup_legacy_display_units = manager._cleanup_legacy_display_units
         original_daemon_reload = manager._daemon_reload
         try:
             manager._ensure_dependencies = lambda: []
@@ -294,10 +294,10 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
             manager._install_udev_rule = lambda current: True
-            manager._cleanup_legacy_virtualdisplay_units = lambda current: None
+            manager._cleanup_legacy_display_units = lambda current: None
             manager._daemon_reload = lambda: None
 
-            result = manager.setup_virtual_display()
+            result = manager.setup_display()
         finally:
             manager._ensure_dependencies = original_ensure_dependencies
             manager.load_state = original_load_state
@@ -305,7 +305,7 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._install_udev_rule = original_install_udev_rule
-            manager._cleanup_legacy_virtualdisplay_units = original_cleanup_legacy_virtualdisplay_units
+            manager._cleanup_legacy_display_units = original_cleanup_legacy_display_units
             manager._daemon_reload = original_daemon_reload
 
         self.assertEqual(result, 0)
@@ -341,7 +341,7 @@ H: Handlers=sysrq kbd event29
 
         self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
 
-    def test_start_virtual_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
+    def test_start_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
         state, _conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
@@ -357,7 +357,7 @@ H: Handlers=sysrq kbd event29
             )
             manager._systemctl_user = lambda *args, check=False: subprocess.CompletedProcess(list(args), 0, "", "")
 
-            result = manager.start_virtual_display()
+            result = manager.start_display()
         finally:
             manager.load_state = original_load_state
             manager.refresh_managed_files = original_refresh_managed_files
@@ -368,7 +368,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(result, 0)
         self.assertEqual(state["host_audio_defaults"], {"sink": "host-sink", "source": "host-source"})
 
-    def test_start_virtual_display_restores_audio_on_sunshine_start_failure(self) -> None:
+    def test_start_display_restores_audio_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
@@ -400,7 +400,7 @@ H: Handlers=sysrq kbd event29
 
             manager._systemctl_user = fake_systemctl_user
 
-            result = manager.start_virtual_display()
+            result = manager.start_display()
         finally:
             manager.load_state = original_load_state
             manager.refresh_managed_files = original_refresh_managed_files
@@ -414,7 +414,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
         self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
 
-    def test_stop_virtual_display_restores_original_audio_target(self) -> None:
+    def test_stop_display_restores_original_audio_target(self) -> None:
         state, conf_path = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
         state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
         original_load_state = manager.load_state
@@ -429,7 +429,7 @@ H: Handlers=sysrq kbd event29
             manager._clear_input_bridge_status_file = lambda current: None
             manager._restore_host_audio_defaults = lambda current: None
 
-            result = manager.stop_virtual_display()
+            result = manager.stop_display()
         finally:
             manager.load_state = original_load_state
             manager.save_state = original_save_state
@@ -440,7 +440,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(result, 0)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
 
-    def test_remove_virtual_display_deletes_override_files(self) -> None:
+    def test_remove_display_deletes_override_files(self) -> None:
         state = manager._default_state()
         state["enabled"] = True
         tempdir = tempfile.TemporaryDirectory()
@@ -455,7 +455,7 @@ H: Handlers=sysrq kbd event29
         state["paths"]["input_bridge_script"] = str(base / "lutristosunshine-input-bridge.py")
         state["paths"]["kwin_input_isolation_script"] = str(base / "lutristosunshine-kwin-input-isolation.py")
         state["paths"]["audio_guard_script"] = str(base / "lutristosunshine-guard-audio-defaults.sh")
-        state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-virtualdisplay-service.sh")
+        state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-display-service.sh")
         state["paths"]["portal_active_file"] = str(base / "portal-active")
         state["paths"]["portal_lock_file"] = str(base / "portal-lock")
         state["paths"]["input_bridge_status_file"] = str(base / "input-bridge-status.json")
@@ -480,26 +480,26 @@ H: Handlers=sysrq kbd event29
 
         original_load_state = manager.load_state
         original_save_state = manager.save_state
-        original_stop_virtual_display = manager.stop_virtual_display
+        original_stop_display = manager.stop_display
         original_remove_udev_rule = manager._remove_udev_rule
-        original_cleanup_legacy_virtualdisplay_units = manager._cleanup_legacy_virtualdisplay_units
+        original_cleanup_legacy_display_units = manager._cleanup_legacy_display_units
         original_daemon_reload = manager._daemon_reload
         cleanup_calls = []
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
-            manager.stop_virtual_display = lambda: 0
+            manager.stop_display = lambda: 0
             manager._remove_udev_rule = lambda current: True
-            manager._cleanup_legacy_virtualdisplay_units = lambda current: cleanup_calls.append(True)
+            manager._cleanup_legacy_display_units = lambda current: cleanup_calls.append(True)
             manager._daemon_reload = lambda: None
 
-            result = manager.remove_virtual_display()
+            result = manager.remove_display()
         finally:
             manager.load_state = original_load_state
             manager.save_state = original_save_state
-            manager.stop_virtual_display = original_stop_virtual_display
+            manager.stop_display = original_stop_display
             manager._remove_udev_rule = original_remove_udev_rule
-            manager._cleanup_legacy_virtualdisplay_units = original_cleanup_legacy_virtualdisplay_units
+            manager._cleanup_legacy_display_units = original_cleanup_legacy_display_units
             manager._daemon_reload = original_daemon_reload
 
         self.assertEqual(result, 0)
@@ -508,20 +508,20 @@ H: Handlers=sysrq kbd event29
         self.assertFalse(Path(state["paths"]["sunshine_wrapper_script"]).exists())
         self.assertFalse(override_dir.exists())
 
-    def test_virtual_display_snapshot_not_configured_has_enable_next_step(self) -> None:
+    def test_display_snapshot_not_configured_has_enable_next_step(self) -> None:
         state = manager._default_state()
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
-            snapshot = manager.virtual_display_snapshot()
+            snapshot = manager.display_snapshot()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
 
         self.assertFalse(snapshot["configured"])
-        self.assertIn("virtualdisplay enable", snapshot["next_step"])
+        self.assertIn("display enable", snapshot["next_step"])
         self.assertEqual(snapshot["current_headless_mode"], "")
         self.assertEqual(snapshot["refresh_rate_sync_mode"], "client")
         self.assertEqual(snapshot["custom_display_mode"]["width"], manager.FALLBACK_WIDTH)
@@ -529,7 +529,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(snapshot["custom_display_mode"]["refresh"], float(manager.FALLBACK_FPS))
         self.assertEqual(snapshot["current_mangohud_config"], "")
 
-    def test_virtual_display_snapshot_reads_active_mangohud_config(self) -> None:
+    def test_display_snapshot_reads_active_mangohud_config(self) -> None:
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         state = manager._default_state()
@@ -546,7 +546,7 @@ H: Handlers=sysrq kbd event29
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
-            snapshot = manager.virtual_display_snapshot()
+            snapshot = manager.display_snapshot()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
@@ -633,14 +633,14 @@ H: Handlers=sysrq kbd event29
 
         self.assertEqual(mode, "")
 
-    def test_virtual_display_doctor_report_flags_missing_dependencies(self) -> None:
+    def test_display_doctor_report_flags_missing_dependencies(self) -> None:
         state = manager._default_state()
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: ["sway", "setfacl"]
-            report = manager.virtual_display_doctor_report()
+            report = manager.display_doctor_report()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
@@ -648,7 +648,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(report["summary"], "needs_attention")
         self.assertTrue(any(check["status"] == "fail" for check in report["checks"]))
 
-    def test_virtual_display_doctor_report_reports_kwin_runtime_state(self) -> None:
+    def test_display_doctor_report_reports_kwin_runtime_state(self) -> None:
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
@@ -695,7 +695,7 @@ H: Handlers=sysrq kbd event29
                 },
                 clear=False,
             ):
-                report = manager.virtual_display_doctor_report()
+                report = manager.display_doctor_report()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
@@ -708,7 +708,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(kwin_check["status"], "pass")
         self.assertIn("disabled 1 of 1 Sunshine input device", kwin_check["message"])
 
-    def test_virtual_display_doctor_report_warns_when_host_has_sunshine_inputs_but_kwin_disabled_zero(self) -> None:
+    def test_display_doctor_report_warns_when_host_has_sunshine_inputs_but_kwin_disabled_zero(self) -> None:
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
@@ -762,7 +762,7 @@ H: Handlers=sysrq kbd event29
                 },
                 clear=False,
             ):
-                report = manager.virtual_display_doctor_report()
+                report = manager.display_doctor_report()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies

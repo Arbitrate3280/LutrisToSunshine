@@ -21,14 +21,14 @@ from launchers.faugus import FAUGUS_FLATPAK_ID
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
-from virtualdisplay.manager import (
+from display.manager import (
     HEADLESS_PREP_PREFIX,
     get_app_prep_commands,
     is_headless_prep_wrapped,
     get_wrapped_command_origin,
     get_wrapped_command_exit_timeout,
     is_wrapped_command,
-    is_enabled as virtual_display_enabled,
+    is_enabled as display_enabled,
     unwrap_headless_prep_command,
     unwrap_command,
     wrap_headless_prep_command,
@@ -304,7 +304,7 @@ def add_game_to_sunshine_api(
         print(f"Added {game_name} to {get_server_display_name()}.")
 
 
-def _get_virtual_display_prep_scripts() -> set[str]:
+def _get_display_prep_scripts() -> set[str]:
     managed_scripts = set()
     for command in get_app_prep_commands():
         do_cmd = command.get("do", "")
@@ -316,9 +316,9 @@ def _get_virtual_display_prep_scripts() -> set[str]:
     return managed_scripts
 
 
-def _normalize_prep_cmd(app: Dict, enable_virtual_display: bool) -> List[Dict]:
+def _normalize_prep_cmd(app: Dict, enable_display: bool) -> List[Dict]:
     prep_cmd = app.get("prep-cmd") or []
-    managed_scripts = _get_virtual_display_prep_scripts()
+    managed_scripts = _get_display_prep_scripts()
     filtered = []
     for command in prep_cmd:
         if not isinstance(command, dict):
@@ -328,20 +328,20 @@ def _normalize_prep_cmd(app: Dict, enable_virtual_display: bool) -> List[Dict]:
         if do_cmd in managed_scripts or undo_cmd in managed_scripts:
             continue
         normalized = dict(command)
-        normalized["do"] = _normalize_single_prep_command(do_cmd, enable_virtual_display)
-        normalized["undo"] = _normalize_single_prep_command(undo_cmd, enable_virtual_display)
+        normalized["do"] = _normalize_single_prep_command(do_cmd, enable_display)
+        normalized["undo"] = _normalize_single_prep_command(undo_cmd, enable_display)
         filtered.append(normalized)
 
-    if enable_virtual_display:
+    if enable_display:
         return get_app_prep_commands() + filtered
     return filtered
 
 
-def _normalize_single_prep_command(command: str, enable_virtual_display: bool) -> str:
+def _normalize_single_prep_command(command: str, enable_display: bool) -> str:
     if not command:
         return ""
 
-    if enable_virtual_display:
+    if enable_display:
         if is_headless_prep_wrapped(command):
             return command
         if command.startswith(HEADLESS_PREP_PREFIX):
@@ -405,7 +405,7 @@ def _unwrap_with_origin(command: str, field_origin: str) -> Tuple[str, str]:
     return unwrapped, origin
 
 
-def _select_virtual_display_primary_command(app: Dict) -> Tuple[str, str, List[str], int]:
+def _select_display_primary_command(app: Dict) -> Tuple[str, str, List[str], int]:
     cmd, cmd_origin = _unwrap_with_origin(app.get("cmd") or "", "cmd")
     if cmd:
         timeout = get_wrapped_command_exit_timeout(app.get("cmd") or "", app.get("exit-timeout", 5))
@@ -431,13 +431,13 @@ def _select_virtual_display_primary_command(app: Dict) -> Tuple[str, str, List[s
     return detached_commands[0], "detached", detached_commands[1:], detached_timeout
 
 
-def _enable_virtual_display_launch(app: Dict) -> Tuple[str, List[str]]:
-    primary_command, origin, detached_commands, exit_timeout = _select_virtual_display_primary_command(app)
+def _enable_display_launch(app: Dict) -> Tuple[str, List[str]]:
+    primary_command, origin, detached_commands, exit_timeout = _select_display_primary_command(app)
     wrapped_primary = wrap_command(primary_command, origin, exit_timeout) or ""
     return wrapped_primary, _dedupe_commands(detached_commands)
 
 
-def _disable_virtual_display_launch(app: Dict) -> Tuple[str, List[str]]:
+def _disable_display_launch(app: Dict) -> Tuple[str, List[str]]:
     restored_cmd = ""
     restored_detached: List[str] = []
 
@@ -460,13 +460,13 @@ def _disable_virtual_display_launch(app: Dict) -> Tuple[str, List[str]]:
     return restored_cmd, _dedupe_commands(restored_detached)
 
 
-def _transform_app_for_virtual_display(app: Dict, enable_virtual_display: bool) -> Dict:
+def _transform_app_for_display(app: Dict, enable_display: bool) -> Dict:
     updated = _normalize_app_payload(app)
-    if enable_virtual_display:
-        updated["cmd"], updated["detached"] = _enable_virtual_display_launch(updated)
+    if enable_display:
+        updated["cmd"], updated["detached"] = _enable_display_launch(updated)
     else:
-        updated["cmd"], updated["detached"] = _disable_virtual_display_launch(updated)
-    updated["prep-cmd"] = _normalize_prep_cmd(updated, enable_virtual_display)
+        updated["cmd"], updated["detached"] = _disable_display_launch(updated)
+    updated["prep-cmd"] = _normalize_prep_cmd(updated, enable_display)
     return updated
 
 
@@ -519,18 +519,18 @@ def _get_full_sunshine_apps(allow_prompt: bool = True) -> Tuple[List[Dict], Opti
     return apps, None
 
 
-def get_virtual_display_blocked_apps() -> Tuple[List[Tuple[str, str]], Optional[str]]:
+def get_display_blocked_apps() -> Tuple[List[Tuple[str, str]], Optional[str]]:
     return [], None
 
 
-def reconcile_virtual_display_apps(enable_virtual_display: bool) -> Tuple[int, Optional[str]]:
+def reconcile_display_apps(enable_display: bool) -> Tuple[int, Optional[str]]:
     apps, error = _get_full_sunshine_apps()
     if error:
         return 0, error
 
     updated_count = 0
     for app in apps:
-        transformed = _transform_app_for_virtual_display(app, enable_virtual_display)
+        transformed = _transform_app_for_display(app, enable_display)
         if transformed == _normalize_app_payload(app):
             continue
         _, update_error = sunshine_api_request("POST", "/api/apps", json=transformed)
@@ -786,12 +786,12 @@ def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) 
     if INSTALLATION_TYPE == "flatpak":
         cmd = f"flatpak-spawn --host {cmd}"
 
-    enable_virtual_display = SERVER_NAME == "sunshine" and virtual_display_enabled()
+    enable_display = SERVER_NAME == "sunshine" and display_enabled()
 
-    if enable_virtual_display:
+    if enable_display:
         cmd = wrap_command(cmd, "cmd") or cmd
 
-    prep_cmd = get_app_prep_commands() if enable_virtual_display else []
+    prep_cmd = get_app_prep_commands() if enable_display else []
 
     # Use the API instead of directly modifying apps.json
     add_game_to_sunshine_api(game_name, cmd, image_path, prep_cmd=prep_cmd, detached=[])

@@ -20,17 +20,21 @@ from utils.input import get_user_input
 
 PROFILE_NAME = "default"
 CONFIG_ROOT = Path("~/.config/lutristosunshine").expanduser()
-VIRTUALDISPLAY_ROOT = CONFIG_ROOT / "virtualdisplay"
-PROFILE_ROOT = VIRTUALDISPLAY_ROOT / PROFILE_NAME
+LEGACY_DISPLAY_DIRNAME = "virtual" + "display"
+DISPLAY_ROOT = CONFIG_ROOT / "display"
+LEGACY_DISPLAY_ROOT = CONFIG_ROOT / LEGACY_DISPLAY_DIRNAME
+PROFILE_ROOT = DISPLAY_ROOT / PROFILE_NAME
 BIN_ROOT = CONFIG_ROOT / "bin"
-STATE_PATH = VIRTUALDISPLAY_ROOT / "virtualdisplay.json"
+DISPLAY_STATE_PATH = DISPLAY_ROOT / "display.json"
+LEGACY_STATE_PATH = LEGACY_DISPLAY_ROOT / f"{LEGACY_DISPLAY_DIRNAME}.json"
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
 FALLBACK_SUNSHINE_UNIT = "sunshine.service"
-LEGACY_SUNSHINE_UNIT = "lutristosunshine-virtualdisplay-sunshine.service"
-LEGACY_INPUT_BRIDGE_UNIT = "lutristosunshine-virtualdisplay-inputbridge.service"
-LEGACY_AUDIO_GUARD_UNIT = "lutristosunshine-virtualdisplay-audioguard.service"
+LEGACY_UNIT_PREFIX = f"lutristosunshine-{LEGACY_DISPLAY_DIRNAME}"
+LEGACY_SUNSHINE_UNIT = f"{LEGACY_UNIT_PREFIX}-sunshine.service"
+LEGACY_INPUT_BRIDGE_UNIT = f"{LEGACY_UNIT_PREFIX}-inputbridge.service"
+LEGACY_AUDIO_GUARD_UNIT = f"{LEGACY_UNIT_PREFIX}-audioguard.service"
 FLATPAK_PORTAL_UNIT = "flatpak-portal.service"
-SWAYSOCK_PATH = f"/run/user/{os.getuid()}/lutristosunshine-virtualdisplay.sock"
+DISPLAY_SOCKET_PATH = f"/run/user/{os.getuid()}/lutristosunshine-display.sock"
 WAYLAND_DISPLAY_PATH = PROFILE_ROOT / "wayland-display"
 AUDIO_MODULE_PATH = PROFILE_ROOT / "audio-module-id"
 PORTAL_LOCK_PATH = PROFILE_ROOT / "flatpak-portal.lock"
@@ -591,14 +595,18 @@ def _custom_display_mode_string(value: Any) -> str:
 def _state_paths() -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
     override_dir = systemd_user_dir / f"{_sunshine_unit()}.d"
+    legacy_start_script_name = f"lutristosunshine-start-{LEGACY_DISPLAY_DIRNAME}-sunshine.sh"
+    legacy_wrapper_script_name = f"lutristosunshine-run-{LEGACY_DISPLAY_DIRNAME}-service.sh"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
-        "state_path": str(STATE_PATH),
+        "state_path": str(DISPLAY_STATE_PATH),
         "sway_config": str(PROFILE_ROOT / "sway.conf"),
         "sway_start_script": str(BIN_ROOT / "lutristosunshine-start-headless-sway.sh"),
-        "sunshine_start_script": str(BIN_ROOT / "lutristosunshine-start-virtualdisplay-sunshine.sh"),
-        "sunshine_wrapper_script": str(BIN_ROOT / "lutristosunshine-run-virtualdisplay-service.sh"),
+        "sunshine_start_script": str(BIN_ROOT / "lutristosunshine-start-display-sunshine.sh"),
+        "sunshine_wrapper_script": str(BIN_ROOT / "lutristosunshine-run-display-service.sh"),
+        "legacy_sunshine_start_script": str(BIN_ROOT / legacy_start_script_name),
+        "legacy_sunshine_wrapper_script": str(BIN_ROOT / legacy_wrapper_script_name),
         "audio_create_script": str(BIN_ROOT / "lutristosunshine-create-audio-sink.sh"),
         "audio_cleanup_script": str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
         "audio_guard_script": str(BIN_ROOT / "lutristosunshine-guard-audio-defaults.sh"),
@@ -637,7 +645,7 @@ def _default_state() -> Dict[str, Any]:
         "profile": PROFILE_NAME,
         "audio_sink": "lts-sunshine-stereo",
         "host_audio_defaults": {"sink": "", "source": ""},
-        "sway_socket": SWAYSOCK_PATH,
+        "sway_socket": DISPLAY_SOCKET_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
         "exclusive_input_devices": _empty_exclusive_input_state(),
@@ -646,10 +654,11 @@ def _default_state() -> Dict[str, Any]:
 
 
 def load_state() -> Dict[str, Any]:
-    if not STATE_PATH.exists():
+    state_path = DISPLAY_STATE_PATH if DISPLAY_STATE_PATH.exists() else LEGACY_STATE_PATH
+    if not state_path.exists():
         return _default_state()
     try:
-        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return _default_state()
     state = _default_state()
@@ -668,14 +677,19 @@ def load_state() -> Dict[str, Any]:
 
 
 def save_state(state: Dict[str, Any]) -> None:
-    VIRTUALDISPLAY_ROOT.mkdir(parents=True, exist_ok=True)
+    DISPLAY_ROOT.mkdir(parents=True, exist_ok=True)
     state["exclusive_input_devices"] = _normalized_exclusive_input_state(
         state.get("exclusive_input_devices")
     )
     state["custom_display_mode"] = _normalized_custom_display_mode(
         state.get("custom_display_mode")
     )
-    STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    DISPLAY_STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    if LEGACY_STATE_PATH.exists():
+        try:
+            LEGACY_STATE_PATH.unlink()
+        except OSError:
+            pass
 
 
 def is_enabled() -> bool:
@@ -949,7 +963,7 @@ def _resolve_flatpak_default_command(parsed_command: Dict[str, Any]) -> Optional
     return None
 
 
-def analyze_flatpak_command_for_virtualdisplay(command: Optional[str]) -> Optional[str]:
+def analyze_flatpak_command_for_display(command: Optional[str]) -> Optional[str]:
     if not command:
         return None
     parsed_command, error = _parse_flatpak_run_command(command)
@@ -2883,7 +2897,7 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
 """
     sunshine_conf_root = Path(paths["sunshine_conf"]).parent
     return {
-        Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine virtualdisplay.
+        Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
 output * allow_tearing yes
 output * max_render_time off
@@ -4558,7 +4572,7 @@ def _udev_rule(isolation_mode: Optional[str] = None) -> str:
     if group_name:
         sunshine_input_permissions.append(f'GROUP="{group_name}"')
     sunshine_input_clause = ", ".join(sunshine_input_permissions)
-    return f"""# Managed by LutrisToSunshine virtualdisplay.
+    return f"""# Managed by LutrisToSunshine display.
 ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{SUNSHINE_INPUT_VENDOR_ID:04x}", ATTRS{{id/product}}=="{SUNSHINE_INPUT_PRODUCT_ID:04x}", {sunshine_input_clause}
 ACTION!="remove", KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uhid"
 """
@@ -4646,7 +4660,7 @@ def _legacy_unit_paths(state: Dict[str, Any]) -> List[Path]:
     ]
 
 
-def _cleanup_legacy_virtualdisplay_units(state: Dict[str, Any]) -> None:
+def _cleanup_legacy_display_units(state: Dict[str, Any]) -> None:
     for unit in _legacy_unit_names():
         _systemctl_user("stop", unit)
         _systemctl_user("disable", unit)
@@ -4825,7 +4839,7 @@ def configure_exclusive_input_devices() -> int:
     return 0
 
 
-def setup_virtual_display() -> int:
+def setup_display() -> int:
     missing = _ensure_dependencies()
     if missing:
         print("Missing required commands:", ", ".join(missing))
@@ -4845,7 +4859,7 @@ def setup_virtual_display() -> int:
         print("Install sudo or pkexec, then rerun the command.")
         return 1
 
-    _cleanup_legacy_virtualdisplay_units(state)
+    _cleanup_legacy_display_units(state)
     _daemon_reload()
     state["enabled"] = True
     save_state(state)
@@ -4856,10 +4870,10 @@ def setup_virtual_display() -> int:
     return 0
 
 
-def start_virtual_display() -> int:
+def start_display() -> int:
     state = load_state()
     if not state.get("enabled"):
-        print("Virtual display is not set up. Run 'python3 lutristosunshine.py virtualdisplay enable' first.")
+        print("Virtual display is not set up. Run 'python3 lutristosunshine.py display enable' first.")
         return 1
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
@@ -4881,16 +4895,16 @@ def start_virtual_display() -> int:
     return 0
 
 
-def restart_virtual_display() -> int:
+def restart_display() -> int:
     state = load_state()
     if not state.get("enabled"):
-        print("Virtual display is not set up. Run 'python3 lutristosunshine.py virtualdisplay enable' first.")
+        print("Virtual display is not set up. Run 'python3 lutristosunshine.py display enable' first.")
         return 1
-    stop_virtual_display()
-    return start_virtual_display()
+    stop_display()
+    return start_display()
 
 
-def stop_virtual_display() -> int:
+def stop_display() -> int:
     state = load_state()
     if not state.get("enabled"):
         print("Virtual display is not set up.")
@@ -4908,7 +4922,7 @@ def stop_virtual_display() -> int:
     return 0
 
 
-def virtual_display_snapshot() -> Dict[str, Any]:
+def display_snapshot() -> Dict[str, Any]:
     state = load_state()
     configured = bool(state.get("enabled"))
     custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
@@ -5020,20 +5034,20 @@ def virtual_display_snapshot() -> Dict[str, Any]:
         "next_step": "",
     }
     if not configured:
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay enable' to set up the headless stack."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py display enable' to set up the headless stack."
     elif not sunshine_active:
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay start' to start the managed stack."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py display start' to start the managed stack."
     elif not sway_active:
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs' to inspect why headless Sway is not ready."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py display status' or '... display logs' to inspect why headless Sway is not ready."
     elif selections and snapshot["bridge_state"] != "active":
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py virtualdisplay status' or '... virtualdisplay logs' if selected controllers are not being bridged."
+        snapshot["next_step"] = "Run 'python3 lutristosunshine.py display status' or '... display logs' if selected controllers are not being bridged."
     else:
         snapshot["next_step"] = "Virtual display is ready. Use 'controllers', 'rumble', or 'logs' for follow-up actions."
     return snapshot
 
 
-def virtual_display_doctor_report() -> Dict[str, Any]:
-    snapshot = virtual_display_snapshot()
+def display_doctor_report() -> Dict[str, Any]:
+    snapshot = display_snapshot()
     checks = []
     missing = snapshot["dependencies_missing"]
     checks.append(
@@ -5192,8 +5206,8 @@ def virtual_display_doctor_report() -> Dict[str, Any]:
     }
 
 
-def virtual_display_status() -> int:
-    snapshot = virtual_display_snapshot()
+def display_status() -> int:
+    snapshot = display_snapshot()
     if not snapshot["configured"]:
         print("Virtual display is not configured.")
         return 1
@@ -5260,7 +5274,7 @@ def virtual_display_status() -> int:
     return 0
 
 
-def virtual_display_logs(lines: int = 80) -> int:
+def display_logs(lines: int = 80) -> int:
     result = subprocess.run(
         [
             "journalctl",
@@ -5276,14 +5290,14 @@ def virtual_display_logs(lines: int = 80) -> int:
     return result.returncode
 
 
-def remove_virtual_display() -> int:
+def remove_display() -> int:
     state = load_state()
     if not state.get("enabled"):
         print("Virtual display is not configured.")
         return 1
 
-    stop_virtual_display()
-    _cleanup_legacy_virtualdisplay_units(state)
+    stop_display()
+    _cleanup_legacy_display_units(state)
 
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
@@ -5294,6 +5308,9 @@ def remove_virtual_display() -> int:
         "kwin_input_isolation_script",
         "audio_guard_script",
         "sunshine_wrapper_script",
+        "sunshine_start_script",
+        "legacy_sunshine_wrapper_script",
+        "legacy_sunshine_start_script",
     ]:
         try:
             Path(state["paths"][path_key]).unlink()
@@ -5318,6 +5335,10 @@ def remove_virtual_display() -> int:
 
     state["enabled"] = False
     save_state(state)
+    try:
+        LEGACY_DISPLAY_ROOT.rmdir()
+    except OSError:
+        pass
     _daemon_reload()
 
     print("Virtual display removed.")
