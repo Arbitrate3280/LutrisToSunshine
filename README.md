@@ -14,8 +14,7 @@ LutrisToSunshine imports games from supported launchers into Sunshine and can op
 - [What The Main Flow Does](#what-the-main-flow-does)
 - [Virtual Display](#virtual-display)
 - [Headless Prep Commands](#headless-prep-commands)
-- [Virtual Display Notes](#virtual-display-notes)
-- [Limitations And Compatibility](#limitations-and-compatibility)
+- [Troubleshooting](#troubleshooting)
 - [Binary Release](#binary-release)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
@@ -239,6 +238,18 @@ python3 lutristosunshine.py virtualdisplay enable
 ```
 
 That reconciles the Sunshine app list and rewrites `headless:` prep commands to the managed helper that launches them with the virtual-display environment and Flatpak portal handoff when needed.
+
+## Troubleshooting
+
+### Input isolation not working on KDE Plasma
+
+If you are on KDE Plasma and input isolation is not working (e.g., keyboard or mouse events leak between the virtual display and the host desktop), try adding your user to the `input` group:
+
+```bash
+sudo usermod -aG input $USER
+```
+
+Log out and back in (or start a new session) for the change to take effect.
 
 ## Limitations And Compatibility
 
