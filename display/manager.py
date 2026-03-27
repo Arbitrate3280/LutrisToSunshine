@@ -4704,22 +4704,29 @@ def _sunshine_unit_exists(unit: str) -> bool:
     return result.returncode == 0 and _safe_string(result.stdout) not in {"", "not-found"}
 
 
+def _systemd_unit_id(unit: str) -> str:
+    result = _systemctl_user("show", "--property=Id", "--value", unit)
+    if result.returncode != 0:
+        return ""
+    return _safe_string(result.stdout)
+
+
 def _sunshine_unit() -> str:
     candidates = (
-        FALLBACK_SUNSHINE_UNIT,
         SUNSHINE_UNIT,
+        FALLBACK_SUNSHINE_UNIT,
     )
     for unit in candidates:
         if _sunshine_unit_exists(unit) and _systemctl_user("is-active", unit).returncode == 0:
-            return unit
+            return _systemd_unit_id(unit) or unit
     for unit in candidates:
         if _sunshine_unit_exists(unit):
-            return unit
-    return FALLBACK_SUNSHINE_UNIT
+            return _systemd_unit_id(unit) or unit
+    return SUNSHINE_UNIT
 
 
 def _managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
-    units = [FALLBACK_SUNSHINE_UNIT, SUNSHINE_UNIT]
+    units = [SUNSHINE_UNIT, FALLBACK_SUNSHINE_UNIT]
     if state is not None:
         saved_unit = _safe_string(state.get("sunshine_unit_name"))
         if saved_unit and saved_unit not in units:

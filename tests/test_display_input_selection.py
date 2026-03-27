@@ -232,6 +232,26 @@ class DisplayInputSelectionTests(unittest.TestCase):
         finally:
             manager._systemctl_user = original_systemctl_user
 
+    def test_sunshine_unit_prefers_canonical_active_unit_id_over_alias(self) -> None:
+        original_systemctl_user = manager._systemctl_user
+        try:
+            def fake_systemctl_user(*args, check=False):
+                unit = args[-1]
+                if args[:3] == ("show", "--property=LoadState", "--value"):
+                    return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
+                if args[:3] == ("show", "--property=Id", "--value"):
+                    if unit == manager.FALLBACK_SUNSHINE_UNIT:
+                        return subprocess.CompletedProcess(list(args), 0, f"{manager.SUNSHINE_UNIT}\n", "")
+                    return subprocess.CompletedProcess(list(args), 0, f"{unit}\n", "")
+                if args[:1] == ("is-active",):
+                    return subprocess.CompletedProcess(list(args), 0, "active\n", "")
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+
+            manager._systemctl_user = fake_systemctl_user
+            self.assertEqual(manager._sunshine_unit(), manager.SUNSHINE_UNIT)
+        finally:
+            manager._systemctl_user = original_systemctl_user
+
     def test_sunshine_virtual_input_devices_detects_beef_dead_entries(self) -> None:
         input_listing = """
 I: Bus=0003 Vendor=beef Product=dead Version=0111
