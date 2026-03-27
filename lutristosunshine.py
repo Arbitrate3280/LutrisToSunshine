@@ -1,6 +1,7 @@
 import sys
 import os
 import argparse
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Tuple
 
@@ -87,6 +88,36 @@ def _custom_display_mode_summary(mode: dict) -> str:
         nearest = round(refresh)
         refresh_text = str(int(nearest)) if abs(refresh - nearest) < 0.01 else f"{refresh:.2f}"
     return f"{width}x{height} @ {refresh_text} Hz"
+
+
+def _custom_display_mode_value(mode: dict) -> str:
+    width = int(mode.get("width", 0) or 0)
+    height = int(mode.get("height", 0) or 0)
+    refresh = float(mode.get("refresh", 0) or 0)
+    nearest = round(refresh)
+    refresh_text = str(int(nearest)) if abs(refresh - nearest) < 0.01 else f"{refresh:.2f}"
+    return f"{width}x{height}@{refresh_text}"
+
+
+def _parse_custom_display_mode_value(value: str, current_mode: dict) -> Tuple[int, int, float]:
+    raw_value = value.strip()
+    if raw_value == "":
+        return (
+            int(current_mode["width"]),
+            int(current_mode["height"]),
+            float(current_mode["refresh"]),
+        )
+
+    match = re.fullmatch(r"(\d+)\s*[xX]\s*(\d+)\s*@\s*(\d+(?:\.\d+)?)", raw_value)
+    if not match:
+        raise ValueError()
+
+    width = int(match.group(1))
+    height = int(match.group(2))
+    refresh = float(match.group(3))
+    if width <= 0 or height <= 0 or refresh <= 0:
+        raise ValueError()
+    return width, height, refresh
 
 
 def parse_args(argv=None):
@@ -535,32 +566,6 @@ def handle_display_command(args) -> int:
         print("This controls both the virtual-display output mode and the dynamic MangoHud FPS limit source.")
         return 0
 
-    def read_positive_int(prompt: str, current_value: int) -> int:
-        return get_user_input(
-            prompt,
-            lambda value: current_value if value.strip() == "" else _validate_positive_int(value),
-            "Enter a whole number greater than 0.",
-        )
-
-    def read_positive_refresh(prompt: str, current_value: float) -> float:
-        return get_user_input(
-            prompt,
-            lambda value: current_value if value.strip() == "" else _validate_positive_refresh(value),
-            "Enter a refresh rate greater than 0, for example 59.94 or 120.",
-        )
-
-    def _validate_positive_int(value: str) -> int:
-        parsed = int(value.strip())
-        if parsed <= 0:
-            raise ValueError()
-        return parsed
-
-    def _validate_positive_refresh(value: str) -> float:
-        parsed = float(value.strip())
-        if parsed <= 0:
-            raise ValueError()
-        return parsed
-
     def configure_custom_display_mode(interactive: bool) -> int:
         current_mode = custom_display_mode()
         width = args.width if getattr(args, "width", None) is not None else current_mode["width"]
@@ -571,9 +576,11 @@ def handle_display_command(args) -> int:
             print("")
             print("Custom fixed display mode")
             print(f"Current target: {_custom_display_mode_summary(current_mode)}")
-            width = read_positive_int(f"Width [{current_mode['width']}]: ", current_mode["width"])
-            height = read_positive_int(f"Height [{current_mode['height']}]: ", current_mode["height"])
-            refresh = read_positive_refresh(f"Refresh Hz [{current_mode['refresh']:.2f}]: ", current_mode["refresh"])
+            width, height, refresh = get_user_input(
+                f"Enter the desired resolution and refresh rate as WidthxHeight@RefreshRate (e.g. {_custom_display_mode_value(current_mode)}): ",
+                lambda value: _parse_custom_display_mode_value(value, current_mode),
+                "Enter widthxheight@refreshrate, for example 1920x1080@60.",
+            )
 
         set_custom_display_mode(width, height, refresh)
         return update_refresh_rate_mode("custom")
