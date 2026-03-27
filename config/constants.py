@@ -2,7 +2,9 @@ import os
 
 # Constants
 DEFAULT_IMAGE = "default.png"
-SUNSHINE_API_URL = "https://localhost:47990"  # Change this if needed
+DEFAULT_SUNSHINE_HOST = "localhost"
+DEFAULT_SUNSHINE_PORT = 47990
+SUNSHINE_API_URL = f"https://{DEFAULT_SUNSHINE_HOST}:{DEFAULT_SUNSHINE_PORT}"
 
 SOURCE_COLORS = {
     "Heroic": "\033[38;5;39m",  # Blue 

@@ -89,10 +89,18 @@ Interactive import with automatic cover downloads:
 python3 lutristosunshine.py --cover
 ```
 
+Import using a custom Sunshine web UI port:
+
+```bash
+python3 lutristosunshine.py --sunshine-port 10000
+```
+
 ### Main Flags
 
 - `--all`: add all detected games without the selection prompt
 - `--cover`: download SteamGridDB covers for added games
+- `--sunshine-host`: override the Sunshine or Apollo web UI host for auth and API requests
+- `--sunshine-port`: override the Sunshine or Apollo web UI port for auth and API requests; this is usually `47990`
 
 ## What The Main Flow Does
 

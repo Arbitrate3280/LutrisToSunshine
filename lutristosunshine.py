@@ -2,11 +2,21 @@ import sys
 import os
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Tuple
 
 from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
-from sunshine.sunshine import get_covers_path, get_server_display_name, set_installation_type, set_server_name
+from sunshine.sunshine import (
+    get_api_connection,
+    get_api_url,
+    get_covers_path,
+    get_server_display_name,
+    save_api_connection,
+    set_api_connection,
+    set_installation_type,
+    set_server_name,
+)
 from utils.utils import handle_interrupt, get_games_found_message
-from utils.input import get_menu_choice, get_yes_no_input, get_user_selection
+from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection
 from utils.terminal import accent, badge, heading, muted, state_text
 from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_virtual_display_apps, get_virtual_display_blocked_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
@@ -55,6 +65,12 @@ def _format_kv(label: str, value: str) -> str:
 
 
 def parse_args(argv=None):
+    def api_port_arg(value: str) -> int:
+        port = int(value)
+        if not 1 <= port <= 65535:
+            raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+        return port
+
     parser = argparse.ArgumentParser(
         description="Import launcher games into Sunshine and manage the optional headless virtual display stack.",
     )
@@ -67,6 +83,16 @@ def parse_args(argv=None):
         "--all",
         action="store_true",
         help="Automatically add all listed games (skips selection prompt).",
+    )
+    parser.add_argument(
+        "--sunshine-host",
+        default="",
+        help="Override the Sunshine/Apollo web UI host used for auth and API calls.",
+    )
+    parser.add_argument(
+        "--sunshine-port",
+        type=api_port_arg,
+        help="Override the Sunshine/Apollo web UI port used for auth and API calls. Usually 47990.",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -459,6 +485,46 @@ def handle_virtualdisplay_command(args) -> int:
 
 
 def main(argv=None):
+    def prompt_server_connection() -> Tuple[str, int]:
+        current_host, current_port = get_api_connection()
+        print(f"{get_server_display_name()} web UI address: {get_api_url()}")
+        print("Use the HTTPS web UI port here. The default is 47990, not the game streaming port.")
+
+        host = input(f"Host [{current_host}]: ").strip() or current_host
+        port = get_user_input(
+            f"Port [{current_port}]: ",
+            lambda value: current_port if value.strip() == "" else _validate_port_input(value),
+            "Invalid port. Enter a number from 1 to 65535.",
+        )
+        return host, port
+
+    def _validate_port_input(value: str) -> int:
+        port = int(value.strip())
+        if not 1 <= port <= 65535:
+            raise ValueError()
+        return port
+
+    def configure_connection_and_retry_auth(server_name: str) -> bool:
+        if server_name != "sunshine":
+            return False
+
+        while True:
+            current_url = get_api_url()
+            prompt = (
+                f"Authentication failed using {get_server_display_name()} at {current_url}. "
+                "Configure a different web UI host or port and try again?"
+            )
+            if not get_yes_no_input(prompt, default=True):
+                return False
+
+            host, port = prompt_server_connection()
+            set_api_connection(host=host, port=port)
+
+            if ensure_authenticated(allow_prompt=True):
+                save_api_connection(host, port, server_name=server_name)
+                print(f"Saved {get_server_display_name()} web UI address: {get_api_url()}")
+                return True
+
     args = parse_args(argv)
     if args.command == "virtualdisplay":
         raise SystemExit(handle_virtualdisplay_command(args))
@@ -499,6 +565,11 @@ def main(argv=None):
             set_installation_type("native")
 
         set_server_name(server_name)
+        if args.sunshine_host or args.sunshine_port is not None:
+            set_api_connection(
+                host=args.sunshine_host or None,
+                port=args.sunshine_port,
+            )
         if not is_server_running(server_name):
             print(f"Error: {server_name.title()} is not running. Please start it and try again.")
             return
@@ -506,9 +577,20 @@ def main(argv=None):
         COVERS_PATH = get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
 
-        if not ensure_authenticated(allow_prompt=True):
+        authenticated = ensure_authenticated(allow_prompt=True)
+        if not authenticated:
+            authenticated = configure_connection_and_retry_auth(server_name)
+
+        if not authenticated:
             print("Error: Could not obtain valid authentication. Exiting.")
             return
+
+        if args.sunshine_host or args.sunshine_port is not None:
+            save_api_connection(
+                args.sunshine_host or None,
+                args.sunshine_port,
+                server_name=server_name,
+            )
 
         lutris_command = get_lutris_command()
         heroic_command, _ = get_heroic_command()

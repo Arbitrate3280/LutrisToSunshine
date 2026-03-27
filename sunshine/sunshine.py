@@ -9,7 +9,11 @@ import glob
 import shlex
 from typing import Tuple, Optional, Dict, List
 from requests.utils import dict_from_cookiejar, cookiejar_from_dict
-from config.constants import DEFAULT_IMAGE, SUNSHINE_API_URL
+from config.constants import (
+    DEFAULT_IMAGE,
+    DEFAULT_SUNSHINE_HOST,
+    DEFAULT_SUNSHINE_PORT,
+)
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
@@ -38,6 +42,8 @@ INSTALLATION_TYPE = None
 SERVER_NAME = "sunshine"
 AUTH_SESSION: Optional[requests.Session] = None
 AUTH_TOKEN: Optional[str] = None
+API_HOST_OVERRIDE: Optional[str] = None
+API_PORT_OVERRIDE: Optional[int] = None
 
 def set_installation_type(type_: str):
     global INSTALLATION_TYPE
@@ -46,6 +52,120 @@ def set_installation_type(type_: str):
 def set_server_name(name: str):
     global SERVER_NAME
     SERVER_NAME = name
+
+
+def _normalize_api_host(host: Optional[str]) -> str:
+    normalized = (host or "").strip()
+    return normalized or DEFAULT_SUNSHINE_HOST
+
+
+def _normalize_api_port(port: Optional[object]) -> int:
+    try:
+        normalized = int(port)
+    except (TypeError, ValueError):
+        raise ValueError("Port must be an integer.")
+    if not 1 <= normalized <= 65535:
+        raise ValueError("Port must be between 1 and 65535.")
+    return normalized
+
+
+def _api_connection_file_path() -> str:
+    return os.path.join(_get_config_root(), "server_connection.json")
+
+
+def _load_api_connection_settings() -> Dict[str, Dict[str, object]]:
+    path = _api_connection_file_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as file:
+            payload = json.load(file)
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_api_connection_settings(settings: Dict[str, Dict[str, object]]) -> None:
+    os.makedirs(_get_config_root(), exist_ok=True)
+    with open(_api_connection_file_path(), "w") as file:
+        json.dump(settings, file, indent=2)
+
+
+def set_api_connection(host: Optional[str] = None, port: Optional[object] = None) -> None:
+    global API_HOST_OVERRIDE, API_PORT_OVERRIDE, AUTH_SESSION, AUTH_TOKEN
+    API_HOST_OVERRIDE = _normalize_api_host(host) if host is not None else None
+    API_PORT_OVERRIDE = _normalize_api_port(port) if port is not None else None
+    AUTH_SESSION = None
+    AUTH_TOKEN = None
+
+
+def save_api_connection(host: Optional[str], port: Optional[object], server_name: Optional[str] = None) -> None:
+    target_server = (server_name or SERVER_NAME or "sunshine").strip().lower()
+    current_host, current_port = get_api_connection(server_name=target_server)
+    settings = _load_api_connection_settings()
+    settings[target_server] = {
+        "host": _normalize_api_host(host if host is not None else current_host),
+        "port": _normalize_api_port(port if port is not None else current_port),
+    }
+    _save_api_connection_settings(settings)
+
+
+def _get_environment_api_host(server_name: str) -> Optional[str]:
+    keys = [
+        f"LUTRISTOSUNSHINE_{server_name.upper()}_HOST",
+        "LUTRISTOSUNSHINE_API_HOST",
+    ]
+    for key in keys:
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _get_environment_api_port(server_name: str) -> Optional[int]:
+    keys = [
+        f"LUTRISTOSUNSHINE_{server_name.upper()}_PORT",
+        "LUTRISTOSUNSHINE_API_PORT",
+    ]
+    for key in keys:
+        value = os.environ.get(key, "").strip()
+        if not value:
+            continue
+        try:
+            return _normalize_api_port(value)
+        except ValueError:
+            continue
+    return None
+
+
+def get_api_connection(server_name: Optional[str] = None) -> Tuple[str, int]:
+    target_server = (server_name or SERVER_NAME or "sunshine").strip().lower()
+    settings = _load_api_connection_settings()
+    saved = settings.get(target_server, {}) if isinstance(settings.get(target_server, {}), dict) else {}
+
+    host = (
+        API_HOST_OVERRIDE
+        or _get_environment_api_host(target_server)
+        or _normalize_api_host(saved.get("host"))
+    )
+
+    saved_port = saved.get("port")
+    try:
+        normalized_saved_port = _normalize_api_port(saved_port) if saved_port is not None else DEFAULT_SUNSHINE_PORT
+    except ValueError:
+        normalized_saved_port = DEFAULT_SUNSHINE_PORT
+
+    port = (
+        API_PORT_OVERRIDE
+        or _get_environment_api_port(target_server)
+        or normalized_saved_port
+    )
+    return host, port
+
+
+def get_api_url(server_name: Optional[str] = None) -> str:
+    host, port = get_api_connection(server_name=server_name)
+    return f"https://{host}:{port}"
 
 
 def _server_supports_token_auth() -> bool:
@@ -468,7 +588,7 @@ def _load_session_from_cookies() -> requests.Session:
 
 def _validate_session(session: requests.Session) -> bool:
     try:
-        resp = session.get(f"{SUNSHINE_API_URL}/api/apps", verify=False, timeout=10)
+        resp = session.get(f"{get_api_url()}/api/apps", verify=False, timeout=10)
         return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
@@ -478,7 +598,7 @@ def _validate_token(token: str) -> bool:
         return False
     try:
         resp = requests.get(
-            f"{SUNSHINE_API_URL}/api/apps",
+            f"{get_api_url()}/api/apps",
             headers={"Authorization": token},
             verify=False,
             timeout=10,
@@ -521,7 +641,7 @@ def get_auth_session(allow_prompt: bool = True) -> Optional[requests.Session]:
         ("form", {"username": username, "password": password}),
     ]
     for endpoint in login_endpoints:
-        url = f"{SUNSHINE_API_URL}{endpoint}"
+        url = f"{get_api_url()}{endpoint}"
         for mode, payload in login_payloads:
             try:
                 if mode == "json":
@@ -711,7 +831,7 @@ def sunshine_api_request(method, endpoint, **kwargs):
         Tuple[Optional[Dict], Optional[str]]: A tuple containing the JSON response data 
                                               (if successful) and an error message (if any).
     """
-    url = f"{SUNSHINE_API_URL}{endpoint}"
+    url = f"{get_api_url()}{endpoint}"
     session = kwargs.pop("session", None) or AUTH_SESSION
     token = kwargs.pop("token", None) or AUTH_TOKEN
     headers = kwargs.pop("headers", {})
