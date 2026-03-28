@@ -676,7 +676,7 @@ def handle_display_command(args) -> int:
                 print("Display sync mode")
                 print("1. Follow Moonlight's requested resolution and FPS")
                 print("2. Use the client's refresh rate")
-                print(f"3. Use a custom fixed mode ({_custom_display_mode_summary(custom_display_mode())})")
+                print('3. Use a custom resolution and refresh rate')
                 print("0. Cancel")
                 mode_choice = get_menu_choice("Choose a mode: ", ["0", "1", "2", "3"])
                 if mode_choice == "1":
