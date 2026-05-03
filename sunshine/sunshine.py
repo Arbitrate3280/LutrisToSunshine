@@ -17,7 +17,7 @@ from config.constants import (
 from utils.utils import run_command
 from launchers.lutris import get_lutris_command
 from launchers.heroic import get_heroic_command
-from launchers.faugus import FAUGUS_FLATPAK_ID
+from launchers.faugus import get_faugus_command
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
@@ -765,7 +765,8 @@ def build_game_command(game_id: str, runner) -> Optional[str]:
             return None
         return f'{eden_cmd} -f -g "{game_id}"'
     if isinstance(runner, dict) and runner.get("type") == "Faugus":
-        return f"flatpak run --command=faugus-run {FAUGUS_FLATPAK_ID} --game {shlex.quote(game_id)}"
+        faugus_cmd = get_faugus_command()
+        return f"{faugus_cmd} --game {shlex.quote(game_id)}"
     if isinstance(runner, dict) and runner.get("type") == "RetroArch":
         core_path = runner.get("core_path", "")
         core_path = os.path.expanduser(core_path) if core_path else core_path

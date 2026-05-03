@@ -32,7 +32,7 @@ LutrisToSunshine imports games from supported launchers into Sunshine and can op
 - Heroic: native and Flatpak
 - Bottles: Flatpak
 - Steam: native and Flatpak
-- Faugus: Flatpak
+- Faugus: native and Flatpak
 - Ryubing: Flatpak
 - RetroArch: native and Flatpak
 - Eden: AppImage and native binary
