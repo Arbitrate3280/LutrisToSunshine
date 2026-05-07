@@ -2945,6 +2945,7 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     custom_refresh = _format_refresh_rate_hz(custom_mode["refresh"]) or str(FALLBACK_FPS)
     managed_audio_sinks = _managed_audio_sink_names(state)
     managed_audio_sources = _managed_audio_source_names(state)
+    target_gpu = _safe_string(os.environ.get("LTS_DISPLAY_GPU"))
     mangohud_fps_limit_block = ""
     mangohud_env_append_block = ""
     if state.get("dynamic_mangohud_fps_limit"):
@@ -2961,6 +2962,35 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
         launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
     fi
 """
+    
+    sway_env_block = ""
+    if target_gpu:
+        sway_env_block = f"export WLR_DRM_DEVICES={shlex.quote(target_gpu)}"
+
+    sunshine_gpu_block = ""
+    if target_gpu:
+        conf_path = paths["sunshine_conf"]
+        sunshine_gpu_block = (
+            f"python3 - {shlex.quote(conf_path)} {shlex.quote(target_gpu)} <<'PY'\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "path = Path(sys.argv[1])\n"
+            "gpu = sys.argv[2]\n"
+            "content = path.read_text(encoding='utf-8')\n"
+            "lines = []\n"
+            "found = False\n"
+            "for line in content.splitlines():\n"
+            "    if line.strip().startswith('adapter_name'):\n"
+            "        lines.append(f'adapter_name = {gpu}')\n"
+            "        found = True\n"
+            "    else:\n"
+            "        lines.append(line)\n"
+            "if not found:\n"
+            "    lines.append(f'adapter_name = {gpu}')\n"
+            "path.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')\n"
+            "PY"
+        )
+
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
@@ -3013,6 +3043,8 @@ unset KDE_FULL_SESSION
 unset KDE_SESSION_UID
 unset KDE_SESSION_VERSION
 
+{sway_env_block}
+
 /usr/bin/env -i \
     HOME="$home_value" \
     USER="$user_value" \
@@ -3028,6 +3060,7 @@ unset KDE_SESSION_VERSION
     SWAYSOCK="{state['sway_socket']}" \
     WLR_BACKENDS=headless,libinput \
     LIBSEAT_BACKEND=noop \
+    $( [ -n "${{WLR_DRM_DEVICES:-}}" ] && echo "WLR_DRM_DEVICES=$WLR_DRM_DEVICES" ) \
     /usr/bin/sway --config "{paths['sway_config']}" &
 sway_pid=$!
 
@@ -3098,6 +3131,9 @@ runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 pulse_server_value="${{PULSE_SERVER:-}}"
 pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
+
+{sunshine_gpu_block}
+
 audio_guard_pid=""
 input_bridge_pid=""
 kwin_input_isolation_pid=""
