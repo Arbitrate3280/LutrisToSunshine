@@ -2983,8 +2983,6 @@ input "48879:57005:Mouse_passthrough_(absolute)" accel_profile flat
         Path(paths["sway_start_script"]): f"""#!/bin/bash
 set -euo pipefail
 
-gpu_addr=$({paths['get_gpu_addr']})
-
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 display_file="{paths['wayland_display_file']}"
 before_file="$(mktemp)"
@@ -2997,6 +2995,7 @@ logname_value="${{LOGNAME:-$user_value}}"
 shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 
+gpu_addr=$({paths['get_gpu_addr']})
 if [ -z "$gpu_addr" ]; then
     // TODO: Create script for internal GPU if no dedicated CPU was found
 else
@@ -3604,8 +3603,13 @@ run_headless_command() {{
     local command_to_run="$1"
     log_debug "running prep command: $command_to_run"
     
-    wlr_drm_devices_value="/dev/dri/by-path/card1"
-    wlr_render_drm_device_value="/dev/dri/renderD128"
+    gpu_addr=$({paths['get_gpu_addr']})
+    if [ -z "$gpu_addr" ]; then
+        // TODO: Create script for internal GPU if no dedicated CPU was found
+    else
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+    fi
     
     local -a launch_command
     launch_command=(/usr/bin/env -i
@@ -3948,8 +3952,13 @@ launch_headless_direct() {{
 {mangohud_fps_limit_block.rstrip()}
     log_debug "launch command: $command_to_run"
 
-    wlr_drm_devices_value="/dev/dri/by-path/card1"
-    wlr_render_drm_device_value="/dev/dri/renderD128"
+    gpu_addr=$({paths['get_gpu_addr']})
+    if [ -z "$gpu_addr" ]; then
+        // TODO: Create script for internal GPU if no dedicated CPU was found
+    else
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+    fi
 
     local -a launch_command
     launch_command=(/usr/bin/env -i
