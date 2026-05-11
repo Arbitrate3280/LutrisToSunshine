@@ -609,6 +609,7 @@ def _state_paths() -> Dict[str, str]:
         "headless_prep_script": str(BIN_ROOT / "lutristosunshine-run-headless-prep.sh"),
         "set_resolution_script": str(BIN_ROOT / "lutristosunshine-set-resolution.sh"),
         "reset_resolution_script": str(BIN_ROOT / "lutristosunshine-reset-resolution.sh"),
+        "get_gpu_addr": str(BIN_ROOT / "lutristosunshine-get-gpu-addr.sh"),
         "portal_lock_file": str(PORTAL_LOCK_PATH),
         "portal_active_file": str(PORTAL_ACTIVE_PATH),
         "last_launch_log_file": str(LAST_LAUNCH_LOG_PATH),
@@ -2982,6 +2983,8 @@ input "48879:57005:Mouse_passthrough_(absolute)" accel_profile flat
         Path(paths["sway_start_script"]): f"""#!/bin/bash
 set -euo pipefail
 
+gpu_addr=$({paths['get_gpu_addr']})
+
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 display_file="{paths['wayland_display_file']}"
 before_file="$(mktemp)"
@@ -2993,8 +2996,13 @@ user_value="${{USER:-$(id -un)}}"
 logname_value="${{LOGNAME:-$user_value}}"
 shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
-wlr_drm_devices_value="/dev/dri/by-path/card1"
-wlr_render_drm_device_value="/dev/dri/renderD128"
+
+if [ -z "$gpu_addr" ]; then
+    // TODO: Create script for internal GPU if no dedicated CPU was found
+else
+    wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
+    wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+fi
 
 cleanup() {{
     rm -f "$before_file" "$after_file"
@@ -4441,6 +4449,49 @@ rm -f "$host_env_file" "$systemd_env_dump"
 log_debug "wrapper final exit status=$child_status"
 exit "$child_status"
 """,
+        Path(paths["get_gpu_addr"]): f"""#!/bin/bash
+discrete_gpu=""
+for gpu in /sys/class/drm/card[0-9]; do
+    # if no directory found continue
+    [ -e "$gpu" ] || continue
+
+    # get pci-id of card
+    pci_addr=$(basename $(readlink -f "$gpu/device"))
+    vendor_id=$(cat "$gpu/device/vendor")
+    device_id=$(cat "$gpu/device/device")
+    
+    type="Unknown"
+
+    # Logic for Intel (Vendor 0x8086)
+    if [[ "$vendor_id" == "0x8086" ]]; then
+        # Check auf die typische integrierte Adresse 0000:00:02.0
+        if [[ "$pci_addr" == "0000:00:02.0" ]]; then
+            type="Integrated"
+        else
+            type="Discrete"
+            discrete_gpu=$pci_addr
+        fi
+
+    # Logic for AMD (Vendor 0x1002)
+    elif [[ "$vendor_id" == "0x1002" ]]; then
+        # Suche nach der Northbridge-Spannungsdatei im hwmon-Ordner
+        if ls "$gpu/device/hwmon"/hwmon*/in1_input >/dev/null 2>&1; then
+            type="Integrated"
+        else
+            type="Discrete"
+            discrete_gpu=$pci_addr
+        fi
+
+    # Logic for NVIDIA (Vendor 0x10de)
+    elif [[ "$vendor_id" == "0x10de" ]]; then
+        # NVIDIA ist fast immer Discrete (außer bei sehr alten Tegra-Chips)
+        type="Discrete"
+        discrete_gpu=$pci_addr
+    fi
+done
+
+echo $discrete_gpu
+        """,
         Path(paths["resolve_stream_fps_script"]): f"""#!/bin/bash
 set -euo pipefail
 
