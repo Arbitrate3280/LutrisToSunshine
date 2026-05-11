@@ -2993,6 +2993,8 @@ user_value="${{USER:-$(id -un)}}"
 logname_value="${{LOGNAME:-$user_value}}"
 shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+wlr_drm_devices_value="/dev/dri/by-path/card1"
+wlr_render_drm_device_value="/dev/dri/renderD128"
 
 cleanup() {{
     rm -f "$before_file" "$after_file"
@@ -3028,6 +3030,8 @@ unset KDE_SESSION_VERSION
     SWAYSOCK="{state['sway_socket']}" \
     WLR_BACKENDS=headless,libinput \
     LIBSEAT_BACKEND=noop \
+    WLR_DRM_DEVICES="$wlr_drm_devices_value" \
+    WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value" \
     /usr/bin/sway --config "{paths['sway_config']}" &
 sway_pid=$!
 
@@ -3591,6 +3595,10 @@ PY
 run_headless_command() {{
     local command_to_run="$1"
     log_debug "running prep command: $command_to_run"
+    
+    wlr_drm_devices_value="/dev/dri/by-path/card1"
+    wlr_render_drm_device_value="/dev/dri/renderD128"
+    
     local -a launch_command
     launch_command=(/usr/bin/env -i
         "HOME=$home_value"
@@ -3612,6 +3620,8 @@ run_headless_command() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
+        "WLR_DRM_DEVICES="$wlr_drm_devices_value"
+        "WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value"
     )
     launch_command+=(/bin/sh -lc "$command_to_run")
     "${{launch_command[@]}}" >>"$launch_log_file" 2>&1
@@ -3929,6 +3939,10 @@ launch_headless_direct() {{
     local command_to_run="$1"
 {mangohud_fps_limit_block.rstrip()}
     log_debug "launch command: $command_to_run"
+
+    wlr_drm_devices_value="/dev/dri/by-path/card1"
+    wlr_render_drm_device_value="/dev/dri/renderD128"
+
     local -a launch_command
     launch_command=(/usr/bin/env -i
         "HOME=$home_value"
@@ -3951,6 +3965,8 @@ launch_headless_direct() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
+        "WLR_DRM_DEVICES="$wlr_drm_devices_value"
+        "WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value"
     )
 {mangohud_env_append_block.rstrip()}
     launch_command+=(/bin/sh -lc "$command_to_run")
