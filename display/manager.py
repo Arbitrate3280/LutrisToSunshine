@@ -2996,11 +2996,16 @@ shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 
 gpu_addr=$({paths['get_gpu_addr']})
-if [ -z "$gpu_addr" ]; then
-    // TODO: Create script for internal GPU if no dedicated CPU was found
+IFS='-' read -a gpu_array <<< "$gpu_addr"
+
+if [[ -n ${{gpu_array[0]}} ]]; then
+    external_gpu=${{gpu_array[0]}}
+    wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
+    wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
 else
-    wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
-    wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+    internal_gpu=${{gpu_array[1]}}
+    wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
+    wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
 fi
 
 cleanup() {{
@@ -3604,11 +3609,16 @@ run_headless_command() {{
     log_debug "running prep command: $command_to_run"
     
     gpu_addr=$({paths['get_gpu_addr']})
-    if [ -z "$gpu_addr" ]; then
-        // TODO: Create script for internal GPU if no dedicated CPU was found
+    IFS='-' read -a gpu_array <<< "$gpu_addr"
+
+    if [[ -n ${{gpu_array[0]}} ]]; then
+        external_gpu=${{gpu_array[0]}}
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
     else
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+        internal_gpu=${{gpu_array[1]}}
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
     fi
     
     local -a launch_command
@@ -3953,11 +3963,16 @@ launch_headless_direct() {{
     log_debug "launch command: $command_to_run"
 
     gpu_addr=$({paths['get_gpu_addr']})
-    if [ -z "$gpu_addr" ]; then
-        // TODO: Create script for internal GPU if no dedicated CPU was found
+    IFS='-' read -a gpu_array <<< "$gpu_addr"
+
+    if [[ -n ${{gpu_array[0]}} ]]; then
+        external_gpu=${{gpu_array[0]}}
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
     else
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$gpu_addr-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$gpu_addr-render"
+        internal_gpu=${{gpu_array[1]}}
+        wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
     fi
 
     local -a launch_command
@@ -4460,6 +4475,7 @@ exit "$child_status"
 """,
         Path(paths["get_gpu_addr"]): f"""#!/bin/bash
 discrete_gpu=""
+internal_gpu=""
 for gpu in /sys/class/drm/card[0-9]; do
     # if no directory found continue
     [ -e "$gpu" ] || continue
@@ -4473,9 +4489,10 @@ for gpu in /sys/class/drm/card[0-9]; do
 
     # Logic for Intel (Vendor 0x8086)
     if [[ "$vendor_id" == "0x8086" ]]; then
-        # Check auf die typische integrierte Adresse 0000:00:02.0
+        # Check for typical integrated adrress
         if [[ "$pci_addr" == "0000:00:02.0" ]]; then
             type="Integrated"
+            internal_gpu=$pci_addr
         else
             type="Discrete"
             discrete_gpu=$pci_addr
@@ -4483,9 +4500,10 @@ for gpu in /sys/class/drm/card[0-9]; do
 
     # Logic for AMD (Vendor 0x1002)
     elif [[ "$vendor_id" == "0x1002" ]]; then
-        # Suche nach der Northbridge-Spannungsdatei im hwmon-Ordner
+        # Search on Northbridge in hwmon folder
         if ls "$gpu/device/hwmon"/hwmon*/in1_input >/dev/null 2>&1; then
             type="Integrated"
+            internal_gpu=$pci_addr
         else
             type="Discrete"
             discrete_gpu=$pci_addr
@@ -4493,13 +4511,13 @@ for gpu in /sys/class/drm/card[0-9]; do
 
     # Logic for NVIDIA (Vendor 0x10de)
     elif [[ "$vendor_id" == "0x10de" ]]; then
-        # NVIDIA ist fast immer Discrete (außer bei sehr alten Tegra-Chips)
+        # NVIDIA ist almost always descrete (except for old Tegra-Chips)
         type="Discrete"
         discrete_gpu=$pci_addr
     fi
 done
 
-echo $discrete_gpu
+echo $discrete_gpu-$internal_gpu
         """,
         Path(paths["resolve_stream_fps_script"]): f"""#!/bin/bash
 set -euo pipefail
