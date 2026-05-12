@@ -3642,8 +3642,8 @@ run_headless_command() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
-        "WLR_DRM_DEVICES="$wlr_drm_devices_value"
-        "WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value"
+        "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+        "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
     )
     launch_command+=(/bin/sh -lc "$command_to_run")
     "${{launch_command[@]}}" >>"$launch_log_file" 2>&1
@@ -3997,8 +3997,8 @@ launch_headless_direct() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
-        "WLR_DRM_DEVICES="$wlr_drm_devices_value"
-        "WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value"
+        "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+        "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
     )
 {mangohud_env_append_block.rstrip()}
     launch_command+=(/bin/sh -lc "$command_to_run")
