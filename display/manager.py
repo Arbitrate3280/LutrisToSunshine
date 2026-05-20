@@ -2998,14 +2998,15 @@ dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 gpu_addr=$({paths['get_gpu_addr']})
 IFS='-' read -a gpu_array <<< "$gpu_addr"
 
-if [[ -n ${{gpu_array[0]}} ]]; then
-    external_gpu=${{gpu_array[0]}}
-    wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
-    wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
-else
-    internal_gpu=${{gpu_array[1]}}
-    wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
-    wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
+wlr_drm_devices_value=""
+wlr_render_drm_device_value=""
+
+if [[ -n ${{gpu_array[0]:-}} ]]; then
+    wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
+    wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
+elif [[ -n ${{gpu_array[1]:-}} ]]; then
+    wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
+    wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
 fi
 
 cleanup() {{
@@ -3027,24 +3028,31 @@ unset KDE_FULL_SESSION
 unset KDE_SESSION_UID
 unset KDE_SESSION_VERSION
 
-/usr/bin/env -i \
-    HOME="$home_value" \
-    USER="$user_value" \
-    LOGNAME="$logname_value" \
-    SHELL="$shell_value" \
-    PATH="$path_value" \
-    LANG="$lang_value" \
-    XDG_RUNTIME_DIR="$runtime_dir" \
-    DBUS_SESSION_BUS_ADDRESS="$dbus_value" \
-    XDG_SESSION_TYPE=wayland \
-    XDG_CURRENT_DESKTOP=sway \
-    XDG_SESSION_DESKTOP=sway \
-    SWAYSOCK="{state['sway_socket']}" \
-    WLR_BACKENDS=headless,libinput \
-    LIBSEAT_BACKEND=noop \
-    WLR_DRM_DEVICES="$wlr_drm_devices_value" \
-    WLR_RENDER_DRM_DEVICE="$wlr_render_drm_device_value" \
-    /usr/bin/sway --config "{paths['sway_config']}" &
+    local -a sway_cmd=(
+        /usr/bin/env -i
+        "HOME=$home_value"
+        "USER=$user_value"
+        "LOGNAME=$logname_value"
+        "SHELL=$shell_value"
+        "PATH=$path_value"
+        "LANG=$lang_value"
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "XDG_SESSION_TYPE=wayland"
+        "XDG_CURRENT_DESKTOP=sway"
+        "XDG_SESSION_DESKTOP=sway"
+        "SWAYSOCK={state['sway_socket']}"
+        "WLR_BACKENDS=headless,libinput"
+        "LIBSEAT_BACKEND=noop"
+    )
+    if [[ -n $wlr_drm_devices_value ]]; then
+        sway_cmd+=(
+            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
+        )
+    fi
+    sway_cmd+=(/usr/bin/sway --config "{paths['sway_config']}")
+    "${{sway_cmd[@]}}" &
 sway_pid=$!
 
 for _ in $(seq 1 100); do
@@ -3611,16 +3619,17 @@ run_headless_command() {{
     gpu_addr=$({paths['get_gpu_addr']})
     IFS='-' read -a gpu_array <<< "$gpu_addr"
 
-    if [[ -n ${{gpu_array[0]}} ]]; then
-        external_gpu=${{gpu_array[0]}}
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
-    else
-        internal_gpu=${{gpu_array[1]}}
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
+    wlr_drm_devices_value=""
+    wlr_render_drm_device_value=""
+
+    if [[ -n ${{gpu_array[0]:-}} ]]; then
+        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
+    elif [[ -n ${{gpu_array[1]:-}} ]]; then
+        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
     fi
-    
+
     local -a launch_command
     launch_command=(/usr/bin/env -i
         "HOME=$home_value"
@@ -3642,9 +3651,13 @@ run_headless_command() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
-        "WLR_DRM_DEVICES=$wlr_drm_devices_value"
-        "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
     )
+    if [[ -n $wlr_drm_devices_value ]]; then
+        launch_command+=(
+            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
+        )
+    fi
     launch_command+=(/bin/sh -lc "$command_to_run")
     "${{launch_command[@]}}" >>"$launch_log_file" 2>&1
 }}
@@ -3965,14 +3978,15 @@ launch_headless_direct() {{
     gpu_addr=$({paths['get_gpu_addr']})
     IFS='-' read -a gpu_array <<< "$gpu_addr"
 
-    if [[ -n ${{gpu_array[0]}} ]]; then
-        external_gpu=${{gpu_array[0]}}
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$external_gpu-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$external_gpu-render"
-    else
-        internal_gpu=${{gpu_array[1]}}
-        wlr_drm_devices_value="/dev/dri/by-path/pci-$internal_gpu-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-$internal_gpu-render"
+    wlr_drm_devices_value=""
+    wlr_render_drm_device_value=""
+
+    if [[ -n ${{gpu_array[0]:-}} ]]; then
+        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
+    elif [[ -n ${{gpu_array[1]:-}} ]]; then
+        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
+        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
     fi
 
     local -a launch_command
@@ -3997,9 +4011,13 @@ launch_headless_direct() {{
         "PULSE_SINK={audio_sink}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
-        "WLR_DRM_DEVICES=$wlr_drm_devices_value"
-        "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
     )
+    if [[ -n $wlr_drm_devices_value ]]; then
+        launch_command+=(
+            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
+        )
+    fi
 {mangohud_env_append_block.rstrip()}
     launch_command+=(/bin/sh -lc "$command_to_run")
     setsid "${{launch_command[@]}}" >>"$launch_log_file" 2>&1 &
@@ -4856,6 +4874,7 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
         "reset_resolution_script",
         "input_bridge_script",
         "kwin_input_isolation_script",
+        "get_gpu_addr",
     ]
     return [Path(paths[key]) for key in keys if _safe_string(paths.get(key))]
 
