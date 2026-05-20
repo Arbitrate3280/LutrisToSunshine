@@ -290,6 +290,7 @@ class DisplayCliTests(unittest.TestCase):
                 "controller_detection_error": None,
                 "controller_count": 0,
                 "controllers": [],
+                "gpu_status_label": "[AUTO] wlroots chooses GPU",
                 "next_step": "Run enable.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
@@ -315,7 +316,7 @@ class DisplayCliTests(unittest.TestCase):
         original_display_snapshot = lutristosunshine.display_snapshot
         original_get_display_blocked_apps = lutristosunshine.get_display_blocked_apps
         original_get_menu_choice = lutristosunshine.get_menu_choice
-        choices = iter(["5", "0", "0"])
+        choices = iter(["6", "0", "0"])
         try:
             lutristosunshine.display_snapshot = lambda: {
                 "configured": True,
@@ -336,6 +337,7 @@ class DisplayCliTests(unittest.TestCase):
                 "controller_detection_error": None,
                 "controller_count": 0,
                 "controllers": [],
+                "gpu_status_label": "[AUTO] wlroots chooses GPU",
                 "next_step": "Run start.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
@@ -391,6 +393,7 @@ class DisplayCliTests(unittest.TestCase):
                         "details": "/dev/input/event256",
                     }
                 ],
+                "gpu_status_label": "[AUTO] wlroots chooses GPU",
                 "next_step": "Run doctor.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)

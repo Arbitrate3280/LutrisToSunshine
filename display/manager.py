@@ -642,6 +642,9 @@ def _default_state() -> Dict[str, Any]:
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
         "exclusive_input_devices": _empty_exclusive_input_state(),
+        "gpu_mode": "auto",
+        "gpu_card_path": "",
+        "gpu_render_path": "",
         "paths": paths,
     }
 
@@ -665,6 +668,9 @@ def load_state() -> Dict[str, Any]:
     state["exclusive_input_devices"] = _normalized_exclusive_input_state(
         state.get("exclusive_input_devices")
     )
+    state["gpu_mode"] = _safe_string(state.get("gpu_mode")).lower() if _safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
+    state["gpu_card_path"] = _safe_string(state.get("gpu_card_path"))
+    state["gpu_render_path"] = _safe_string(state.get("gpu_render_path"))
     state["paths"] = _state_paths()
     return state
 
@@ -723,6 +729,186 @@ def set_custom_display_mode(width: int, height: int, refresh: float) -> Dict[str
         }
     )
     return refresh_managed_files(state)
+
+_PCI_IDS_PATHS = [
+    Path("/usr/share/hwdata/pci.ids"),
+    Path("/usr/share/pci.ids"),
+]
+
+
+def _pci_device_name(vendor_hex: str, device_hex: str) -> str:
+    """Look up the human-readable device name from pci.ids using vendor/device IDs.
+    vendor_hex/device_hex are like '0x1002' / '0x73df'. Returns '' if not found.
+    """
+    pci_ids_file = None
+    for candidate in _PCI_IDS_PATHS:
+        if candidate.exists():
+            pci_ids_file = candidate
+            break
+    if pci_ids_file is None:
+        return ""
+    vendor_prefix = vendor_hex.replace("0x", "").lower()
+    device_prefix = device_hex.replace("0x", "").lower()
+    if not vendor_prefix or not device_prefix:
+        return ""
+    try:
+        in_vendor = False
+        with open(pci_ids_file, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not in_vendor:
+                    if line.rstrip() and not line[0].isspace() and line.split()[0].lower() == vendor_prefix:
+                        in_vendor = True
+                    continue
+                if line.strip() and not line[0].isspace() and not line.startswith("#"):
+                    break
+                if line[0] == "\t" and (len(line) < 2 or line[1] != "\t"):
+                    parts = line.lstrip("\t").split(None, 1)
+                    if parts and parts[0].lower() == device_prefix:
+                        return parts[1].strip() if len(parts) > 1 else ""
+        return ""
+    except OSError:
+        return ""
+
+
+def _detect_available_gpus() -> List[Dict[str, str]]:
+    """Detect available DRM GPUs from /sys/class/drm/card*.
+    Returns a list of dicts with keys: pci_addr, vendor, model, label, card_path, render_path.
+    """
+    gpus = []
+    for entry in sorted(Path("/sys/class/drm").glob("card*")):
+        if not re.match(r"^card\d+$", entry.name):
+            continue
+        try:
+            device_link = entry / "device"
+            if not device_link.is_symlink():
+                continue
+            pci_addr = os.path.basename(os.path.realpath(str(device_link)))
+            if not pci_addr.startswith("0000:"):
+                continue
+            vendor_file = entry / "device" / "vendor"
+            device_file = entry / "device" / "device"
+            if not vendor_file.exists():
+                continue
+            vendor_id = vendor_file.read_text().strip()
+            device_id = device_file.read_text().strip() if device_file.exists() else ""
+        except OSError:
+            continue
+        vendor = "Unknown"
+        gpu_type = "Unknown"
+        if vendor_id == "0x8086":
+            vendor = "Intel"
+            gpu_type = "Integrated" if pci_addr == "0000:00:02.0" else "Discrete"
+        elif vendor_id == "0x1002":
+            vendor = "AMD"
+            hwmon_dir = entry / "device" / "hwmon"
+            try:
+                has_voltage = any(hwmon_dir.glob("hwmon*/in1_input"))
+            except OSError:
+                has_voltage = False
+            gpu_type = "Integrated" if has_voltage else "Discrete"
+        elif vendor_id == "0x10de":
+            vendor = "NVIDIA"
+            gpu_type = "Discrete"
+        card_path = f"/dev/dri/by-path/pci-{pci_addr}-card"
+        render_path = f"/dev/dri/by-path/pci-{pci_addr}-render"
+        model = _pci_device_name(vendor_id, device_id)
+        if model:
+            label = f"{vendor} {model}"
+        else:
+            label = f"{vendor} ({gpu_type}) [{pci_addr}]"
+        gpus.append({
+            "pci_addr": pci_addr,
+            "vendor": vendor,
+            "model": model,
+            "label": label,
+            "card_path": card_path,
+            "render_path": render_path,
+        })
+    return gpus
+
+
+def gpu_status_label(state: Dict[str, Any]) -> str:
+    """Return a human-readable label for the current GPU mode setting."""
+    gpu_mode = _safe_string(state.get("gpu_mode")).lower()
+    if gpu_mode != "manual":
+        return "[AUTO] wlroots chooses GPU"
+    card_path = _safe_string(state.get("gpu_card_path"))
+    if not card_path:
+        return "[AUTO] wlroots chooses GPU"
+    card_exists = Path(card_path).exists()
+    if not card_exists:
+        return f"[STALE] {card_path} (path no longer exists, falling back to auto)"
+    pci_addr = ""
+    by_path_prefix = "/dev/dri/by-path/pci-"
+    if card_path.startswith(by_path_prefix) and card_path.endswith("-card"):
+        pci_addr = card_path[len(by_path_prefix):-len("-card")]
+    gpus = _detect_available_gpus()
+    for gpu in gpus:
+        if gpu["pci_addr"] == pci_addr:
+            return f"[MANUAL] {gpu['label']} ({card_path})"
+    return f"[MANUAL] {card_path}"
+
+
+def set_gpu_mode(mode: str, card_path: str = "", render_path: str = "") -> Dict[str, Any]:
+    state = load_state()
+    if mode not in ("auto", "manual"):
+        mode = "auto"
+    state["gpu_mode"] = mode
+    if mode == "manual" and card_path:
+        state["gpu_card_path"] = card_path
+        state["gpu_render_path"] = render_path
+    else:
+        state["gpu_card_path"] = ""
+        state["gpu_render_path"] = ""
+    return refresh_managed_files(state)
+
+
+def configure_gpu() -> int:
+    """Interactive GPU selection for the virtual display."""
+    state = load_state()
+    print("")
+    print("Virtual display GPU selection")
+    print("This controls which GPU wlroots uses for the headless virtual display.")
+    print("Most users should leave this on Auto.")
+    current_label = gpu_status_label(state)
+    print(f"Current: {current_label}")
+    print("")
+    print(f"  0. Auto — wlroots chooses GPU automatically")
+    gpus = _detect_available_gpus()
+    if not gpus:
+        print("")
+        print("No DRM GPUs detected on this system.")
+        gpu_mode = _safe_string(state.get("gpu_mode")).lower()
+        if gpu_mode == "manual":
+            print("Current manual GPU selection will be cleared to Auto.")
+            if get_user_input(
+                "Reset GPU selection to Auto? (y/n): ",
+                lambda value: value.strip().lower() if value.strip().lower() in {"y", "n"} else (_ for _ in ()).throw(ValueError()),
+                "Enter y or n.",
+            ) == "y":
+                set_gpu_mode("auto")
+                print("GPU selection reset to Auto.")
+        return 0
+    valid_choices = ["0"]
+    for i, gpu in enumerate(gpus, start=1):
+        card_exists = "OK" if Path(gpu["card_path"]).exists() else "MISSING"
+        print(f"  {i}. {gpu['label']} — {gpu['card_path']} ({card_exists})")
+        valid_choices.append(str(i))
+    print("")
+    choice = get_user_input(
+        "Choose a GPU for the virtual display: ",
+        lambda value: value.strip() if value.strip() in valid_choices else (_ for _ in ()).throw(ValueError()),
+        f"Enter a number from 0 to {len(gpus)}.",
+    )
+    if choice == "0":
+        set_gpu_mode("auto")
+        print("GPU selection set to Auto. wlroots will choose the GPU.")
+    else:
+        idx = int(choice) - 1
+        gpu = gpus[idx]
+        set_gpu_mode("manual", gpu["card_path"], gpu["render_path"])
+        print(f"GPU selection set to {gpu['label']} ({gpu['card_path']}).")
+    return 0
 
 
 def get_app_prep_commands() -> List[Dict[str, str]]:
@@ -2962,6 +3148,38 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
         launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
     fi
 """
+    gpu_card_path = _safe_string(state.get("gpu_card_path"))
+    gpu_render_path = _safe_string(state.get("gpu_render_path"))
+    gpu_detection_block = ""
+    gpu_env_vars_block = ""
+    gpu_launch_env_vars_block = ""
+    if state.get("gpu_mode") == "manual" and gpu_card_path:
+        gpu_detection_block = f"""
+wlr_drm_devices_value=""
+wlr_render_drm_device_value=""
+if [[ -e "{gpu_card_path}" ]] && [[ -e "{gpu_render_path}" ]]; then
+    wlr_drm_devices_value="{gpu_card_path}"
+    wlr_render_drm_device_value="{gpu_render_path}"
+else
+    echo "lts-gpu: saved GPU paths not found, skipping WLR GPU vars" >&2
+fi
+"""
+        gpu_env_vars_block = """
+    if [[ -n $wlr_drm_devices_value ]]; then
+        sway_cmd+=(
+            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
+        )
+    fi
+"""
+        gpu_launch_env_vars_block = """
+    if [[ -n $wlr_drm_devices_value ]]; then
+        launch_command+=(
+            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
+            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
+        )
+    fi
+"""
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
@@ -2995,19 +3213,7 @@ logname_value="${{LOGNAME:-$user_value}}"
 shell_value="${{SHELL:-/bin/sh}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 
-gpu_addr=$({paths['get_gpu_addr']})
-IFS='-' read -a gpu_array <<< "$gpu_addr"
-
-wlr_drm_devices_value=""
-wlr_render_drm_device_value=""
-
-if [[ -n ${{gpu_array[0]:-}} ]]; then
-    wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
-    wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
-elif [[ -n ${{gpu_array[1]:-}} ]]; then
-    wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
-    wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
-fi
+{gpu_detection_block}
 
 cleanup() {{
     rm -f "$before_file" "$after_file"
@@ -3045,12 +3251,7 @@ unset KDE_SESSION_VERSION
         "WLR_BACKENDS=headless,libinput"
         "LIBSEAT_BACKEND=noop"
     )
-    if [[ -n $wlr_drm_devices_value ]]; then
-        sway_cmd+=(
-            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
-            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
-        )
-    fi
+{gpu_env_vars_block}
     sway_cmd+=(/usr/bin/sway --config "{paths['sway_config']}")
     "${{sway_cmd[@]}}" &
 sway_pid=$!
@@ -3616,19 +3817,7 @@ run_headless_command() {{
     local command_to_run="$1"
     log_debug "running prep command: $command_to_run"
     
-    gpu_addr=$({paths['get_gpu_addr']})
-    IFS='-' read -a gpu_array <<< "$gpu_addr"
-
-    wlr_drm_devices_value=""
-    wlr_render_drm_device_value=""
-
-    if [[ -n ${{gpu_array[0]:-}} ]]; then
-        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
-    elif [[ -n ${{gpu_array[1]:-}} ]]; then
-        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
-    fi
+    {gpu_detection_block}
 
     local -a launch_command
     launch_command=(/usr/bin/env -i
@@ -3652,12 +3841,7 @@ run_headless_command() {{
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
     )
-    if [[ -n $wlr_drm_devices_value ]]; then
-        launch_command+=(
-            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
-            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
-        )
-    fi
+    {gpu_launch_env_vars_block}
     launch_command+=(/bin/sh -lc "$command_to_run")
     "${{launch_command[@]}}" >>"$launch_log_file" 2>&1
 }}
@@ -3975,19 +4159,7 @@ launch_headless_direct() {{
 {mangohud_fps_limit_block.rstrip()}
     log_debug "launch command: $command_to_run"
 
-    gpu_addr=$({paths['get_gpu_addr']})
-    IFS='-' read -a gpu_array <<< "$gpu_addr"
-
-    wlr_drm_devices_value=""
-    wlr_render_drm_device_value=""
-
-    if [[ -n ${{gpu_array[0]:-}} ]]; then
-        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[0]}}-render"
-    elif [[ -n ${{gpu_array[1]:-}} ]]; then
-        wlr_drm_devices_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-card"
-        wlr_render_drm_device_value="/dev/dri/by-path/pci-${{gpu_array[1]}}-render"
-    fi
+    {gpu_detection_block}
 
     local -a launch_command
     launch_command=(/usr/bin/env -i
@@ -4012,12 +4184,7 @@ launch_headless_direct() {{
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
     )
-    if [[ -n $wlr_drm_devices_value ]]; then
-        launch_command+=(
-            "WLR_DRM_DEVICES=$wlr_drm_devices_value"
-            "WLR_RENDER_DRM_DEVICE=$wlr_render_drm_device_value"
-        )
-    fi
+    {gpu_launch_env_vars_block}
 {mangohud_env_append_block.rstrip()}
     launch_command+=(/bin/sh -lc "$command_to_run")
     setsid "${{launch_command[@]}}" >>"$launch_log_file" 2>&1 &
@@ -5262,6 +5429,10 @@ def display_snapshot() -> Dict[str, Any]:
         "controller_count": len(selections),
         "controller_detection_error": device_error,
         "dependencies_missing": _ensure_dependencies(),
+        "gpu_mode": _safe_string(state.get("gpu_mode")).lower() if _safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto",
+        "gpu_card_path": _safe_string(state.get("gpu_card_path")),
+        "gpu_render_path": _safe_string(state.get("gpu_render_path")),
+        "gpu_status_label": gpu_status_label(state),
         "next_step": "",
     }
     if not configured:
@@ -5501,6 +5672,7 @@ def display_status() -> int:
         print("- Client inputs from Moonlight/Sunshine work automatically.")
         print("- No host controllers are currently reserved for passthrough.")
     print(f"Logs: {snapshot['last_launch_log_file']}")
+    print(f"Virtual display GPU: {snapshot['gpu_status_label']}")
     print(f"Next step: {snapshot['next_step']}")
     return 0
 
