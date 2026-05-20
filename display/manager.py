@@ -4655,6 +4655,41 @@ def _remove_udev_rule(state: Dict[str, Any]) -> bool:
     return _reload_udev_rules()
 
 
+def _clean_kde_libinput_config() -> None:
+    vendor = f"{SUNSHINE_INPUT_VENDOR_ID:04x}"
+    product = f"{SUNSHINE_INPUT_PRODUCT_ID:04x}"
+    for path in [
+        Path("~/.config/kcminputrc").expanduser(),
+        Path("~/.config/kdedefaults/kcminputrc").expanduser(),
+    ]:
+        if not path.exists():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        except OSError:
+            continue
+        cleaned = []
+        skip_next = False
+        changed = False
+        for line in lines:
+            if skip_next:
+                skip_next = False
+                changed = True
+                continue
+            stripped = line.strip()
+            # Match [Libinput][beef][dead][... passthrough]
+            if stripped.startswith("[Libinput]") and f"[{vendor}][{product}]" in stripped:
+                skip_next = True
+                changed = True
+                continue
+            cleaned.append(line)
+        if changed:
+            try:
+                path.write_text("".join(cleaned), encoding="utf-8")
+            except OSError:
+                pass
+
+
 def _ensure_dependencies() -> List[str]:
     missing = []
     for binary in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaybg", "swaymsg", "systemctl"]:
@@ -5382,6 +5417,7 @@ def remove_display() -> int:
     stop_display()
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
+    _clean_kde_libinput_config()
 
     for path in _managed_setup_paths(state):
         try:
