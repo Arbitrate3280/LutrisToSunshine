@@ -161,6 +161,13 @@ Open the guided hub:
 python3 lutristosunshine.py display
 ```
 
+
+Select which GPU the virtual display should use, essential for multi-GPU setups:
+
+```bash
+python3 lutristosunshine.py display-gpu
+```
+
 The guided hub now keeps the default view short and moves secondary actions under `Advanced tools`.
 
 Set up, start, and sync the full virtual-display flow:
@@ -265,6 +272,15 @@ sudo usermod -aG input $USER
 
 Log out and back in (or start a new session) for the change to take effect.
 
+### GPU not being used for virtual display
+
+If you have a multi-GPU setup and the virtual display is using the wrong GPU, select which GPU the virtual display should use:
+
+```bash
+python3 lutristosunshine.py display-gpu
+```
+
+This is especially useful for multi-GPU setups so the stream can run on a dedicated card.
 ## Limitations And Compatibility
 
 Virtual display is still a work in progress. It has currently been tested only on:

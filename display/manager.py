@@ -3234,7 +3234,7 @@ unset KDE_FULL_SESSION
 unset KDE_SESSION_UID
 unset KDE_SESSION_VERSION
 
-    local -a sway_cmd=(
+    sway_cmd=(
         /usr/bin/env -i
         "HOME=$home_value"
         "USER=$user_value"
