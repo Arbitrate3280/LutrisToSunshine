@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.input import get_user_input
+from display import sunshine_service as _svc
+from display.utils import run_command, safe_string
 
 
 PROFILE_NAME = "default"
@@ -28,8 +30,6 @@ PROFILE_ROOT = DISPLAY_ROOT / PROFILE_NAME
 BIN_ROOT = CONFIG_ROOT / "bin"
 DISPLAY_STATE_PATH = DISPLAY_ROOT / "display.json"
 LEGACY_STATE_PATH = LEGACY_DISPLAY_ROOT / f"{LEGACY_DISPLAY_DIRNAME}.json"
-SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
-FALLBACK_SUNSHINE_UNIT = "sunshine.service"
 FLATPAK_PORTAL_UNIT = "flatpak-portal.service"
 DISPLAY_SOCKET_PATH = f"/run/user/{os.getuid()}/lutristosunshine-display.sock"
 WAYLAND_DISPLAY_PATH = PROFILE_ROOT / "wayland-display"
@@ -43,7 +43,6 @@ FALLBACK_WIDTH = 1920
 FALLBACK_HEIGHT = 1080
 FALLBACK_FPS = 60
 REFRESH_RATE_SYNC_MODES = {"client", "exact", "custom"}
-SUNSHINE_FLATPAK_ID = "dev.lizardbyte.app.Sunshine"
 SUNSHINE_INPUT_VENDOR_ID = 0xBEEF
 SUNSHINE_INPUT_PRODUCT_ID = 0xDEAD
 SUNSHINE_INPUT_NAME_MARKERS = [
@@ -177,24 +176,6 @@ def detect_sunshine_config_root() -> Path:
     return _config_root_candidates()[0]
 
 
-def _sunshine_binary() -> Optional[str]:
-    binary = shutil.which("sunshine")
-    if binary:
-        return binary
-    flatpak = shutil.which("flatpak")
-    if not flatpak:
-        return None
-    result = subprocess.run(
-        [flatpak, "info", SUNSHINE_FLATPAK_ID],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if result.returncode == 0:
-        return f"{flatpak} run {SUNSHINE_FLATPAK_ID}"
-    return None
-
-
 def _evdev_import_error() -> Optional[str]:
     try:
         from evdev import InputDevice, ecodes  # noqa: F401
@@ -207,12 +188,8 @@ def _evdev_import_error() -> Optional[str]:
     return None
 
 
-def _safe_string(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _normalized_refresh_rate_sync_mode(value: Any) -> str:
-    normalized = _safe_string(value).lower()
+    normalized = safe_string(value).lower()
     if normalized in REFRESH_RATE_SYNC_MODES:
         return normalized
     return "client"
@@ -273,12 +250,12 @@ def _preferred_event_symlink(event_path: str, directory: str) -> str:
 def _selection_id_from_fingerprint(fingerprint: Dict[str, Any]) -> str:
     payload = json.dumps(
         {
-            "by_id": _safe_string(fingerprint.get("by_id")),
-            "uniq": _safe_string(fingerprint.get("uniq")),
-            "phys": _safe_string(fingerprint.get("phys")),
-            "vendor_id": _safe_string(fingerprint.get("vendor_id")).lower(),
-            "product_id": _safe_string(fingerprint.get("product_id")).lower(),
-            "name": _safe_string(fingerprint.get("name")),
+            "by_id": safe_string(fingerprint.get("by_id")),
+            "uniq": safe_string(fingerprint.get("uniq")),
+            "phys": safe_string(fingerprint.get("phys")),
+            "vendor_id": safe_string(fingerprint.get("vendor_id")).lower(),
+            "product_id": safe_string(fingerprint.get("product_id")).lower(),
+            "name": safe_string(fingerprint.get("name")),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -291,17 +268,17 @@ def _normalized_selection_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(fingerprint, dict):
         fingerprint = {}
     normalized_fingerprint = {
-        "by_id": _safe_string(fingerprint.get("by_id")),
-        "uniq": _safe_string(fingerprint.get("uniq")),
-        "phys": _safe_string(fingerprint.get("phys")),
-        "vendor_id": _safe_string(fingerprint.get("vendor_id")).lower(),
-        "product_id": _safe_string(fingerprint.get("product_id")).lower(),
-        "name": _safe_string(fingerprint.get("name")),
+        "by_id": safe_string(fingerprint.get("by_id")),
+        "uniq": safe_string(fingerprint.get("uniq")),
+        "phys": safe_string(fingerprint.get("phys")),
+        "vendor_id": safe_string(fingerprint.get("vendor_id")).lower(),
+        "product_id": safe_string(fingerprint.get("product_id")).lower(),
+        "name": safe_string(fingerprint.get("name")),
     }
-    selection_id = _safe_string(entry.get("selection_id")) if isinstance(entry, dict) else ""
+    selection_id = safe_string(entry.get("selection_id")) if isinstance(entry, dict) else ""
     if not selection_id:
         selection_id = _selection_id_from_fingerprint(normalized_fingerprint)
-    label = _safe_string(entry.get("label")) if isinstance(entry, dict) else ""
+    label = safe_string(entry.get("label")) if isinstance(entry, dict) else ""
     if not label:
         label = normalized_fingerprint["name"] or selection_id
     return {
@@ -331,19 +308,19 @@ def _has_selected_input_devices(state: Dict[str, Any]) -> bool:
 def _selection_matches_device(selection: Dict[str, Any], device_info: Dict[str, Any]) -> bool:
     fingerprint = selection.get("fingerprint", {})
     device_fingerprint = device_info.get("fingerprint", {})
-    by_id = _safe_string(fingerprint.get("by_id"))
-    if by_id and by_id == _safe_string(device_fingerprint.get("by_id")):
+    by_id = safe_string(fingerprint.get("by_id"))
+    if by_id and by_id == safe_string(device_fingerprint.get("by_id")):
         return True
-    uniq = _safe_string(fingerprint.get("uniq"))
-    if uniq and uniq == _safe_string(device_fingerprint.get("uniq")):
+    uniq = safe_string(fingerprint.get("uniq"))
+    if uniq and uniq == safe_string(device_fingerprint.get("uniq")):
         return True
-    phys = _safe_string(fingerprint.get("phys"))
+    phys = safe_string(fingerprint.get("phys"))
     if (
         phys
-        and phys == _safe_string(device_fingerprint.get("phys"))
-        and _safe_string(fingerprint.get("vendor_id")) == _safe_string(device_fingerprint.get("vendor_id"))
-        and _safe_string(fingerprint.get("product_id")) == _safe_string(device_fingerprint.get("product_id"))
-        and _safe_string(fingerprint.get("name")) == _safe_string(device_fingerprint.get("name"))
+        and phys == safe_string(device_fingerprint.get("phys"))
+        and safe_string(fingerprint.get("vendor_id")) == safe_string(device_fingerprint.get("vendor_id"))
+        and safe_string(fingerprint.get("product_id")) == safe_string(device_fingerprint.get("product_id"))
+        and safe_string(fingerprint.get("name")) == safe_string(device_fingerprint.get("name"))
     ):
         return True
     return False
@@ -355,14 +332,14 @@ def _device_matches_any_selection(device_info: Dict[str, Any], selections: List[
 
 def _selection_runtime_identity_bits(runtime: Dict[str, Any]) -> List[str]:
     identity_bits = []
-    source_name = _safe_string(runtime.get("source_name"))
-    source_vendor = _safe_string(runtime.get("source_vendor"))
-    source_product = _safe_string(runtime.get("source_product"))
-    bridge_mode = _safe_string(runtime.get("bridge_mode"))
-    hidraw_path = _safe_string(runtime.get("hidraw_path"))
+    source_name = safe_string(runtime.get("source_name"))
+    source_vendor = safe_string(runtime.get("source_vendor"))
+    source_product = safe_string(runtime.get("source_product"))
+    bridge_mode = safe_string(runtime.get("bridge_mode"))
+    hidraw_path = safe_string(runtime.get("hidraw_path"))
     hid_output_forwarding = bool(runtime.get("hid_output_forwarding"))
-    virtual_event_path = _safe_string(runtime.get("virtual_event_path"))
-    virtual_hidraw_path = _safe_string(runtime.get("virtual_hidraw_path"))
+    virtual_event_path = safe_string(runtime.get("virtual_event_path"))
+    virtual_hidraw_path = safe_string(runtime.get("virtual_hidraw_path"))
     if source_name:
         identity_bits.append(source_name)
     if source_vendor and source_product:
@@ -385,7 +362,7 @@ def _selection_runtime_identity_bits(runtime: Dict[str, Any]) -> List[str]:
         close_count = int(runtime.get("uhid_close_count", 0) or 0)
         identity_bits.append(f"o/g/s {output_count}/{get_count}/{set_count}")
         identity_bits.append(f"open/close {open_count}/{close_count}")
-        last_uhid_event = _safe_string(runtime.get("last_uhid_event"))
+        last_uhid_event = safe_string(runtime.get("last_uhid_event"))
         if last_uhid_event:
             identity_bits.append(f"last:{last_uhid_event}")
     elif bridge_mode == "uinput-fallback":
@@ -407,7 +384,7 @@ def _controller_label(name: str, by_id: str, phys: str) -> str:
 
 
 def _is_bridge_input_phys(phys: str) -> bool:
-    return _safe_string(phys).startswith(BRIDGE_DEVICE_PHYS_PREFIX)
+    return safe_string(phys).startswith(BRIDGE_DEVICE_PHYS_PREFIX)
 
 
 def _runtime_bridge_node_paths(state: Optional[Dict[str, Any]] = None) -> Dict[str, set[str]]:
@@ -425,7 +402,7 @@ def _runtime_bridge_node_paths(state: Optional[Dict[str, Any]] = None) -> Dict[s
             ("virtual_event_path", "virtual_event_paths"),
             ("virtual_hidraw_path", "virtual_hidraw_paths"),
         ):
-            path = _safe_string(item.get(key))
+            path = safe_string(item.get(key))
             if not path:
                 continue
             try:
@@ -466,7 +443,7 @@ def _list_controller_devices() -> Tuple[List[Dict[str, Any]], Optional[str]]:
         if resolved_event_path in runtime_paths["virtual_event_paths"]:
             device.close()
             continue
-        if _is_bridge_input_phys(_safe_string(device.phys)):
+        if _is_bridge_input_phys(safe_string(device.phys)):
             device.close()
             continue
 
@@ -476,12 +453,12 @@ def _list_controller_devices() -> Tuple[List[Dict[str, Any]], Optional[str]]:
             device.close()
             continue
 
-        name = _safe_string(device.name) or os.path.basename(event_path)
+        name = safe_string(device.name) or os.path.basename(event_path)
         by_id = _preferred_event_symlink(event_path, "/dev/input/by-id")
-        phys = _safe_string(device.phys)
+        phys = safe_string(device.phys)
         fingerprint = {
             "by_id": by_id,
-            "uniq": _safe_string(device.uniq),
+            "uniq": safe_string(device.uniq),
             "phys": phys,
             "vendor_id": vendor_id,
             "product_id": product_id,
@@ -527,7 +504,7 @@ def _active_launch_status(state: Dict[str, Any]) -> Dict[str, str]:
         if "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = _safe_string(key)
+        key = safe_string(key)
         if key:
             payload[key] = value.strip()
     return payload
@@ -551,14 +528,14 @@ def _format_refresh_rate_hz(refresh_value: Any) -> str:
 def _current_headless_mode(state: Dict[str, Any], sunshine_active: bool, sway_active: bool) -> str:
     if not state.get("enabled") or not sunshine_active or not sway_active:
         return ""
-    sway_socket = _safe_string(state.get("sway_socket"))
+    sway_socket = safe_string(state.get("sway_socket"))
     if not sway_socket or not Path(sway_socket).exists():
         return ""
-    result = _run(
+    result = run_command(
         ["swaymsg", "-s", sway_socket, "-t", "get_outputs", "-r"],
         check=False,
     )
-    if result.returncode != 0 or not _safe_string(result.stdout):
+    if result.returncode != 0 or not safe_string(result.stdout):
         return ""
     try:
         payload = json.loads(result.stdout)
@@ -567,7 +544,7 @@ def _current_headless_mode(state: Dict[str, Any], sunshine_active: bool, sway_ac
     if not isinstance(payload, list):
         return ""
     for output in payload:
-        if not isinstance(output, dict) or _safe_string(output.get("name")) != "HEADLESS-1":
+        if not isinstance(output, dict) or safe_string(output.get("name")) != "HEADLESS-1":
             continue
         current_mode = output.get("current_mode")
         if not isinstance(current_mode, dict):
@@ -591,7 +568,7 @@ def _custom_display_mode_string(value: Any) -> str:
 
 def _state_paths() -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
-    override_dir = systemd_user_dir / f"{_sunshine_unit()}.d"
+    override_dir = systemd_user_dir / f"{_svc.sunshine_unit()}.d"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
@@ -668,9 +645,9 @@ def load_state() -> Dict[str, Any]:
     state["exclusive_input_devices"] = _normalized_exclusive_input_state(
         state.get("exclusive_input_devices")
     )
-    state["gpu_mode"] = _safe_string(state.get("gpu_mode")).lower() if _safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
-    state["gpu_card_path"] = _safe_string(state.get("gpu_card_path"))
-    state["gpu_render_path"] = _safe_string(state.get("gpu_render_path"))
+    state["gpu_mode"] = safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
+    state["gpu_card_path"] = safe_string(state.get("gpu_card_path"))
+    state["gpu_render_path"] = safe_string(state.get("gpu_render_path"))
     state["paths"] = _state_paths()
     return state
 
@@ -829,10 +806,10 @@ def _detect_available_gpus() -> List[Dict[str, str]]:
 
 def gpu_status_label(state: Dict[str, Any]) -> str:
     """Return a human-readable label for the current GPU mode setting."""
-    gpu_mode = _safe_string(state.get("gpu_mode")).lower()
+    gpu_mode = safe_string(state.get("gpu_mode")).lower()
     if gpu_mode != "manual":
         return "[AUTO] wlroots chooses GPU"
-    card_path = _safe_string(state.get("gpu_card_path"))
+    card_path = safe_string(state.get("gpu_card_path"))
     if not card_path:
         return "[AUTO] wlroots chooses GPU"
     card_exists = Path(card_path).exists()
@@ -878,7 +855,7 @@ def configure_gpu() -> int:
     if not gpus:
         print("")
         print("No DRM GPUs detected on this system.")
-        gpu_mode = _safe_string(state.get("gpu_mode")).lower()
+        gpu_mode = safe_string(state.get("gpu_mode")).lower()
         if gpu_mode == "manual":
             print("Current manual GPU selection will be cleared to Auto.")
             if get_user_input(
@@ -1046,22 +1023,6 @@ def is_headless_prep_wrapped(command: Optional[str]) -> bool:
     return parts[0] == get_headless_prep_script()
 
 
-def _run(
-    command: List[str],
-    *,
-    capture_output: bool = True,
-    check: bool = False,
-    env: Optional[Dict[str, str]] = None,
-) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        command,
-        text=True,
-        capture_output=capture_output,
-        check=check,
-        env=env,
-    )
-
-
 def _parse_flatpak_run_command(command: str) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
         tokens = shlex.split(command)
@@ -1131,7 +1092,7 @@ def _parse_flatpak_run_command(command: str) -> tuple[Optional[Dict[str, Any]], 
 
 def _resolve_flatpak_default_command(parsed_command: Dict[str, Any]) -> Optional[str]:
     lookup_command = [*parsed_command["outer_prefix"], "flatpak", "info", "--show-metadata", parsed_command["app_id"]]
-    result = _run(lookup_command, check=False)
+    result = run_command(lookup_command, check=False)
     if result.returncode != 0:
         return None
     for line in (result.stdout or "").splitlines():
@@ -1151,41 +1112,30 @@ def analyze_flatpak_command_for_display(command: Optional[str]) -> Optional[str]
     return None
 
 
-def _systemctl_user(*args: str, check: bool = False) -> subprocess.CompletedProcess:
-    return _run(["systemctl", "--user", *args], check=check)
-
-
 def _parse_systemd_execstart(value: str) -> str:
-    raw_value = _safe_string(value)
+    raw_value = safe_string(value)
     if not raw_value:
         return ""
 
     for line in raw_value.splitlines():
         match = re.search(r"argv\[]=(.*?) ;", line)
         if match:
-            return _safe_string(match.group(1))
+            return safe_string(match.group(1))
 
     if "argv[]=" in raw_value:
         match = re.search(r"argv\[]=(.*)", raw_value, re.DOTALL)
         if match:
-            return _safe_string(match.group(1))
+            return safe_string(match.group(1))
 
     return raw_value
 
 
 def _current_sunshine_execstart(unit: str) -> str:
-    result = _systemctl_user("show", "--property=ExecStart", "--value", unit)
-    if result.returncode != 0:
-        return ""
-    return _parse_systemd_execstart(result.stdout or "")
+    return _parse_systemd_execstart(_svc.show_unit_property(unit, "ExecStart"))
 
 
 def _fragment_sunshine_execstart(unit: str) -> str:
-    fragment_result = _systemctl_user("show", "--property=FragmentPath", "--value", unit)
-    if fragment_result.returncode != 0:
-        return ""
-
-    fragment_path = Path(_safe_string(fragment_result.stdout))
+    fragment_path = Path(safe_string(_svc.show_unit_property(unit, "FragmentPath")))
     if not fragment_path.is_file():
         return ""
 
@@ -1200,7 +1150,7 @@ def _fragment_sunshine_execstart(unit: str) -> str:
                 continue
             if not in_service_section or not line.startswith("ExecStart="):
                 continue
-            execstart = _safe_string(line.split("=", 1)[1])
+            execstart = safe_string(line.split("=", 1)[1])
             if execstart:
                 return execstart
     except OSError:
@@ -1210,20 +1160,20 @@ def _fragment_sunshine_execstart(unit: str) -> str:
 
 
 def _remember_sunshine_execstart(state: Dict[str, Any], unit: Optional[str] = None) -> Dict[str, Any]:
-    target_unit = unit or _sunshine_unit()
+    target_unit = unit or _svc.sunshine_unit()
     current_execstart = _current_sunshine_execstart(target_unit) or _fragment_sunshine_execstart(target_unit)
-    wrapper_path = _safe_string(state.get("paths", {}).get("sunshine_wrapper_script"))
+    wrapper_path = safe_string(state.get("paths", {}).get("sunshine_wrapper_script"))
 
     if current_execstart and wrapper_path and current_execstart != wrapper_path:
         state["sunshine_execstart"] = current_execstart
         state["sunshine_unit_name"] = target_unit
         return state
 
-    if _safe_string(state.get("sunshine_execstart")):
+    if safe_string(state.get("sunshine_execstart")):
         state["sunshine_unit_name"] = target_unit
         return state
 
-    fallback_execstart = _sunshine_binary() or "sunshine"
+    fallback_execstart = _svc.sunshine_binary() or "sunshine"
     state["sunshine_execstart"] = fallback_execstart
     state["sunshine_unit_name"] = target_unit
     return state
@@ -1243,7 +1193,7 @@ def _run_privileged(command: List[str]) -> bool:
     prefix = _sudo_prefix()
     if prefix is None:
         return False
-    result = _run(prefix + command)
+    result = run_command(prefix + command)
     return result.returncode == 0
 
 
@@ -1256,7 +1206,7 @@ def _reload_udev_rules() -> bool:
         prefix + ["udevadm", "trigger", "--subsystem-match=input"],
     ]
     for command in commands:
-        result = _run(command)
+        result = run_command(command)
         if result.returncode != 0:
             return False
     return True
@@ -1423,10 +1373,10 @@ def current_user_group() -> str:
 
 
 def _is_plasma_session() -> bool:
-    current_desktop = _safe_string(os.environ.get("XDG_CURRENT_DESKTOP")).lower()
-    session_desktop = _safe_string(os.environ.get("XDG_SESSION_DESKTOP")).lower()
-    desktop_session = _safe_string(os.environ.get("DESKTOP_SESSION")).lower()
-    kde_full_session = _safe_string(os.environ.get("KDE_FULL_SESSION")).lower()
+    current_desktop = safe_string(os.environ.get("XDG_CURRENT_DESKTOP")).lower()
+    session_desktop = safe_string(os.environ.get("XDG_SESSION_DESKTOP")).lower()
+    desktop_session = safe_string(os.environ.get("DESKTOP_SESSION")).lower()
+    kde_full_session = safe_string(os.environ.get("KDE_FULL_SESSION")).lower()
     plasma_markers = ("kde", "plasma", "kwin")
     return (
         kde_full_session in {"1", "true", "yes", "on"}
@@ -1439,15 +1389,15 @@ def _is_plasma_session() -> bool:
 def _host_session_name() -> str:
     parts = []
     for value in [
-        _safe_string(os.environ.get("XDG_CURRENT_DESKTOP")),
-        _safe_string(os.environ.get("XDG_SESSION_DESKTOP")),
-        _safe_string(os.environ.get("DESKTOP_SESSION")),
+        safe_string(os.environ.get("XDG_CURRENT_DESKTOP")),
+        safe_string(os.environ.get("XDG_SESSION_DESKTOP")),
+        safe_string(os.environ.get("DESKTOP_SESSION")),
     ]:
         if value and value not in parts:
             parts.append(value)
     if parts:
         return " / ".join(parts)
-    if _safe_string(os.environ.get("KDE_FULL_SESSION")).lower() in {"1", "true", "yes", "on"}:
+    if safe_string(os.environ.get("KDE_FULL_SESSION")).lower() in {"1", "true", "yes", "on"}:
         return "KDE"
     return "unknown"
 
@@ -1482,9 +1432,9 @@ def _kwin_input_isolation_status(state: Dict[str, Any]) -> Dict[str, Any]:
         status["disabled_devices"] = []
     if not isinstance(status.get("failed_devices"), list):
         status["failed_devices"] = []
-    status["state"] = _safe_string(status.get("state")) or "inactive"
-    status["service"] = _safe_string(status.get("service"))
-    status["last_error"] = _safe_string(status.get("last_error"))
+    status["state"] = safe_string(status.get("state")) or "inactive"
+    status["service"] = safe_string(status.get("service"))
+    status["last_error"] = safe_string(status.get("last_error"))
     try:
         status["seen_device_count"] = int(status.get("seen_device_count") or 0)
     except (TypeError, ValueError):
@@ -1504,13 +1454,13 @@ def _sunshine_virtual_input_devices() -> List[Dict[str, str]]:
     for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line:
-            vendor_id = _safe_string(current.get("vendor_id")).lower()
-            product_id = _safe_string(current.get("product_id")).lower()
+            vendor_id = safe_string(current.get("vendor_id")).lower()
+            product_id = safe_string(current.get("product_id")).lower()
             if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
                 devices.append(
                     {
-                        "name": _safe_string(current.get("name")),
-                        "event_path": _safe_string(current.get("event_path")),
+                        "name": safe_string(current.get("name")),
+                        "event_path": safe_string(current.get("event_path")),
                     }
                 )
             current = {}
@@ -1534,13 +1484,13 @@ def _sunshine_virtual_input_devices() -> List[Dict[str, str]]:
                 current["event_path"] = f"/dev/input/{event_name}"
 
     if current:
-        vendor_id = _safe_string(current.get("vendor_id")).lower()
-        product_id = _safe_string(current.get("product_id")).lower()
+        vendor_id = safe_string(current.get("vendor_id")).lower()
+        product_id = safe_string(current.get("product_id")).lower()
         if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
             devices.append(
                 {
-                    "name": _safe_string(current.get("name")),
-                    "event_path": _safe_string(current.get("event_path")),
+                    "name": safe_string(current.get("name")),
+                    "event_path": safe_string(current.get("event_path")),
                 }
             )
     return devices
@@ -3122,8 +3072,8 @@ if __name__ == "__main__":
 
 def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
-    sunshine_command = _safe_string(state.get("sunshine_execstart")) or _sunshine_binary() or "sunshine"
-    sunshine_unit = _sunshine_unit()
+    sunshine_command = safe_string(state.get("sunshine_execstart")) or _svc.sunshine_binary() or "sunshine"
+    sunshine_unit = _svc.sunshine_unit()
     audio_sink = state["audio_sink"]
     refresh_rate_sync_mode = _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode"))
     custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
@@ -3148,8 +3098,8 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
         launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
     fi
 """
-    gpu_card_path = _safe_string(state.get("gpu_card_path"))
-    gpu_render_path = _safe_string(state.get("gpu_render_path"))
+    gpu_card_path = safe_string(state.get("gpu_card_path"))
+    gpu_render_path = safe_string(state.get("gpu_render_path"))
     gpu_detection_block = ""
     gpu_env_vars_block = ""
     gpu_launch_env_vars_block = ""
@@ -4974,7 +4924,7 @@ def _ensure_dependencies() -> List[str]:
     for binary in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaybg", "swaymsg", "systemctl"]:
         if shutil.which(binary) is None:
             missing.append(binary)
-    if _sunshine_binary() is None and not _current_sunshine_execstart(_sunshine_unit()):
+    if _svc.sunshine_binary() is None and not _current_sunshine_execstart(_svc.sunshine_unit()):
         missing.append("sunshine")
     evdev_error = _evdev_import_error()
     if evdev_error:
@@ -4996,7 +4946,7 @@ def _write_managed_files(state: Dict[str, Any]) -> None:
 def refresh_managed_files(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if state is None:
         state = load_state()
-    if not _safe_string(state.get("sunshine_execstart")):
+    if not safe_string(state.get("sunshine_execstart")):
         state = _remember_sunshine_execstart(state)
     _write_managed_files(state)
     save_state(state)
@@ -5011,51 +4961,6 @@ def _restore_sunshine_audio_sink(state: Dict[str, Any]) -> None:
         _set_key_value(sunshine_conf, "audio_sink", original.get("value", ""))
     else:
         _remove_key(sunshine_conf, "audio_sink")
-
-
-def _sunshine_unit_exists(unit: str) -> bool:
-    result = _systemctl_user("show", "--property=LoadState", "--value", unit)
-    return result.returncode == 0 and _safe_string(result.stdout) not in {"", "not-found"}
-
-
-def _systemd_unit_id(unit: str) -> str:
-    result = _systemctl_user("show", "--property=Id", "--value", unit)
-    if result.returncode != 0:
-        return ""
-    return _safe_string(result.stdout)
-
-
-def _sunshine_unit() -> str:
-    candidates = (
-        SUNSHINE_UNIT,
-        FALLBACK_SUNSHINE_UNIT,
-    )
-    for unit in candidates:
-        if _sunshine_unit_exists(unit) and _systemctl_user("is-active", unit).returncode == 0:
-            return _systemd_unit_id(unit) or unit
-    for unit in candidates:
-        if _sunshine_unit_exists(unit):
-            return _systemd_unit_id(unit) or unit
-    return SUNSHINE_UNIT
-
-
-def _managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
-    units = [SUNSHINE_UNIT, FALLBACK_SUNSHINE_UNIT]
-    if state is not None:
-        saved_unit = _safe_string(state.get("sunshine_unit_name"))
-        if saved_unit and saved_unit not in units:
-            units.insert(0, saved_unit)
-    return units
-
-
-def _managed_override_paths(state: Dict[str, Any]) -> List[Path]:
-    systemd_user_dir = Path(state["paths"]["systemd_user_dir"])
-    paths: List[Path] = []
-    for unit in _managed_sunshine_units(state):
-        override_dir = systemd_user_dir / f"{unit}.d"
-        paths.append(override_dir / "override.conf")
-        paths.append(override_dir)
-    return paths
 
 
 def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
@@ -5078,15 +4983,11 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
         "kwin_input_isolation_script",
         "get_gpu_addr",
     ]
-    return [Path(paths[key]) for key in keys if _safe_string(paths.get(key))]
-
-
-def _sunshine_service_active() -> bool:
-    return _systemctl_user("is-active", _sunshine_unit()).returncode == 0
+    return [Path(paths[key]) for key in keys if safe_string(paths.get(key))]
 
 
 def _daemon_reload() -> None:
-    _systemctl_user("daemon-reload")
+    _svc.daemon_reload()
 
 
 def _clear_input_bridge_status_file(state: Dict[str, Any]) -> None:
@@ -5103,7 +5004,7 @@ def _bridge_runtime_enabled(state: Dict[str, Any]) -> bool:
 def _bridge_service_state() -> str:
     if Path(load_state()["paths"]["input_bridge_status_file"]).exists():
         return "active"
-    if _sunshine_service_active() and _has_selected_input_devices(load_state()):
+    if _svc.is_sunshine_service_active() and _has_selected_input_devices(load_state()):
         return "starting"
     return "inactive"
 
@@ -5113,12 +5014,12 @@ def _apply_input_bridge_runtime_state(state: Dict[str, Any]) -> None:
         _clear_input_bridge_status_file(state)
         return
 
-    if not _sunshine_service_active():
+    if not _svc.is_sunshine_service_active():
         return
 
     # The input bridge now runs as a child of the Sunshine override wrapper.
     # Restart the service so the wrapper can re-read the saved controller selection.
-    _systemctl_user("restart", _sunshine_unit())
+    _svc.restart_sunshine()
 
 
 def _parse_selection_numbers(value: str, total_items: int) -> List[int]:
@@ -5244,7 +5145,7 @@ def setup_display() -> int:
         return 1
 
     state = load_state()
-    sunshine_was_active = _sunshine_service_active()
+    sunshine_was_active = _svc.is_sunshine_service_active()
     state = _remember_sunshine_execstart(state)
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
@@ -5262,7 +5163,7 @@ def setup_display() -> int:
     state["enabled"] = True
     save_state(state)
     if sunshine_was_active:
-        _systemctl_user("restart", _sunshine_unit())
+        _svc.restart_sunshine()
 
     print("Virtual display files installed.")
     return 0
@@ -5277,11 +5178,11 @@ def start_display() -> int:
     _remember_sunshine_audio_sink(state)
     _snapshot_host_audio_defaults(state)
     save_state(state)
-    sunshine_unit = _sunshine_unit()
-    result = _systemctl_user("start", sunshine_unit)
+    sunshine_unit = _svc.sunshine_unit()
+    result = _svc.start_sunshine_unit(sunshine_unit)
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
-        _systemctl_user("stop", sunshine_unit)
+        _svc.stop_sunshine_unit(sunshine_unit)
         _restore_sunshine_audio_sink(state)
         _restore_host_audio_defaults(state)
         save_state(state)
@@ -5307,7 +5208,7 @@ def stop_display() -> int:
     if not state.get("enabled"):
         print("Virtual display is not set up.")
         return 1
-    _systemctl_user("stop", _sunshine_unit())
+    _svc.stop_sunshine()
     _clear_input_bridge_status_file(state)
     try:
         Path(state["paths"]["kwin_input_isolation_status_file"]).unlink()
@@ -5325,7 +5226,7 @@ def display_snapshot() -> Dict[str, Any]:
     configured = bool(state.get("enabled"))
     custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
     active_launch_status = _active_launch_status(state)
-    sunshine_active = _sunshine_service_active() if configured else False
+    sunshine_active = _svc.is_sunshine_service_active() if configured else False
     host_session = _host_session_name()
     input_isolation_mode = _input_isolation_mode()
     host_defaults = state.get("host_audio_defaults") or {}
@@ -5359,7 +5260,7 @@ def display_snapshot() -> Dict[str, Any]:
             None,
         )
         if runtime:
-            message = _safe_string(runtime.get("message"))
+            message = safe_string(runtime.get("message"))
             identity_bits = _selection_runtime_identity_bits(runtime)
             detail_parts = []
             if identity_bits:
@@ -5369,7 +5270,7 @@ def display_snapshot() -> Dict[str, Any]:
             controller_rows.append(
                 {
                     "label": selection["label"],
-                    "state": _safe_string(runtime.get("state")) or "unknown",
+                    "state": safe_string(runtime.get("state")) or "unknown",
                     "details": " - ".join(detail_parts),
                 }
             )
@@ -5399,15 +5300,15 @@ def display_snapshot() -> Dict[str, Any]:
         "profile": state["profile"],
         "host_session": host_session,
         "input_isolation_mode": input_isolation_mode,
-        "sunshine_unit": _sunshine_unit(),
+        "sunshine_unit": _svc.sunshine_unit(),
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
         "bridge_state": _bridge_service_state() if configured else "inactive",
         "audio_guard_state": audio_guard_state,
         "audio_sink": state["audio_sink"],
         "host_audio_defaults": {
-            "sink": _safe_string(host_defaults.get("sink")),
-            "source": _safe_string(host_defaults.get("source")),
+            "sink": safe_string(host_defaults.get("sink")),
+            "source": safe_string(host_defaults.get("source")),
         },
         "wayland_display": wayland_display,
         "current_headless_mode": current_headless_mode,
@@ -5423,15 +5324,15 @@ def display_snapshot() -> Dict[str, Any]:
         "sunshine_input_devices": sunshine_input_devices,
         "sunshine_input_device_count": len(sunshine_input_devices),
         "portal_handoff_active": portal_handoff_active,
-        "current_mangohud_config": _safe_string(active_launch_status.get("mangohud_config")),
+        "current_mangohud_config": safe_string(active_launch_status.get("mangohud_config")),
         "last_launch_log_file": state["paths"]["last_launch_log_file"],
         "controllers": controller_rows,
         "controller_count": len(selections),
         "controller_detection_error": device_error,
         "dependencies_missing": _ensure_dependencies(),
-        "gpu_mode": _safe_string(state.get("gpu_mode")).lower() if _safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto",
-        "gpu_card_path": _safe_string(state.get("gpu_card_path")),
-        "gpu_render_path": _safe_string(state.get("gpu_render_path")),
+        "gpu_mode": safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto",
+        "gpu_card_path": safe_string(state.get("gpu_card_path")),
+        "gpu_render_path": safe_string(state.get("gpu_render_path")),
         "gpu_status_label": gpu_status_label(state),
         "next_step": "",
     }
@@ -5678,19 +5579,7 @@ def display_status() -> int:
 
 
 def display_logs(lines: int = 80) -> int:
-    result = subprocess.run(
-        [
-            "journalctl",
-            "--user",
-            "-u",
-            _sunshine_unit(),
-            "-n",
-            str(lines),
-            "--no-pager",
-        ],
-        check=False,
-    )
-    return result.returncode
+    return _svc.fetch_sunshine_journal(lines).returncode
 
 
 def remove_display() -> int:
@@ -5710,14 +5599,7 @@ def remove_display() -> int:
         except OSError:
             pass
 
-    for path in _managed_override_paths(state):
-        try:
-            if path.is_dir():
-                path.rmdir()
-            else:
-                path.unlink()
-        except OSError:
-            pass
+    _svc.cleanup_managed_overrides(state)
 
     for path_key in [
         "portal_active_file",

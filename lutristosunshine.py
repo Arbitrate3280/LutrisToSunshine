@@ -247,7 +247,7 @@ def parse_args(argv=None):
     )
     display_subparsers.add_parser(
         "reset",
-        help="Remove the virtual-display setup, restore normal Sunshine app launches, and uninstall the managed files and overrides.",
+        help="Remove the virtual-display setup, restore Sunshine app launches to normal mode, and uninstall the managed files and overrides.",
     )
     logs_parser = display_subparsers.add_parser("logs", help="Show recent logs for the managed services.")
     logs_parser.add_argument(

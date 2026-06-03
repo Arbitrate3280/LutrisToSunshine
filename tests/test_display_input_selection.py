@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from display import manager
+from display import sunshine_service
 
 
 class DisplayInputSelectionTests(unittest.TestCase):
@@ -215,43 +216,6 @@ class DisplayInputSelectionTests(unittest.TestCase):
         self.assertIn('return f"{value:04x}"', script)
         self.assertIn('replace("_", " ")', script)
 
-    def test_sunshine_unit_falls_back_to_legacy_name_when_preferred_unit_missing(self) -> None:
-        original_systemctl_user = manager._systemctl_user
-        try:
-            def fake_systemctl_user(*args, check=False):
-                unit = args[-1]
-                if args[:3] == ("show", "--property=LoadState", "--value"):
-                    if unit == manager.SUNSHINE_UNIT:
-                        return subprocess.CompletedProcess(list(args), 1, "", "missing")
-                    if unit == manager.FALLBACK_SUNSHINE_UNIT:
-                        return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
-                return subprocess.CompletedProcess(list(args), 0, "", "")
-
-            manager._systemctl_user = fake_systemctl_user
-            self.assertEqual(manager._sunshine_unit(), manager.FALLBACK_SUNSHINE_UNIT)
-        finally:
-            manager._systemctl_user = original_systemctl_user
-
-    def test_sunshine_unit_prefers_canonical_active_unit_id_over_alias(self) -> None:
-        original_systemctl_user = manager._systemctl_user
-        try:
-            def fake_systemctl_user(*args, check=False):
-                unit = args[-1]
-                if args[:3] == ("show", "--property=LoadState", "--value"):
-                    return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
-                if args[:3] == ("show", "--property=Id", "--value"):
-                    if unit == manager.FALLBACK_SUNSHINE_UNIT:
-                        return subprocess.CompletedProcess(list(args), 0, f"{manager.SUNSHINE_UNIT}\n", "")
-                    return subprocess.CompletedProcess(list(args), 0, f"{unit}\n", "")
-                if args[:1] == ("is-active",):
-                    return subprocess.CompletedProcess(list(args), 0, "active\n", "")
-                return subprocess.CompletedProcess(list(args), 0, "", "")
-
-            manager._systemctl_user = fake_systemctl_user
-            self.assertEqual(manager._sunshine_unit(), manager.SUNSHINE_UNIT)
-        finally:
-            manager._systemctl_user = original_systemctl_user
-
     def test_sunshine_virtual_input_devices_detects_beef_dead_entries(self) -> None:
         input_listing = """
 I: Bus=0003 Vendor=beef Product=dead Version=0111
@@ -301,31 +265,31 @@ H: Handlers=sysrq kbd event29
         state, conf_path = self._temp_audio_state()
         original_ensure_dependencies = manager._ensure_dependencies
         original_load_state = manager.load_state
-        original_sunshine_service_active = manager._sunshine_service_active
+        original_sunshine_service_active = sunshine_service.is_sunshine_service_active
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_install_udev_rule = manager._install_udev_rule
-        original_cleanup_legacy_display_units = manager._cleanup_legacy_display_units
+        original_cleanup_legacy_display_units = sunshine_service.cleanup_managed_overrides
         original_daemon_reload = manager._daemon_reload
         try:
             manager._ensure_dependencies = lambda: []
             manager.load_state = lambda: state
-            manager._sunshine_service_active = lambda: False
+            sunshine_service.is_sunshine_service_active = lambda: False
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
             manager._install_udev_rule = lambda current: True
-            manager._cleanup_legacy_display_units = lambda current: None
+            sunshine_service.cleanup_managed_overrides = lambda current: None
             manager._daemon_reload = lambda: None
 
             result = manager.setup_display()
         finally:
             manager._ensure_dependencies = original_ensure_dependencies
             manager.load_state = original_load_state
-            manager._sunshine_service_active = original_sunshine_service_active
+            sunshine_service.is_sunshine_service_active = original_sunshine_service_active
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._install_udev_rule = original_install_udev_rule
-            manager._cleanup_legacy_display_units = original_cleanup_legacy_display_units
+            sunshine_service.cleanup_managed_overrides = original_cleanup_legacy_display_units
             manager._daemon_reload = original_daemon_reload
 
         self.assertEqual(result, 0)
@@ -367,7 +331,8 @@ H: Handlers=sysrq kbd event29
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
-        original_systemctl_user = manager._systemctl_user
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_start_sunshine_unit = sunshine_service.start_sunshine_unit
         try:
             manager.load_state = lambda: state
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
@@ -375,7 +340,10 @@ H: Handlers=sysrq kbd event29
             manager._snapshot_host_audio_defaults = lambda current: current.update(
                 {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
             )
-            manager._systemctl_user = lambda *args, check=False: subprocess.CompletedProcess(list(args), 0, "", "")
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "start", unit], 0, "", ""
+            )
 
             result = manager.start_display()
         finally:
@@ -383,7 +351,8 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
-            manager._systemctl_user = original_systemctl_user
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.start_sunshine_unit = original_start_sunshine_unit
 
         self.assertEqual(result, 0)
         self.assertEqual(state["host_audio_defaults"], {"sink": "host-sink", "source": "host-source"})
@@ -396,7 +365,9 @@ H: Handlers=sysrq kbd event29
         original_bridge_runtime_enabled = manager._bridge_runtime_enabled
         original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
         original_restore_host_audio_defaults = manager._restore_host_audio_defaults
-        original_systemctl_user = manager._systemctl_user
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_start_sunshine_unit = sunshine_service.start_sunshine_unit
+        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
         try:
             manager.load_state = lambda: state
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
@@ -408,17 +379,13 @@ H: Handlers=sysrq kbd event29
             manager._restore_host_audio_defaults = lambda current: current.update(
                 {"host_audio_defaults": {"sink": "", "source": ""}}
             )
-
-            def fake_systemctl_user(*args, check=False):
-                action = args[0]
-                unit = args[-1]
-                if action == "start" and unit == manager.SUNSHINE_UNIT:
-                    return subprocess.CompletedProcess(list(args), 1, "", "boom")
-                if args[:3] == ("show", "--property=LoadState", "--value") and unit == manager.SUNSHINE_UNIT:
-                    return subprocess.CompletedProcess(list(args), 0, "loaded\n", "")
-                return subprocess.CompletedProcess(list(args), 0, "", "")
-
-            manager._systemctl_user = fake_systemctl_user
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "start", unit], 1, "", "boom"
+            )
+            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "stop", unit], 0, "", ""
+            )
 
             result = manager.start_display()
         finally:
@@ -428,7 +395,9 @@ H: Handlers=sysrq kbd event29
             manager._bridge_runtime_enabled = original_bridge_runtime_enabled
             manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
             manager._restore_host_audio_defaults = original_restore_host_audio_defaults
-            manager._systemctl_user = original_systemctl_user
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.start_sunshine_unit = original_start_sunshine_unit
+            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
         self.assertEqual(result, 1)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
@@ -439,13 +408,13 @@ H: Handlers=sysrq kbd event29
         state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
         original_load_state = manager.load_state
         original_save_state = manager.save_state
-        original_systemctl_user = manager._systemctl_user
+        original_stop_sunshine = sunshine_service.stop_sunshine
         original_clear_input_bridge_status_file = manager._clear_input_bridge_status_file
         original_restore_host_audio_defaults = manager._restore_host_audio_defaults
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
-            manager._systemctl_user = lambda *args, check=False: subprocess.CompletedProcess(list(args), 0, "", "")
+            sunshine_service.stop_sunshine = lambda: None
             manager._clear_input_bridge_status_file = lambda current: None
             manager._restore_host_audio_defaults = lambda current: None
 
@@ -453,7 +422,7 @@ H: Handlers=sysrq kbd event29
         finally:
             manager.load_state = original_load_state
             manager.save_state = original_save_state
-            manager._systemctl_user = original_systemctl_user
+            sunshine_service.stop_sunshine = original_stop_sunshine
             manager._clear_input_bridge_status_file = original_clear_input_bridge_status_file
             manager._restore_host_audio_defaults = original_restore_host_audio_defaults
 
@@ -463,13 +432,15 @@ H: Handlers=sysrq kbd event29
     def test_remove_display_deletes_override_files(self) -> None:
         state = manager._default_state()
         state["enabled"] = True
+        state["sunshine_unit_name"] = sunshine_service.SUNSHINE_UNIT
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
-        override_dir = base / f"{manager.SUNSHINE_UNIT}.d"
+        override_dir = base / f"{sunshine_service.SUNSHINE_UNIT}.d"
         override_dir.mkdir(parents=True)
 
         state["paths"] = dict(state["paths"])
+        state["paths"]["systemd_user_dir"] = str(base)
         state["paths"]["sunshine_override_dir"] = str(override_dir)
         state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
         state["paths"]["input_bridge_script"] = str(base / "lutristosunshine-input-bridge.py")
@@ -498,19 +469,21 @@ H: Handlers=sysrq kbd event29
         ]:
             Path(state["paths"][key]).write_text("managed\n", encoding="utf-8")
 
+        Path(state["paths"]["sunshine_override"]).write_text(
+            f"[Service]\nExecStart=\nExecStart={state['paths']['sunshine_wrapper_script']}\n",
+            encoding="utf-8",
+        )
+
         original_load_state = manager.load_state
         original_save_state = manager.save_state
         original_stop_display = manager.stop_display
         original_remove_udev_rule = manager._remove_udev_rule
-        original_cleanup_legacy_display_units = manager._cleanup_legacy_display_units
         original_daemon_reload = manager._daemon_reload
-        cleanup_calls = []
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
             manager.stop_display = lambda: 0
             manager._remove_udev_rule = lambda current: True
-            manager._cleanup_legacy_display_units = lambda current: cleanup_calls.append(True)
             manager._daemon_reload = lambda: None
 
             result = manager.remove_display()
@@ -519,11 +492,9 @@ H: Handlers=sysrq kbd event29
             manager.save_state = original_save_state
             manager.stop_display = original_stop_display
             manager._remove_udev_rule = original_remove_udev_rule
-            manager._cleanup_legacy_display_units = original_cleanup_legacy_display_units
             manager._daemon_reload = original_daemon_reload
 
         self.assertEqual(result, 0)
-        self.assertEqual(cleanup_calls, [True])
         self.assertFalse(Path(state["paths"]["sunshine_override"]).exists())
         self.assertFalse(Path(state["paths"]["sunshine_wrapper_script"]).exists())
         self.assertFalse(override_dir.exists())
@@ -578,10 +549,10 @@ H: Handlers=sysrq kbd event29
         state["enabled"] = True
         state["sway_socket"] = "/tmp/lts-sway.sock"
 
-        original_run = manager._run
+        original_run = manager.run_command
         original_path_exists = manager.Path.exists
         try:
-            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
                 command,
                 0,
                 stdout=json.dumps(
@@ -602,7 +573,7 @@ H: Handlers=sysrq kbd event29
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
-            manager._run = original_run
+            manager.run_command = original_run
             manager.Path.exists = original_path_exists
 
         self.assertEqual(mode, "2560x1440 @ 119.99 Hz")
@@ -612,10 +583,10 @@ H: Handlers=sysrq kbd event29
         state["enabled"] = True
         state["sway_socket"] = "/tmp/lts-sway.sock"
 
-        original_run = manager._run
+        original_run = manager.run_command
         original_path_exists = manager.Path.exists
         try:
-            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
                 command,
                 0,
                 stdout=json.dumps([{"name": "HDMI-A-1", "current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}]),
@@ -625,7 +596,7 @@ H: Handlers=sysrq kbd event29
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
-            manager._run = original_run
+            manager.run_command = original_run
             manager.Path.exists = original_path_exists
 
         self.assertEqual(mode, "")
@@ -635,10 +606,10 @@ H: Handlers=sysrq kbd event29
         state["enabled"] = True
         state["sway_socket"] = "/tmp/lts-sway.sock"
 
-        original_run = manager._run
+        original_run = manager.run_command
         original_path_exists = manager.Path.exists
         try:
-            manager._run = lambda command, **kwargs: subprocess.CompletedProcess(
+            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
                 command,
                 1,
                 stdout="",
@@ -648,7 +619,7 @@ H: Handlers=sysrq kbd event29
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
-            manager._run = original_run
+            manager.run_command = original_run
             manager.Path.exists = original_path_exists
 
         self.assertEqual(mode, "")
@@ -696,13 +667,13 @@ H: Handlers=sysrq kbd event29
 
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
-        original_sunshine_service_active = manager._sunshine_service_active
+        original_sunshine_service_active = sunshine_service.is_sunshine_service_active
         original_bridge_service_state = manager._bridge_service_state
         original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
-            manager._sunshine_service_active = lambda: False
+            sunshine_service.is_sunshine_service_active = lambda: False
             manager._bridge_service_state = lambda: "inactive"
             manager._sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
             with patch.dict(
@@ -719,7 +690,7 @@ H: Handlers=sysrq kbd event29
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
-            manager._sunshine_service_active = original_sunshine_service_active
+            sunshine_service.is_sunshine_service_active = original_sunshine_service_active
             manager._bridge_service_state = original_bridge_service_state
             manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 
@@ -757,13 +728,13 @@ H: Handlers=sysrq kbd event29
 
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
-        original_sunshine_service_active = manager._sunshine_service_active
+        original_sunshine_service_active = sunshine_service.is_sunshine_service_active
         original_bridge_service_state = manager._bridge_service_state
         original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
-            manager._sunshine_service_active = lambda: False
+            sunshine_service.is_sunshine_service_active = lambda: False
             manager._bridge_service_state = lambda: "inactive"
             manager._sunshine_virtual_input_devices = lambda: [
                 {"name": "Mouse passthrough", "event_path": "/dev/input/event27"},
@@ -786,7 +757,7 @@ H: Handlers=sysrq kbd event29
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
-            manager._sunshine_service_active = original_sunshine_service_active
+            sunshine_service.is_sunshine_service_active = original_sunshine_service_active
             manager._bridge_service_state = original_bridge_service_state
             manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 

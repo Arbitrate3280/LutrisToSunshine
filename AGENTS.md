@@ -4,7 +4,8 @@
 - `lutristosunshine.py`: CLI entrypoint that orchestrates launcher discovery, Sunshine checks, user prompts, and game import.
 - `config/`: constants such as API defaults and color codes.
 - `launchers/`: per-launcher integrations (`lutris.py`, `heroic.py`, `bottles.py`, `steam.py`, `ryubing.py`, `retroarch.py`) that list games and expose launch commands.
-- `sunshine/`: Sunshine API helpers for installation detection, token management, and app creation.
+- `sunshine/`: Sunshine API helpers for installation detection, token management, and app creation. `sunshine/install.py` owns Homebrew Sunshine install probing (prefix lookup, executable resolution). Flatpak, native, and AppImage detection live in `sunshine/sunshine.py`.
+- `display/`: virtual display orchestration. `display/manager.py` is the lifecycle orchestrator (state, prompts, `setup_display`/`remove_display`/`start_display`/`stop_display`). `display/sunshine_service.py` owns Sunshine service-unit policy and the public service operations the manager calls into. `display/utils.py` holds neutral, module-agnostic helpers shared across the display package.
 - `utils/`: shared helpers for input handling, command execution, parsing, and SteamGridDB downloads.
 - `requirements.txt`: Python runtime deps (`requests`, `Pillow`). No bundled tests yet.
 
@@ -12,7 +13,8 @@
 - Install deps: `pip install -r requirements.txt` (use venv if possible).
 - Run tool: `python3 lutristosunshine.py` (ensure Sunshine is running; Lutris must be closed).
 - Optional binary: use released `./lutristosunshine` after `chmod +x` if available.
-- No automated test suite; validate changes by exercising the CLI against at least one launcher and confirming Sunshine receives new apps.
+- Run tests: `python3 -m unittest discover -s tests -p 'test_*.py'`. The default `discover` invocation finds 0 tests; the `-s tests -p 'test_*.py'` flags are required to pick up the suite.
+- Shared display test helpers live in `tests/_display_test_helpers.py` (`patched`, `temp_display_state`, `write_managed_override`, `write_user_override`). Tests of `manager.py` patch public `display/sunshine_service` functions; tests of `display/sunshine_service` may patch `_systemctl_user`.
 
 ## Coding Style & Naming Conventions
 - Python 3, 4-space indents, prefer PEP 8 casing (`snake_case` for functions/vars, `CamelCase` for classes if added).
@@ -39,6 +41,7 @@
 - Manual checks: run against supported launchers (Lutris, Heroic, Bottles, Steam, Ryubing, RetroArch) and verify Sunshine shows new entries.
 - When touching SteamGridDB flows, confirm API key handling still writes to the expected config path.
 - If adding tests, place them under `tests/` and document the runner; aim for coverage of parsing and command-building functions.
+- Tests of `display/manager.py` should patch public seams on `display/sunshine_service` (e.g. `sunshine_unit`, `start_sunshine_unit`, `stop_sunshine_unit`, `stop_sunshine`, `is_sunshine_service_active`, `cleanup_managed_overrides`). Reserve `sunshine_service._systemctl_user` patching for tests that explicitly cover `display/sunshine_service` itself (e.g. `tests/test_display_sunshine_installation.py`).
 
 ## Security & Configuration Tips
 - Sunshine auth tokens and SteamGridDB API keys are stored under `~/.config/sunshine/` (or Flatpak-equivalent `.var/app/...`). Do not commit these files.

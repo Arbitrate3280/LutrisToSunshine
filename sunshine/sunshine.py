@@ -21,6 +21,7 @@ from launchers.faugus import get_faugus_command
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
+from sunshine.install import homebrew_sunshine_executable
 from display.manager import (
     HEADLESS_PREP_PREFIX,
     get_app_prep_commands,
@@ -230,11 +231,15 @@ def get_api_key_path():
 def get_credentials_path():
     return os.path.join(_get_config_root(), "credentials")
 
+
 def detect_sunshine_installation() -> Tuple[bool, str]:
     """Detect if Sunshine is installed and how."""
     # Check for Flatpak installation
     if run_command("flatpak list | grep dev.lizardbyte.app.Sunshine").returncode == 0:
         return True, "flatpak"
+    # Check for Homebrew installation (stable or beta formula)
+    if homebrew_sunshine_executable() is not None:
+        return True, "homebrew"
     # Check for native installation
     elif run_command("which sunshine").returncode == 0:
         return True, "native"

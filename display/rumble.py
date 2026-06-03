@@ -5,9 +5,10 @@ import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from display import manager
+from display.utils import safe_string
 from utils.input import get_user_input
 from utils.terminal import accent, badge, heading, muted
-from display import manager
 
 
 BUS_BLUETOOTH = 0x05
@@ -47,7 +48,7 @@ def _read_int(path: Path) -> int:
 
 
 def _selection_id_from_phys(phys: str) -> str:
-    phys = manager._safe_string(phys)
+    phys = safe_string(phys)
     if not phys.startswith(manager.BRIDGE_DEVICE_PHYS_PREFIX):
         return ""
     return phys[len(manager.BRIDGE_DEVICE_PHYS_PREFIX):]
@@ -69,7 +70,7 @@ def _hid_phys_from_sys_device(sys_device: Path) -> str:
         uevent_path = candidate / "uevent"
         if not uevent_path.exists():
             continue
-        phys = manager._safe_string(_parse_uevent(uevent_path).get("HID_PHYS"))
+        phys = safe_string(_parse_uevent(uevent_path).get("HID_PHYS"))
         if phys:
             return phys
     return ""
@@ -119,23 +120,23 @@ def list_live_bridge_devices() -> List[Dict[str, Any]]:
     for item in runtime_status.get("devices", []):
         if not isinstance(item, dict):
             continue
-        selection_id = manager._safe_string(item.get("selection_id"))
+        selection_id = safe_string(item.get("selection_id"))
         if not selection_id:
             continue
-        event_path = manager._safe_string(item.get("virtual_event_path")) or manager._safe_string(item.get("matched_path"))
-        hidraw_path = manager._safe_string(item.get("virtual_hidraw_path")) or manager._safe_string(item.get("hidraw_path"))
+        event_path = safe_string(item.get("virtual_event_path")) or safe_string(item.get("matched_path"))
+        hidraw_path = safe_string(item.get("virtual_hidraw_path")) or safe_string(item.get("hidraw_path"))
         event_details = _input_device_details(event_path) if event_path and Path(event_path).exists() else {}
         devices[selection_id] = {
             "selection_id": selection_id,
-            "label": labels.get(selection_id, manager._safe_string(item.get("label")) or selection_id),
+            "label": labels.get(selection_id, safe_string(item.get("label")) or selection_id),
             "event_path": event_path if event_path and Path(event_path).exists() else "",
             "hidraw_path": hidraw_path if hidraw_path and Path(hidraw_path).exists() else "",
-            "name": event_details.get("name") or manager._safe_string(item.get("source_name")) or labels.get(selection_id, selection_id),
-            "vendor_id": event_details.get("vendor_id") or manager._safe_string(item.get("source_vendor")).lower(),
-            "product_id": event_details.get("product_id") or manager._safe_string(item.get("source_product")).lower(),
+            "name": event_details.get("name") or safe_string(item.get("source_name")) or labels.get(selection_id, selection_id),
+            "vendor_id": event_details.get("vendor_id") or safe_string(item.get("source_vendor")).lower(),
+            "product_id": event_details.get("product_id") or safe_string(item.get("source_product")).lower(),
             "bustype": event_details.get("bustype", 0),
             "supports_ff": bool(item.get("ff_supported")),
-            "bridge_mode": manager._safe_string(item.get("bridge_mode")),
+            "bridge_mode": safe_string(item.get("bridge_mode")),
             "runtime_backed": True,
         }
 
@@ -208,7 +209,7 @@ def list_live_bridge_devices() -> List[Dict[str, Any]]:
 
 
 def _select_target_devices(devices: List[Dict[str, Any]], selector: str) -> List[Dict[str, Any]]:
-    selector = manager._safe_string(selector)
+    selector = safe_string(selector)
     if not selector:
         return list(devices)
     if selector.isdigit():
