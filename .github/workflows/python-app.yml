@@ -74,6 +74,7 @@ jobs:
               -- . ":(exclude).github" ":(exclude).gitignore"
           else
             git log --no-merges --reverse --pretty=format:"* %s (%h)" "${CURRENT_TAG}"
+          fi
 
           echo
           echo
