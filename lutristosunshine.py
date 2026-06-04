@@ -1,11 +1,10 @@
-import sys
 import os
 import argparse
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Tuple
+from typing import Dict, Tuple
 
-from config.constants import DEFAULT_IMAGE, SOURCE_COLORS, RESET_COLOR
+from config.constants import DEFAULT_IMAGE, LAUNCHER_NAMES, SOURCE_COLORS, RESET_COLOR
 from sunshine.sunshine import (
     get_api_connection,
     get_api_url,
@@ -16,19 +15,18 @@ from sunshine.sunshine import (
     set_installation_type,
     set_server_name,
 )
-from utils.utils import handle_interrupt, get_games_found_message
+from utils.utils import (
+    handle_interrupt,
+    get_games_found_message,
+    dedupe_selected_games_by_name,
+    normalize_game_name_for_dedup,
+)
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection
 from utils.terminal import accent, badge, heading, muted, state_text
 from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_display_apps, get_display_blocked_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
-from launchers.heroic import list_heroic_games, get_heroic_command, HEROIC_PATHS
-from launchers.lutris import list_lutris_games, get_lutris_command, is_lutris_running
-from launchers.bottles import detect_bottles_installation, list_bottles_games
-from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
-from launchers.faugus import detect_faugus_installation, list_faugus_games
-from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
-from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
-from launchers.eden import detect_eden_installation, list_eden_games
+from config.registry import LAUNCHER_REGISTRY
+from launchers.lutris import is_lutris_running
 from display.manager import (
     configure_exclusive_input_devices,
     configure_gpu,
@@ -509,7 +507,7 @@ def handle_display_command(args) -> int:
                     print(f"- {app_name}: {issue}")
 
         if started_here and not enable_display:
-            stop_display()
+            return stop_display()
         return 0
 
     def run_enable(interactive: bool) -> int:
@@ -876,86 +874,58 @@ def main(argv=None):
                 server_name=server_name,
             )
 
-        lutris_command = get_lutris_command()
-        heroic_command, _ = get_heroic_command()
-        bottles_installed = detect_bottles_installation()
-        steam_installed, _ = detect_steam_installation()
-        steam_command = get_steam_command() if steam_installed else ""
-        faugus_installed = detect_faugus_installation()
-        ryubing_installed = detect_ryubing_installation()
-        retroarch_installed = detect_retroarch_installation()
-        eden_installed = detect_eden_installation()
+        detected_launchers = {
+            name: entry["detect"]()
+            for name, entry in LAUNCHER_REGISTRY.items()
+        }
 
-        if not lutris_command and not heroic_command and not bottles_installed and not steam_command and not faugus_installed and not ryubing_installed and not retroarch_installed and not eden_installed:
-            print("No Lutris, Heroic, Bottles, Steam, Faugus, Ryubing, RetroArch, or Eden installation detected.")
+        if not any(detected_launchers.values()):
+            names = ", ".join(LAUNCHER_NAMES[:-1]) + " or " + LAUNCHER_NAMES[-1]
+            print(f"No {names} installation detected.")
             return
 
-        if lutris_command and is_lutris_running():
+        if detected_launchers["Lutris"] and is_lutris_running():
             print("Error: Lutris is currently running. Please close Lutris and try again.")
             return
 
         with ThreadPoolExecutor() as executor:
-            futures = {}
-            if lutris_command:
-                futures['Lutris'] = executor.submit(list_lutris_games)
-            if heroic_command:
-                futures['Heroic'] = executor.submit(list_heroic_games)
-            if bottles_installed:
-                futures['Bottles'] = executor.submit(list_bottles_games)
-            if steam_command:
-                futures['Steam'] = executor.submit(list_steam_games)
-            if faugus_installed:
-                futures['Faugus'] = executor.submit(list_faugus_games)
-            if ryubing_installed:
-                futures['Ryubing'] = executor.submit(list_ryubing_games)
-            if retroarch_installed:
-                futures['RetroArch'] = executor.submit(list_retroarch_games)
-            if eden_installed:
-                futures['Eden'] = executor.submit(list_eden_games)
+            futures = {
+                name: executor.submit(LAUNCHER_REGISTRY[name]["list"])
+                for name in LAUNCHER_NAMES
+                if detected_launchers[name]
+            }
 
             all_games = []
-            for source, future in futures.items():
+            for source_name, future in futures.items():
                 result = future.result()
-                if source == 'Lutris':
-                    all_games.extend([(game_id, game_name, "Lutris", "Lutris") for game_id, game_name in result])
-                elif source == 'Heroic':
-                    all_games.extend([(game_id, game_name, "Heroic", runner) for game_id, game_name, _, runner in result])
-                elif source == 'Bottles':
-                    all_games.extend(result)  # Bottles results are already in the correct format
-                elif source == 'Steam':
-                    all_games.extend([(game_id, game_name, "Steam", "Steam") for game_id, game_name in result])
-                elif source == 'Faugus':
-                    all_games.extend(result)
-                elif source == 'Ryubing':
-                    all_games.extend([(game_id, game_name, "Ryubing", "Ryubing") for game_id, game_name in result])
-                elif source == 'RetroArch':
-                    all_games.extend([
-                        (
-                            game_path,
-                            game_name,
-                            "RetroArch",
-                            core_info,
-                        )
-                        for game_path, game_name, core_info in result
-                    ])
-                elif source == 'Eden':
-                    all_games.extend([(game_id, game_name, "Eden", "Eden") for game_id, game_name in result])
+                all_games.extend(LAUNCHER_REGISTRY[source_name]["normalize"](result))
 
         if not all_games:
             print("No games found in any detected launcher.")
             return
 
-        games_found_message = get_games_found_message(lutris_command, heroic_command, bottles_installed, steam_command, faugus_installed, ryubing_installed, retroarch_installed, eden_installed)
+        games_found_message = get_games_found_message(detected_launchers)
         print(games_found_message)
 
         existing_apps = get_existing_apps()
-        existing_game_names = {app["name"] for app in existing_apps}
+        existing_game_names_normalized = {
+            normalize_game_name_for_dedup(app["name"]) for app in existing_apps
+        }
 
         all_games.sort(key=lambda x: x[1])
 
-        for idx, (_, game_name, display_source, source) in enumerate(all_games):
-            status = f"(already in {get_server_display_name()})" if game_name in existing_game_names else ""
-            if len(futures) > 1: 
+        _game_name_cache: Dict[str, str] = {
+            g.game_name: normalize_game_name_for_dedup(g.game_name)
+            for g in all_games
+        }
+
+        for idx, (_, game_name, display_source, _) in enumerate(all_games):
+            status = (
+                f"(already in {get_server_display_name()})"
+                if _game_name_cache[game_name] in existing_game_names_normalized
+                else ""
+            )
+            if len(futures) > 1:
                 source_color = SOURCE_COLORS.get(display_source, "")
                 source_info = f"{source_color}({display_source}){RESET_COLOR}"
                 print(f"{idx + 1}. {game_name} {source_info} {status}")
@@ -967,7 +937,21 @@ def main(argv=None):
         else:
             selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
 
-        selected_games = [all_games[i] for i in selected_indices if all_games[i][1] not in existing_game_names]
+        selected_games = [
+            all_games[i]
+            for i in selected_indices
+            if _game_name_cache[all_games[i].game_name] not in existing_game_names_normalized
+        ]
+
+        selected_games, skipped_duplicates = dedupe_selected_games_by_name(selected_games)
+
+        for skipped_game, retained_game in skipped_duplicates:
+            _, skipped_name, skipped_source, _ = skipped_game
+            _, _, retained_source, _ = retained_game
+            print(
+                f"Skipping duplicate '{skipped_name}' from {skipped_source}; "
+                f"using {retained_source}."
+            )
 
         if not selected_games:
             print(f"No new games to add to {get_server_display_name()} configuration.")

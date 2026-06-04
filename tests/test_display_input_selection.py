@@ -210,9 +210,10 @@ class DisplayInputSelectionTests(unittest.TestCase):
             clear=False,
         ):
             script = manager._kwin_input_isolation_script(manager._default_state())
-        self.assertIn("HOST_SESSION_FAMILY = 'plasma'", script)
+        self.assertIn("def is_plasma_session():", script)
+        self.assertIn("plasma_markers", script)
         self.assertIn('write_status(state="starting")', script)
-        self.assertIn('DEVICE_INTERFACE,\n        "enabled",', script)
+        self.assertIn('DEVICE_INTERFACE = "', script)
         self.assertIn('return f"{value:04x}"', script)
         self.assertIn('replace("_", " ")', script)
 
@@ -266,6 +267,7 @@ H: Handlers=sysrq kbd event29
         original_ensure_dependencies = manager._ensure_dependencies
         original_load_state = manager.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
+        original_state_paths = manager._state_paths
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_install_udev_rule = manager._install_udev_rule
@@ -275,6 +277,7 @@ H: Handlers=sysrq kbd event29
             manager._ensure_dependencies = lambda: []
             manager.load_state = lambda: state
             sunshine_service.is_sunshine_service_active = lambda: False
+            manager._state_paths = lambda _unit: state["paths"]
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
             manager._install_udev_rule = lambda current: True
@@ -286,6 +289,7 @@ H: Handlers=sysrq kbd event29
             manager._ensure_dependencies = original_ensure_dependencies
             manager.load_state = original_load_state
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
+            manager._state_paths = original_state_paths
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._install_udev_rule = original_install_udev_rule
@@ -408,13 +412,17 @@ H: Handlers=sysrq kbd event29
         state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
         original_load_state = manager.load_state
         original_save_state = manager.save_state
-        original_stop_sunshine = sunshine_service.stop_sunshine
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
         original_clear_input_bridge_status_file = manager._clear_input_bridge_status_file
         original_restore_host_audio_defaults = manager._restore_host_audio_defaults
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
-            sunshine_service.stop_sunshine = lambda: None
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "stop", unit], 0, "", ""
+            )
             manager._clear_input_bridge_status_file = lambda current: None
             manager._restore_host_audio_defaults = lambda current: None
 
@@ -422,7 +430,8 @@ H: Handlers=sysrq kbd event29
         finally:
             manager.load_state = original_load_state
             manager.save_state = original_save_state
-            sunshine_service.stop_sunshine = original_stop_sunshine
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
             manager._clear_input_bridge_status_file = original_clear_input_bridge_status_file
             manager._restore_host_audio_defaults = original_restore_host_audio_defaults
 
@@ -927,6 +936,72 @@ H: Handlers=sysrq kbd event29
         self.assertIn("import grp", script)
         self.assertIn("def current_user_name():", script)
         self.assertIn("def current_user_group():", script)
+
+
+    def test_restart_display_returns_stop_failure_without_starting(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        start_calls = []
+        original_load_state = manager.load_state
+        original_stop_display = manager.stop_display
+        original_start_display = manager.start_display
+        try:
+            manager.load_state = lambda: state
+            manager.stop_display = lambda: 1
+            manager.start_display = lambda: start_calls.append(True) or 0
+
+            result = manager.restart_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.stop_display = original_stop_display
+            manager.start_display = original_start_display
+
+        self.assertEqual(result, 1)
+        self.assertEqual(start_calls, [])
+
+    def test_restart_display_proceeds_to_start_when_stop_succeeds(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        original_load_state = manager.load_state
+        original_stop_display = manager.stop_display
+        original_start_display = manager.start_display
+        try:
+            manager.load_state = lambda: state
+            manager.stop_display = lambda: 0
+            manager.start_display = lambda: 0
+
+            result = manager.restart_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.stop_display = original_stop_display
+            manager.start_display = original_start_display
+
+        self.assertEqual(result, 0)
+
+
+    def test_remove_display_returns_stop_failure_without_cleaning_up(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        cleanup_calls = []
+        original_load_state = manager.load_state
+        original_stop_display = manager.stop_display
+        original_remove_udev_rule = manager._remove_udev_rule
+        original_cleanup_managed_overrides = sunshine_service.cleanup_managed_overrides
+        try:
+            manager.load_state = lambda: state
+            manager.stop_display = lambda: 1
+            manager._remove_udev_rule = lambda current: cleanup_calls.append("udev") or True
+            sunshine_service.cleanup_managed_overrides = lambda current: cleanup_calls.append("overrides")
+
+            result = manager.remove_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.stop_display = original_stop_display
+            manager._remove_udev_rule = original_remove_udev_rule
+            sunshine_service.cleanup_managed_overrides = original_cleanup_managed_overrides
+
+        self.assertEqual(result, 1)
+        self.assertEqual(cleanup_calls, [])
 
 
 if __name__ == "__main__":

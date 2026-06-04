@@ -6,7 +6,6 @@ service unit resolution, Homebrew binary fallback, and safe cleanup
 of managed systemd overrides without trampling user-supplied ones.
 """
 
-import os
 import subprocess
 import tempfile
 import unittest
@@ -179,6 +178,7 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
         state = manager._default_state()
         state["paths"] = dict(state["paths"])
         state["paths"]["sunshine_wrapper_script"] = "/run/lutristosunshine-run-display-service.sh"
+        state["sunshine_unit_name"] = "homebrew.sunshine.service"
 
         def fake_systemctl_user(*args, check=False):
             if args[:3] == ("show", "--property=ExecStart", "--value"):
@@ -191,12 +191,9 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
             sunshine_unit=lambda: "homebrew.sunshine.service",
             sunshine_binary=lambda: "/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
         ):
-            updated = manager._remember_sunshine_execstart(
-                state, unit="homebrew.sunshine.service"
-            )
+            updated = manager._remember_sunshine_execstart(state)
 
         self.assertEqual(updated["sunshine_execstart"], homebrew_command)
-        self.assertEqual(updated["sunshine_unit_name"], "homebrew.sunshine.service")
 
 
 class OverridePathHelpersTests(unittest.TestCase):

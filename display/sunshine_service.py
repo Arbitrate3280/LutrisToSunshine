@@ -132,11 +132,6 @@ def show_unit_property(unit: str, property_name: str) -> str:
     return (result.stdout or "").strip()
 
 
-def restart_sunshine() -> None:
-    """Restart the live Sunshine service unit."""
-    _systemctl_user("restart", sunshine_unit())
-
-
 def start_sunshine_unit(unit: str) -> subprocess.CompletedProcess:
     """Start ``unit`` via ``systemctl --user`` and return the result."""
     return _systemctl_user("start", unit)
@@ -147,9 +142,9 @@ def stop_sunshine_unit(unit: str) -> subprocess.CompletedProcess:
     return _systemctl_user("stop", unit)
 
 
-def stop_sunshine() -> None:
-    """Stop the live Sunshine service unit."""
-    _systemctl_user("stop", sunshine_unit())
+def restart_sunshine_unit(unit: str) -> subprocess.CompletedProcess:
+    """Restart ``unit`` via ``systemctl --user`` and return the result."""
+    return _systemctl_user("restart", unit)
 
 
 def fetch_sunshine_journal(lines: int) -> subprocess.CompletedProcess:

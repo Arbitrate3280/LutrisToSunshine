@@ -12,9 +12,8 @@ import stat
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from utils.input import get_user_input
 from display import sunshine_service as _svc
@@ -178,7 +177,7 @@ def detect_sunshine_config_root() -> Path:
 
 def _evdev_import_error() -> Optional[str]:
     try:
-        from evdev import InputDevice, ecodes  # noqa: F401
+        __import__("evdev")
     except ImportError:
         return (
             "Missing Python module: evdev. "
@@ -566,9 +565,30 @@ def _custom_display_mode_string(value: Any) -> str:
     return f"{mode['width']}x{mode['height']} @ {refresh_hz} Hz"
 
 
-def _state_paths() -> Dict[str, str]:
+def _resolve_sunshine_unit(state: Dict[str, Any]) -> str:
+    """Return the Sunshine unit to operate on.
+
+    Prefers the unit saved in state; falls back to live detection.
+    """
+    return safe_string(state.get("sunshine_unit_name")) or _svc.sunshine_unit()
+
+
+def _sunshine_verb(
+    state: Dict[str, Any],
+    verb_fn: Callable[[str], subprocess.CompletedProcess],
+) -> subprocess.CompletedProcess:
+    """Run a systemd verb (restart/stop) on the Sunshine unit and print stderr on failure."""
+    result = verb_fn(_resolve_sunshine_unit(state))
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            print(stderr)
+    return result
+
+
+def _state_paths(unit_name: str) -> Dict[str, str]:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
-    override_dir = systemd_user_dir / f"{_svc.sunshine_unit()}.d"
+    override_dir = systemd_user_dir / f"{unit_name}.d"
     return {
         "profile_root": str(PROFILE_ROOT),
         "bin_root": str(BIN_ROOT),
@@ -604,8 +624,7 @@ def _state_paths() -> Dict[str, str]:
 
 
 def _default_state() -> Dict[str, Any]:
-    paths = _state_paths()
-    return {
+    state = {
         "enabled": False,
         "dynamic_mangohud_fps_limit": False,
         "refresh_rate_sync_mode": "client",
@@ -622,8 +641,9 @@ def _default_state() -> Dict[str, Any]:
         "gpu_mode": "auto",
         "gpu_card_path": "",
         "gpu_render_path": "",
-        "paths": paths,
     }
+    state["paths"] = _state_paths(_svc.sunshine_unit())
+    return state
 
 
 def load_state() -> Dict[str, Any]:
@@ -636,6 +656,8 @@ def load_state() -> Dict[str, Any]:
         return _default_state()
     state = _default_state()
     state.update(data)
+    if not safe_string(state.get("sunshine_unit_name")):
+        state["sunshine_unit_name"] = _svc.sunshine_unit()
     state["refresh_rate_sync_mode"] = _normalized_refresh_rate_sync_mode(
         state.get("refresh_rate_sync_mode")
     )
@@ -648,7 +670,7 @@ def load_state() -> Dict[str, Any]:
     state["gpu_mode"] = safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
     state["gpu_card_path"] = safe_string(state.get("gpu_card_path"))
     state["gpu_render_path"] = safe_string(state.get("gpu_render_path"))
-    state["paths"] = _state_paths()
+    state["paths"] = _state_paths(state["sunshine_unit_name"])
     return state
 
 
@@ -850,7 +872,7 @@ def configure_gpu() -> int:
     current_label = gpu_status_label(state)
     print(f"Current: {current_label}")
     print("")
-    print(f"  0. Auto — wlroots chooses GPU automatically")
+    print("  0. Auto — wlroots chooses GPU automatically")
     gpus = _detect_available_gpus()
     if not gpus:
         print("")
@@ -1159,23 +1181,19 @@ def _fragment_sunshine_execstart(unit: str) -> str:
     return ""
 
 
-def _remember_sunshine_execstart(state: Dict[str, Any], unit: Optional[str] = None) -> Dict[str, Any]:
-    target_unit = unit or _svc.sunshine_unit()
+def _remember_sunshine_execstart(state: Dict[str, Any]) -> Dict[str, Any]:
+    target_unit = _resolve_sunshine_unit(state)
     current_execstart = _current_sunshine_execstart(target_unit) or _fragment_sunshine_execstart(target_unit)
     wrapper_path = safe_string(state.get("paths", {}).get("sunshine_wrapper_script"))
 
     if current_execstart and wrapper_path and current_execstart != wrapper_path:
         state["sunshine_execstart"] = current_execstart
-        state["sunshine_unit_name"] = target_unit
         return state
 
     if safe_string(state.get("sunshine_execstart")):
-        state["sunshine_unit_name"] = target_unit
         return state
 
-    fallback_execstart = _svc.sunshine_binary() or "sunshine"
-    state["sunshine_execstart"] = fallback_execstart
-    state["sunshine_unit_name"] = target_unit
+    state["sunshine_execstart"] = _svc.sunshine_binary() or "sunshine"
     return state
 
 
@@ -3073,7 +3091,7 @@ if __name__ == "__main__":
 def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     paths = state["paths"]
     sunshine_command = safe_string(state.get("sunshine_execstart")) or _svc.sunshine_binary() or "sunshine"
-    sunshine_unit = _svc.sunshine_unit()
+    sunshine_unit = _resolve_sunshine_unit(state)
     audio_sink = state["audio_sink"]
     refresh_rate_sync_mode = _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode"))
     custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
@@ -3310,7 +3328,7 @@ managed_sources = set({managed_audio_sources!r})
 try:
     state = json.loads(state_path.read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError):
-    state = {{}}
+    sys.exit(1)
 if not isinstance(state, dict):
     state = {{}}
 
@@ -4608,7 +4626,7 @@ rm -f "$host_env_file" "$systemd_env_dump"
 log_debug "wrapper final exit status=$child_status"
 exit "$child_status"
 """,
-        Path(paths["get_gpu_addr"]): f"""#!/bin/bash
+        Path(paths["get_gpu_addr"]): """#!/bin/bash
 discrete_gpu=""
 internal_gpu=""
 for gpu in /sys/class/drm/card[0-9]; do
@@ -5019,7 +5037,9 @@ def _apply_input_bridge_runtime_state(state: Dict[str, Any]) -> None:
 
     # The input bridge now runs as a child of the Sunshine override wrapper.
     # Restart the service so the wrapper can re-read the saved controller selection.
-    _svc.restart_sunshine()
+    result = _sunshine_verb(state, _svc.restart_sunshine_unit)
+    if result.returncode != 0:
+        return
 
 
 def _parse_selection_numbers(value: str, total_items: int) -> List[int]:
@@ -5096,7 +5116,7 @@ def configure_exclusive_input_devices() -> int:
             print("Saved exclusive controllers:")
             for selection in selections:
                 print(f"- {selection['label']}")
-            clear_saved = get_user_input(
+            get_user_input(
                 "Enter 0 to clear saved controller selections, or press Ctrl+C to cancel: ",
                 lambda raw: raw.strip() if raw.strip() == "0" else (_ for _ in ()).throw(ValueError()),
                 "Invalid selection. Enter 0 to clear the saved controller selections.",
@@ -5146,6 +5166,12 @@ def setup_display() -> int:
 
     state = load_state()
     sunshine_was_active = _svc.is_sunshine_service_active()
+
+    # Re-detect and persist the unit name so overrides go to the right directory,
+    # even if the user switched Sunshine installations since the last run.
+    state["sunshine_unit_name"] = _svc.sunshine_unit()
+    state["paths"] = _state_paths(state["sunshine_unit_name"])
+
     state = _remember_sunshine_execstart(state)
     state = refresh_managed_files(state)
     _remember_sunshine_audio_sink(state)
@@ -5163,7 +5189,10 @@ def setup_display() -> int:
     state["enabled"] = True
     save_state(state)
     if sunshine_was_active:
-        _svc.restart_sunshine()
+        result = _sunshine_verb(state, _svc.restart_sunshine_unit)
+        if result.returncode != 0:
+            print("Error: failed to restart Sunshine after installing virtual display files.")
+            return 1
 
     print("Virtual display files installed.")
     return 0
@@ -5178,7 +5207,7 @@ def start_display() -> int:
     _remember_sunshine_audio_sink(state)
     _snapshot_host_audio_defaults(state)
     save_state(state)
-    sunshine_unit = _svc.sunshine_unit()
+    sunshine_unit = _resolve_sunshine_unit(state)
     result = _svc.start_sunshine_unit(sunshine_unit)
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
@@ -5199,7 +5228,9 @@ def restart_display() -> int:
     if not state.get("enabled"):
         print("Virtual display is not set up. Run 'python3 lutristosunshine.py display enable' first.")
         return 1
-    stop_display()
+    result = stop_display()
+    if result != 0:
+        return result
     return start_display()
 
 
@@ -5208,7 +5239,9 @@ def stop_display() -> int:
     if not state.get("enabled"):
         print("Virtual display is not set up.")
         return 1
-    _svc.stop_sunshine()
+    result = _sunshine_verb(state, _svc.stop_sunshine_unit)
+    if result.returncode != 0:
+        return 1
     _clear_input_bridge_status_file(state)
     try:
         Path(state["paths"]["kwin_input_isolation_status_file"]).unlink()
@@ -5300,7 +5333,9 @@ def display_snapshot() -> Dict[str, Any]:
         "profile": state["profile"],
         "host_session": host_session,
         "input_isolation_mode": input_isolation_mode,
-        "sunshine_unit": _svc.sunshine_unit(),
+        # Resolved via state (saved or live-detected) so the snapshot shows
+        # the unit the display lifecycle would actually operate on.
+        "sunshine_unit": _resolve_sunshine_unit(state),
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
         "bridge_state": _bridge_service_state() if configured else "inactive",
@@ -5588,7 +5623,9 @@ def remove_display() -> int:
         print("Virtual display is not configured.")
         return 1
 
-    stop_display()
+    stop_result = stop_display()
+    if stop_result != 0:
+        return stop_result
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
     _clean_kde_libinput_config()

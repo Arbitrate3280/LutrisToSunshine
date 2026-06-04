@@ -1,7 +1,11 @@
 import subprocess
 import sys
 import json
-from typing import Any, List
+from typing import Any, Dict, List, Tuple
+
+from config.constants import LAUNCHER_NAMES, SOURCE_PRIORITY
+from config.types import GameSelection
+
 
 def handle_interrupt():
     """Handle script interruption consistently."""
@@ -40,41 +44,66 @@ def parse_bottles_programs(result: subprocess.CompletedProcess) -> List[str]:
     # Skip the "Found X programs:" line, empty lines, and remove leading "- "
     return [line.strip("- ").strip() for line in lines if line.strip() and not line.startswith("Found")]
 
-def get_games_found_message(
-    lutris_command,
-    heroic_command,
-    bottles_installed,
-    steam_command,
-    faugus_installed,
-    ryubing_installed,
-    retroarch_installed,
-    eden_installed,
-):
-    sources = set()
-    if lutris_command:
-        sources.add("Lutris")
-    if heroic_command:
-        sources.add("Heroic")
-    if bottles_installed:
-        sources.add("Bottles")
-    if steam_command:
-        sources.add("Steam")
-    if faugus_installed:
-        sources.add("Faugus")
-    if ryubing_installed:
-        sources.add("Ryubing")
-    if retroarch_installed:
-        sources.add("RetroArch")
-    if eden_installed:
-        sources.add("Eden")
+def get_games_found_message(detected_launchers: Dict[str, Any]) -> str:
+    sources = [name for name in LAUNCHER_NAMES if detected_launchers.get(name)]
 
     if not sources:
         return "No game sources detected."
 
-    sources_list = list(sources)
     if len(sources) == 1:
-        return f"Games found in {sources_list[0]}:"
-    elif len(sources) == 2:
-        return f"Games found in {sources_list[0]} and {sources_list[1]}:"
-    else:
-        return f"Games found in {', '.join(sources_list[:-1])} and {sources_list[-1]}:"
+        return f"Games found in {sources[0]}:"
+    if len(sources) == 2:
+        return f"Games found in {sources[0]} and {sources[1]}:"
+    return f"Games found in {', '.join(sources[:-1])} and {sources[-1]}:"
+
+
+def normalize_game_name_for_dedup(game_name: str) -> str:
+    """Normalize a display name for duplicate detection."""
+    return " ".join(game_name.casefold().split())
+
+
+def get_source_priority(display_source: str) -> int:
+    """Return the deduplication priority for a display source.
+
+    Lower numbers win. Unknown sources are treated as lowest priority so
+    the well-known launchers always take precedence.
+    """
+    return SOURCE_PRIORITY.get(display_source, len(SOURCE_PRIORITY))
+
+
+def dedupe_selected_games_by_name(
+    games: List[GameSelection],
+) -> Tuple[List[GameSelection], List[Tuple[GameSelection, GameSelection]]]:
+    """Collapse selected games that share a normalized display name.
+
+    For each normalized name group, the entry with the lowest source
+    priority wins; ties keep the first selected entry. Output preserves
+    stable order by the first occurrence of each normalized group in the
+    input, but the entry shown there is the higher-priority winner when
+    a later duplicate replaces an earlier retained game.
+
+    Returns a tuple of ``(deduped_games, skipped_duplicates)`` where
+    ``skipped_duplicates`` is a list of ``(skipped_game, retained_game)``
+    pairs ready to be surfaced as user-facing messages.
+    """
+    retained_by_name: Dict[str, GameSelection] = {}
+    order: List[str] = []
+    skipped: List[Tuple[GameSelection, GameSelection]] = []
+
+    for game in games:
+        _, game_name, display_source, _ = game
+        key = normalize_game_name_for_dedup(game_name)
+        if key not in retained_by_name:
+            retained_by_name[key] = game
+            order.append(key)
+            continue
+
+        retained = retained_by_name[key]
+        _, _, retained_source, _ = retained
+        if get_source_priority(display_source) < get_source_priority(retained_source):
+            skipped.append((retained, game))
+            retained_by_name[key] = game
+        else:
+            skipped.append((game, retained))
+
+    return [retained_by_name[key] for key in order], skipped
