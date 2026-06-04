@@ -68,12 +68,11 @@ class HomebrewInstallDetectionTests(unittest.TestCase):
 
 class HomebrewBinaryResolutionTests(unittest.TestCase):
     def test_sunshine_binary_falls_back_to_homebrew_when_path_missing(self) -> None:
-        fake_shutil = mock.MagicMock()
-        fake_shutil.which.side_effect = lambda name: None if name == "sunshine" else f"/usr/bin/{name}"
-        with mock.patch.object(sunshine_service, "shutil", fake_shutil), \
-             mock.patch.object(
-                 sunshine_service,
-                 "homebrew_sunshine_binary",
+        def fake_which(name):
+            return None if name == "sunshine" else f"/usr/bin/{name}"
+        with mock.patch("shutil.which", side_effect=fake_which), \
+             mock.patch(
+                 "sunshine.detection.homebrew_sunshine_binary",
                  return_value="/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
              ):
             self.assertEqual(
@@ -160,7 +159,8 @@ class SunshineUnitSelectionTests(unittest.TestCase):
                     )
                 return _completed(list(args), 0, f"{unit}\n", "")
             if args and args[0] == "is-active":
-                return _completed(list(args), 0, "active\n")
+                active = (unit == sunshine_service.FALLBACK_SUNSHINE_UNIT)
+                return _completed(list(args), 0 if active else 1, "active\n" if active else "inactive\n")
             return _completed(list(args), 0, "", "")
 
         with patched(sunshine_service, _systemctl_user=fake_systemctl_user):

@@ -449,6 +449,7 @@ H: Handlers=sysrq kbd event29
         override_dir.mkdir(parents=True)
 
         state["paths"] = dict(state["paths"])
+        state["paths"]["state_path"] = str(base / "display.json")
         state["paths"]["systemd_user_dir"] = str(base)
         state["paths"]["sunshine_override_dir"] = str(override_dir)
         state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
@@ -637,16 +638,87 @@ H: Handlers=sysrq kbd event29
         state = manager._default_state()
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
+        original_installation_audit = sunshine_service.sunshine_installation_audit
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: ["sway", "setfacl"]
+            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
+                managed_unit=sunshine_service.SUNSHINE_UNIT,
+                managed_type="native",
+                detected_types=["native"],
+            )
             report = manager.display_doctor_report()
         finally:
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
+            sunshine_service.sunshine_installation_audit = original_installation_audit
 
         self.assertEqual(report["summary"], "needs_attention")
         self.assertTrue(any(check["status"] == "fail" for check in report["checks"]))
+
+    def test_display_doctor_report_warns_when_install_probe_disagrees_with_managed_unit(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        original_sunshine_service_active = sunshine_service.is_sunshine_service_active
+        original_bridge_service_state = manager._bridge_service_state
+        original_installation_audit = sunshine_service.sunshine_installation_audit
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            sunshine_service.is_sunshine_service_active = lambda: True
+            manager._bridge_service_state = lambda: "inactive"
+            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
+                managed_unit=sunshine_service.SUNSHINE_UNIT,
+                managed_type="native",
+                detected_types=["homebrew", "native"],
+                package_probe_type="homebrew",
+                resolved_type="native",
+            )
+
+            report = manager.display_doctor_report()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+            sunshine_service.is_sunshine_service_active = original_sunshine_service_active
+            manager._bridge_service_state = original_bridge_service_state
+            sunshine_service.sunshine_installation_audit = original_installation_audit
+
+        install_check = next(check for check in report["checks"] if check["label"] == "Sunshine installation")
+        self.assertEqual(install_check["status"], "warn")
+        self.assertIn("Multiple Sunshine installs detected (homebrew, native)", install_check["message"])
+        self.assertIn("manages app-dev.lizardbyte.app.Sunshine.service (native) and resolves Sunshine as native", install_check["message"])
+        self.assertIn("package-only probing would resolve homebrew", install_check["message"])
+
+    def test_display_doctor_report_skips_install_warning_when_probe_matches_managed_unit(self) -> None:
+        state = manager._default_state()
+        state["enabled"] = True
+        original_load_state = manager.load_state
+        original_ensure_dependencies = manager._ensure_dependencies
+        original_sunshine_service_active = sunshine_service.is_sunshine_service_active
+        original_bridge_service_state = manager._bridge_service_state
+        original_installation_audit = sunshine_service.sunshine_installation_audit
+        try:
+            manager.load_state = lambda: state
+            manager._ensure_dependencies = lambda: []
+            sunshine_service.is_sunshine_service_active = lambda: True
+            manager._bridge_service_state = lambda: "inactive"
+            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
+                managed_unit=sunshine_service.SUNSHINE_UNIT,
+                managed_type="native",
+                detected_types=["native"],
+            )
+
+            report = manager.display_doctor_report()
+        finally:
+            manager.load_state = original_load_state
+            manager._ensure_dependencies = original_ensure_dependencies
+            sunshine_service.is_sunshine_service_active = original_sunshine_service_active
+            manager._bridge_service_state = original_bridge_service_state
+            sunshine_service.sunshine_installation_audit = original_installation_audit
+
+        self.assertFalse(any(check["label"] == "Sunshine installation" for check in report["checks"]))
 
     def test_display_doctor_report_reports_kwin_runtime_state(self) -> None:
         tempdir = tempfile.TemporaryDirectory()

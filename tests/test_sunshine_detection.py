@@ -18,6 +18,7 @@ class SunshineDetectionTests(unittest.TestCase):
         brew_prefix_results=None,
         isfile_results=None,
         access_results=None,
+        sunshine_which="/usr/bin/sunshine",
     ):
         """Build a detect_sunshine_installation() call patched with the given behavior."""
         brew_prefix_results = dict(brew_prefix_results or {})
@@ -28,7 +29,7 @@ class SunshineDetectionTests(unittest.TestCase):
             if name == "brew":
                 return brew
             if name == "sunshine":
-                return "/usr/bin/sunshine"
+                return sunshine_which
             return None
 
         def fake_run(args, *a, **kw):
@@ -99,7 +100,17 @@ class SunshineDetectionTests(unittest.TestCase):
         )
         self.assertEqual(result, (True, "homebrew"))
 
-    def test_homebrew_detection_runs_before_generic_native(self):
+    def test_active_service_detection_runs_before_package_probes(self):
+        with patch("sunshine.sunshine.run_command") as run_command, patch(
+            "sunshine.install.homebrew_sunshine_executable"
+        ) as homebrew:
+            result = sunshine.detect_sunshine_installation(service_unit_type="native")
+
+        self.assertEqual(result, (True, "native"))
+        run_command.assert_not_called()
+        homebrew.assert_not_called()
+
+    def test_homebrew_detection_runs_before_generic_native_when_no_service_type(self):
         def run_cmd(command, *args, **kwargs):
             if "which sunshine" in command:
                 self.fail("Homebrew probe should run before generic native detection")
@@ -131,6 +142,7 @@ class SunshineDetectionTests(unittest.TestCase):
             },
             isfile_results={"bin/sunshine": False},
             access_results={"bin/sunshine": True},
+            sunshine_which=None,
         )
         self.assertEqual(result, (False, ""))
 
@@ -145,6 +157,76 @@ class SunshineDetectionTests(unittest.TestCase):
             run_command=run_cmd,
         )
         self.assertEqual(result, (True, "native"))
+
+    def test_detect_sunshine_installation_resolves_ambiguity_using_active_service(self) -> None:
+        systemctl_called = False
+        def run_cmd(command, *args, **kwargs):
+            nonlocal systemctl_called
+            command_str = " ".join(command)
+            if "systemctl" in command_str:
+                systemctl_called = True
+                if "show" in command_str:
+                    if "LoadState" in command_str:
+                        unit = command[-1]
+                        if unit == "app-dev.lizardbyte.app.Sunshine.service":
+                            return subprocess.CompletedProcess(command, 0, "loaded\n", "")
+                        return subprocess.CompletedProcess(command, 0, "not-found\n", "")
+                    if "Id" in command_str:
+                        return subprocess.CompletedProcess(command, 0, "app-dev.lizardbyte.app.Sunshine.service\n", "")
+                    if "ExecStart" in command_str:
+                        return subprocess.CompletedProcess(command, 0, "/usr/bin/sunshine\n", "")
+                    if "FragmentPath" in command_str:
+                        return subprocess.CompletedProcess(command, 0, "/usr/lib/systemd/user/app-dev.lizardbyte.app.Sunshine.service\n", "")
+                if "is-active" in command_str:
+                    return subprocess.CompletedProcess(command, 0, "active\n", "")
+            if "flatpak" in command_str:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "")
+
+        def fake_which(name):
+            if name == "systemctl":
+                return "/usr/bin/systemctl"
+            if name == "flatpak":
+                return "/usr/bin/flatpak"
+            if name == "sunshine":
+                return "/usr/bin/sunshine"
+            return None
+
+        with patch("shutil.which", side_effect=fake_which), \
+             patch("subprocess.run", side_effect=run_cmd), \
+             patch("sunshine.install.homebrew_sunshine_executable", return_value=None):
+            result = sunshine.detect_sunshine_installation()
+
+        self.assertEqual(result, (True, "native"))
+        self.assertTrue(systemctl_called)
+
+    def test_detect_sunshine_installation_does_not_probe_service_when_no_ambiguity(self):
+        def fake_which(name):
+            if name == "sunshine":
+                return "/usr/bin/sunshine"
+            return None
+
+        with patch("shutil.which", side_effect=fake_which), \
+             patch("subprocess.run") as mock_run, \
+             patch("sunshine.install.homebrew_sunshine_executable", return_value=None):
+            result = sunshine.detect_sunshine_installation()
+
+        self.assertEqual(result, (True, "native"))
+        mock_run.assert_not_called()
+
+    def test_detect_sunshine_installation_detects_homebrew_on_path_without_brew_binary(self) -> None:
+        def fake_which(name):
+            if name == "sunshine":
+                return "/home/linuxbrew/.linuxbrew/bin/sunshine"
+            return None
+
+        with patch("shutil.which", side_effect=fake_which), \
+             patch("subprocess.run") as mock_run, \
+             patch("sunshine.install.homebrew_sunshine_executable", return_value=None):
+            result = sunshine.detect_sunshine_installation()
+
+        self.assertEqual(result, (True, "homebrew"))
+        mock_run.assert_not_called()
 
 
 class SunshineConfigRootTests(unittest.TestCase):

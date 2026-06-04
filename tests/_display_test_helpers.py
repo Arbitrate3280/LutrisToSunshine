@@ -78,6 +78,7 @@ def temp_display_state(
             explicit.add("sunshine_wrapper_script")
 
         for key in (
+            "state_path",
             "sunshine_wrapper_script",
             "input_bridge_script",
             "kwin_input_isolation_script",

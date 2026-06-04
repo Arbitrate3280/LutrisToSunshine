@@ -5336,6 +5336,7 @@ def display_snapshot() -> Dict[str, Any]:
         # Resolved via state (saved or live-detected) so the snapshot shows
         # the unit the display lifecycle would actually operate on.
         "sunshine_unit": _resolve_sunshine_unit(state),
+        "sunshine_install_audit": _svc.sunshine_installation_audit(_resolve_sunshine_unit(state)),
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
         "bridge_state": _bridge_service_state() if configured else "inactive",
@@ -5413,6 +5414,24 @@ def display_doctor_report() -> Dict[str, Any]:
                 "label": "Dependencies",
                 "status": "pass",
                 "message": "Required commands are available.",
+            }
+        )
+
+    audit = snapshot["sunshine_install_audit"]
+    detected_types = audit.get("detected_types") or []
+    managed_type = safe_string(audit.get("managed_type"))
+    package_probe_type = safe_string(audit.get("package_probe_type"))
+    resolved_type = safe_string(audit.get("resolved_type"))
+    if len(detected_types) > 1 and managed_type and managed_type != "unknown" and package_probe_type and package_probe_type != managed_type:
+        checks.append(
+            {
+                "label": "Sunshine installation",
+                "status": "warn",
+                "message": (
+                    f"Multiple Sunshine installs detected ({', '.join(detected_types)}). "
+                    f"Virtual display manages {audit['managed_unit']} ({managed_type}) and resolves Sunshine as {resolved_type}; "
+                    f"package-only probing would resolve {package_probe_type}."
+                ),
             }
         )
 

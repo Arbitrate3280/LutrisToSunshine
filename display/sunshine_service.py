@@ -18,23 +18,19 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from display.utils import run_command, safe_string
-from sunshine.install import homebrew_sunshine_binary
-
-
-SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
-FALLBACK_SUNSHINE_UNIT = "sunshine.service"
-SUNSHINE_FLATPAK_ID = "dev.lizardbyte.app.Sunshine"
-HOMEBREW_SUNSHINE_UNITS: Tuple[str, ...] = (
-    "homebrew.sunshine.service",
-    "homebrew.sunshine-beta.service",
-)
-SUNSHINE_UNIT_CANDIDATES: Tuple[str, ...] = (
+from sunshine.detection import (
     SUNSHINE_UNIT,
     FALLBACK_SUNSHINE_UNIT,
-    *HOMEBREW_SUNSHINE_UNITS,
+    SUNSHINE_FLATPAK_ID,
+    HOMEBREW_SUNSHINE_UNITS,
+    SUNSHINE_UNIT_CANDIDATES,
+    probe_packages,
+    classify_service_unit,
+    preferred_launch_binary,
+    probe_sunshine_service_unit,
 )
 
 
@@ -49,13 +45,6 @@ def _sunshine_unit_exists(unit: str) -> bool:
     return (result.stdout or "").strip() == "loaded"
 
 
-def _systemd_unit_id(unit: str) -> str:
-    result = _systemctl_user("show", "--property=Id", "--value", unit)
-    if result.returncode != 0:
-        return ""
-    return (result.stdout or "").strip()
-
-
 def sunshine_unit() -> str:
     """Return the live Sunshine service unit name on the host.
 
@@ -63,13 +52,7 @@ def sunshine_unit() -> str:
     :data:`SUNSHINE_UNIT_CANDIDATES`; falls back to the first loaded
     unit; finally to the canonical :data:`SUNSHINE_UNIT`.
     """
-    for unit in SUNSHINE_UNIT_CANDIDATES:
-        if _sunshine_unit_exists(unit) and _systemctl_user("is-active", unit).returncode == 0:
-            return _systemd_unit_id(unit) or unit
-    for unit in SUNSHINE_UNIT_CANDIDATES:
-        if _sunshine_unit_exists(unit):
-            return _systemd_unit_id(unit) or unit
-    return SUNSHINE_UNIT
+    return probe_sunshine_service_unit(systemctl_runner=_systemctl_user).unit_name
 
 
 def is_sunshine_service_active() -> bool:
@@ -92,29 +75,98 @@ def managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
     return units
 
 
+class SunshineInstallAudit(TypedDict):
+    managed_unit: str
+    managed_type: str
+    detected_types: List[str]
+    package_probe_type: str
+    resolved_type: str
+    probe_type: str
+    path_binary: str
+    homebrew_binary: str
+    execstart: str
+    fragment_path: str
+
+
+def make_sunshine_install_audit(
+    managed_unit: str,
+    managed_type: str,
+    detected_types: List[str],
+    package_probe_type: Optional[str] = None,
+    resolved_type: Optional[str] = None,
+    path_binary: str = "",
+    homebrew_binary: str = "",
+    execstart: str = "",
+    fragment_path: str = "",
+) -> SunshineInstallAudit:
+    """Helper constructor for SunshineInstallAudit to avoid duplicating incidental keys."""
+    resolved_package_probe = package_probe_type if package_probe_type is not None else (detected_types[0] if detected_types else "")
+    resolved_res = resolved_type if resolved_type is not None else (managed_type if managed_type != "unknown" else resolved_package_probe)
+    return {
+        "managed_unit": managed_unit,
+        "managed_type": managed_type,
+        "detected_types": detected_types,
+        "package_probe_type": resolved_package_probe,
+        "resolved_type": resolved_res,
+        "probe_type": resolved_res,
+        "path_binary": path_binary,
+        "homebrew_binary": homebrew_binary,
+        "execstart": execstart,
+        "fragment_path": fragment_path,
+    }
+
+
 def sunshine_binary() -> Optional[str]:
     """Return the Sunshine executable path on the host, or ``None``.
 
     Resolution order: ``PATH`` -> Homebrew formula prefix -> Flatpak.
     """
-    binary = shutil.which("sunshine")
-    if binary:
-        return binary
-    homebrew_binary = homebrew_sunshine_binary()
-    if homebrew_binary:
-        return homebrew_binary
-    flatpak = shutil.which("flatpak")
-    if not flatpak:
-        return None
-    result = subprocess.run(
-        [flatpak, "info", SUNSHINE_FLATPAK_ID],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
+    return preferred_launch_binary(probe_packages())
+
+
+def sunshine_installation_audit(unit: Optional[str] = None) -> SunshineInstallAudit:
+    """Return install signals and managed-unit classification for doctor output."""
+    managed_unit = unit or sunshine_unit()
+    probe = probe_sunshine_service_unit(systemctl_runner=_systemctl_user)
+
+    if managed_unit == probe.unit_name:
+        execstart = probe.execstart
+        fragment_path = probe.fragment_path
+        managed_type = probe.installation_type
+        unit_loaded = probe.exists
+    else:
+        execstart = show_unit_property(managed_unit, "ExecStart")
+        fragment_path = show_unit_property(managed_unit, "FragmentPath")
+        unit_loaded = bool(managed_unit and _sunshine_unit_exists(managed_unit))
+        managed_type = classify_service_unit(managed_unit, execstart, fragment_path)
+
+    probes = probe_packages()
+    package_probe_type = probes.detected_types[0] if probes.detected_types else ""
+    resolved_type = managed_type if unit_loaded and managed_type != "unknown" else package_probe_type
+
+    return make_sunshine_install_audit(
+        managed_unit=managed_unit,
+        managed_type=managed_type,
+        detected_types=probes.detected_types,
+        package_probe_type=package_probe_type,
+        resolved_type=resolved_type,
+        path_binary=probes.path_binary or "",
+        homebrew_binary=probes.homebrew_binary or "",
+        execstart=execstart,
+        fragment_path=fragment_path,
     )
-    if result.returncode == 0:
-        return f"{flatpak} run {SUNSHINE_FLATPAK_ID}"
-    return None
+
+
+def detected_sunshine_installation_type() -> str:
+    """Return the install type that should drive global Sunshine behavior.
+
+    A loaded systemd unit is the strongest signal because it is the
+    service this tool can actually start, stop, and wrap.  Package
+    probes are only a fallback for systems where no known user unit is
+    loaded yet.
+    """
+    audit = sunshine_installation_audit()
+    return safe_string(audit.get("resolved_type"))
 
 
 def daemon_reload() -> None:
@@ -262,4 +314,3 @@ def cleanup_managed_overrides(state: Dict[str, Any]) -> None:
             path.unlink()
         except OSError:
             pass
-

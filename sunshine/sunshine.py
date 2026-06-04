@@ -5,7 +5,6 @@ import requests
 import getpass
 import urllib3
 import subprocess
-import glob
 import shlex
 from typing import Tuple, Optional, Dict, List
 from requests.utils import dict_from_cookiejar, cookiejar_from_dict
@@ -21,19 +20,22 @@ from launchers.faugus import get_faugus_command
 from launchers.steam import get_steam_command
 from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
-from sunshine.install import homebrew_sunshine_executable
+
+# Re-exported for compatibility with main CLI launcher
+from sunshine.detection import detect_sunshine_installation
+
 from display.manager import (
-    HEADLESS_PREP_PREFIX,
     get_app_prep_commands,
+    HEADLESS_PREP_PREFIX,
     is_headless_prep_wrapped,
-    get_wrapped_command_origin,
-    get_wrapped_command_exit_timeout,
-    is_wrapped_command,
-    is_enabled as display_enabled,
-    unwrap_headless_prep_command,
-    unwrap_command,
     wrap_headless_prep_command,
+    unwrap_headless_prep_command,
+    is_wrapped_command,
+    get_wrapped_command_origin,
+    unwrap_command,
+    get_wrapped_command_exit_timeout,
     wrap_command,
+    is_enabled as display_enabled,
 )
 
 #Remove SSL warnings
@@ -232,29 +234,7 @@ def get_credentials_path():
     return os.path.join(_get_config_root(), "credentials")
 
 
-def detect_sunshine_installation() -> Tuple[bool, str]:
-    """Detect if Sunshine is installed and how."""
-    # Check for Flatpak installation
-    if run_command("flatpak list | grep dev.lizardbyte.app.Sunshine").returncode == 0:
-        return True, "flatpak"
-    # Check for Homebrew installation (stable or beta formula)
-    if homebrew_sunshine_executable() is not None:
-        return True, "homebrew"
-    # Check for native installation
-    elif run_command("which sunshine").returncode == 0:
-        return True, "native"
-    # Check for AppImage installation
-    else:
-        appimage_paths = (
-            glob.glob(os.path.expanduser("~/sunshine.AppImage")) +
-            glob.glob(os.path.expanduser("~/.local/share/applications/sunshine.AppImage")) +
-            glob.glob(os.path.expanduser("~/AppImages/sunshine.AppImage")) +
-            glob.glob(os.path.expanduser("~/bin/sunshine.AppImage")) +
-            glob.glob(os.path.expanduser("~/Downloads/sunshine.AppImage"))
-        )
-        if appimage_paths:
-            return True, "appimage"
-        return False, ""
+
 
 def detect_apollo_installation() -> bool:
     """Detect if Apollo is installed (native only)."""
