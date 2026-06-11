@@ -533,10 +533,13 @@ def handle_display_command(args) -> int:
     def run_reset() -> int:
         reconcile_status = reconcile_apps(False)
         if reconcile_status != 0:
-            return reconcile_status
+            print(f"{badge('WARN', 'warning')} could not reach Sunshine to restore app launches; continuing with file cleanup.")
         remove_status = remove_display()
         if remove_status == 0:
-            print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
+            if reconcile_status == 0:
+                print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
+            else:
+                print("Managed virtual-display setup was removed. Sunshine app launches may still reference virtual display wrappers; re-add them manually if needed.")
         return remove_status
 
     def run_start() -> int:

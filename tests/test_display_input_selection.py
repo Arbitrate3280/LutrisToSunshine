@@ -937,7 +937,7 @@ H: Handlers=sysrq kbd event29
         set_resolution_script = scripts[Path(state["paths"]["set_resolution_script"])]
 
         self.assertIn(
-            'swaymsg "output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
+            'swaymsg_cmd "output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
             set_resolution_script,
         )
         self.assertIn('target_width="${SUNSHINE_CLIENT_WIDTH:-}"', set_resolution_script)
@@ -1051,7 +1051,7 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(result, 0)
 
 
-    def test_remove_display_returns_stop_failure_without_cleaning_up(self) -> None:
+    def test_remove_display_continues_cleanup_when_stop_fails(self) -> None:
         state = manager._default_state()
         state["enabled"] = True
         cleanup_calls = []
@@ -1059,11 +1059,15 @@ H: Handlers=sysrq kbd event29
         original_stop_display = manager.stop_display
         original_remove_udev_rule = manager._remove_udev_rule
         original_cleanup_managed_overrides = sunshine_service.cleanup_managed_overrides
+        original_daemon_reload = manager._daemon_reload
+        original_save_state = manager.save_state
         try:
             manager.load_state = lambda: state
             manager.stop_display = lambda: 1
             manager._remove_udev_rule = lambda current: cleanup_calls.append("udev") or True
             sunshine_service.cleanup_managed_overrides = lambda current: cleanup_calls.append("overrides")
+            manager._daemon_reload = lambda: None
+            manager.save_state = lambda current: None
 
             result = manager.remove_display()
         finally:
@@ -1071,9 +1075,12 @@ H: Handlers=sysrq kbd event29
             manager.stop_display = original_stop_display
             manager._remove_udev_rule = original_remove_udev_rule
             sunshine_service.cleanup_managed_overrides = original_cleanup_managed_overrides
+            manager._daemon_reload = original_daemon_reload
+            manager.save_state = original_save_state
 
-        self.assertEqual(result, 1)
-        self.assertEqual(cleanup_calls, [])
+        self.assertEqual(result, 0)
+        self.assertIn("udev", cleanup_calls)
+        self.assertIn("overrides", cleanup_calls)
 
 
 if __name__ == "__main__":

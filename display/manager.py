@@ -3268,7 +3268,11 @@ export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=sway
 export XDG_SESSION_DESKTOP=sway
 
-exec /bin/sh -lc {shlex.quote(sunshine_command)}
+sunshine_cmd={shlex.quote(sunshine_command)}
+if [[ "$sunshine_cmd" == *"flatpak run"* ]]; then
+    sunshine_cmd="${{sunshine_cmd/flatpak run/flatpak run --env=WAYLAND_DISPLAY=$wayland_value --env=SWAYSOCK={state['sway_socket']} --filesystem=$runtime_dir/}}"
+fi
+exec /bin/sh -lc "$sunshine_cmd"
 """,
         Path(paths["sunshine_wrapper_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -3978,6 +3982,10 @@ fi
 if [ -z "$encoded_command" ]; then
     echo "Missing encoded app command." >&2
     exit 1
+fi
+
+if [ -f /.flatpak-info ]; then
+    exec flatpak-spawn --host "{paths['launch_app_script']}" "$@"
 fi
 
 if [ ! -S "{state['sway_socket']}" ]; then
@@ -4806,7 +4814,11 @@ if [ -z "$exact_stream_fps" ]; then
     exit 0
 fi
 
-SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{width}}x${{height}}@${{exact_stream_fps}}Hz" >/dev/null 2>&1 || true
+if [ -f /.flatpak-info ]; then
+    flatpak-spawn --host env SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{width}}x${{height}}@${{exact_stream_fps}}Hz" >/dev/null 2>&1 || true
+else
+    SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{width}}x${{height}}@${{exact_stream_fps}}Hz" >/dev/null 2>&1 || true
+fi
 """,
         Path(paths["set_resolution_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -4814,6 +4826,14 @@ set -euo pipefail
 if [ ! -S "{state['sway_socket']}" ]; then
     exit 0
 fi
+
+swaymsg_cmd() {{
+    if [ -f /.flatpak-info ]; then
+        flatpak-spawn --host env SWAYSOCK="{state['sway_socket']}" swaymsg "$@"
+    else
+        SWAYSOCK="{state['sway_socket']}" swaymsg "$@"
+    fi
+}}
 
 mode="{refresh_rate_sync_mode}"
 target_width="${{SUNSHINE_CLIENT_WIDTH:-}}"
@@ -4833,7 +4853,7 @@ import time
 print(f"{{time.time():.6f}}")
 PY
 )"
-SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode ${{target_width}}x${{target_height}}@${{target_fps}}Hz" >/dev/null 2>&1 || true
+swaymsg_cmd "output HEADLESS-1 mode ${{target_width}}x${{target_height}}@${{target_fps}}Hz" >/dev/null 2>&1 || true
 if [ "$mode" = "exact" ]; then
     setsid "{paths['apply_exact_refresh_script']}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &
 fi
@@ -4846,7 +4866,11 @@ if [ ! -S "{state['sway_socket']}" ]; then
     exit 0
 fi
 
-SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz" >/dev/null 2>&1 || true
+if [ -f /.flatpak-info ]; then
+    flatpak-spawn --host env SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz" >/dev/null 2>&1 || true
+else
+    SWAYSOCK="{state['sway_socket']}" swaymsg "output HEADLESS-1 mode {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz" >/dev/null 2>&1 || true
+fi
 """,
     }
 
@@ -5644,7 +5668,7 @@ def remove_display() -> int:
 
     stop_result = stop_display()
     if stop_result != 0:
-        return stop_result
+        print("Warning: could not stop the managed Sunshine service; continuing with file cleanup.")
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
     _clean_kde_libinput_config()
