@@ -37,7 +37,7 @@ python3 lutristosunshine.py
 
 ## Virtual Display
 
-Run `python3 lutristosunshine.py display` to open an interactive menu for managing headless streaming on a separate desktop — your main session stays usable while streaming.
+Run `python3 lutristosunshine.py display` to open an interactive menu for managing headless streaming in a separate Sway session. Audio and input stay isolated from your main desktop, so you can keep using it while someone streams a game.
 
 The menu includes:
 
@@ -63,3 +63,16 @@ chmod +x lutristosunshine
 ## License
 
 [MIT](https://choosealicense.com/licenses/mit-license.php)
+
+## Acknowledgements
+
+- [Lutris](https://lutris.net/)
+- [Heroic Games Launcher](https://heroicgameslauncher.com/)
+- [Bottles](https://usebottles.com/)
+- [Faugus Launcher](https://github.com/Faugus/faugus-launcher)
+- [Ryubing](https://ryujinx.app/)
+- [RetroArch](https://www.retroarch.com/)
+- [Eden](https://eden-emu.dev/)
+- [Sunshine](https://app.lizardbyte.dev/Sunshine/)
+- [SteamGridDB](https://www.steamgriddb.com/)
+- [Sunshine Headless Sway](https://github.com/daaaaan/sunshine-headless-sway)
