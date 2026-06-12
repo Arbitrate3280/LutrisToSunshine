@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from utils.input import get_user_input
+from utils.input import get_user_input, get_yes_no_input
 from display import sunshine_service as _svc
 from display.utils import run_command, safe_string
 
@@ -909,6 +909,10 @@ def configure_gpu() -> int:
         gpu = gpus[idx]
         set_gpu_mode("manual", gpu["card_path"], gpu["render_path"])
         print(f"GPU selection set to {gpu['label']} ({gpu['card_path']}).")
+
+    print("")
+    if get_yes_no_input("Restart the virtual display for the change to take effect?", default=True):
+        return restart_display()
     return 0
 
 
@@ -951,6 +955,10 @@ def configure_renderer_mode() -> int:
     else:
         set_renderer_mode("vulkan")
         print("Renderer set to Vulkan. HDR pass-through enabled (may have less GPU support).")
+
+    print("")
+    if get_yes_no_input("Restart the virtual display for the change to take effect?", default=True):
+        return restart_display()
     return 0
 
 
