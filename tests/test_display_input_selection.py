@@ -463,13 +463,29 @@ H: Handlers=sysrq kbd event29
         state["paths"]["kwin_input_isolation_status_file"] = str(base / "kwin-input-isolation-status.json")
         state["paths"]["wayland_display_file"] = str(base / "wayland-display")
         state["paths"]["audio_module_file"] = str(base / "audio-module-id")
+        state["paths"]["sway_config"] = str(base / "sway.conf")
+        state["paths"]["sway_start_script"] = str(base / "lutristosunshine-start-headless-sway.sh")
+        state["paths"]["sunshine_start_script"] = str(base / "lutristosunshine-start-display-sunshine.sh")
+        state["paths"]["audio_create_script"] = str(base / "lutristosunshine-create-audio-sink.sh")
+        state["paths"]["audio_cleanup_script"] = str(base / "lutristosunshine-cleanup-audio-sink.sh")
+        state["paths"]["launch_app_script"] = str(base / "lutristosunshine-launch-app.sh")
+        state["paths"]["resolve_stream_fps_script"] = str(base / "lutristosunshine-resolve-stream-fps.sh")
+        state["paths"]["apply_exact_refresh_script"] = str(base / "lutristosunshine-apply-exact-refresh.sh")
+        state["paths"]["headless_prep_script"] = str(base / "lutristosunshine-run-headless-prep.sh")
+        state["paths"]["set_resolution_script"] = str(base / "lutristosunshine-set-resolution.sh")
+        state["paths"]["reset_resolution_script"] = str(base / "lutristosunshine-reset-resolution.sh")
+        state["paths"]["get_gpu_addr"] = str(base / "lutristosunshine-get-gpu-addr.sh")
 
         for key in [
             "sunshine_override",
+            "sway_config", "sway_start_script", "sunshine_start_script",
             "input_bridge_script",
             "kwin_input_isolation_script",
-            "audio_guard_script",
+            "audio_guard_script", "audio_create_script", "audio_cleanup_script",
             "sunshine_wrapper_script",
+            "launch_app_script", "resolve_stream_fps_script",
+            "apply_exact_refresh_script", "headless_prep_script",
+            "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
             "portal_active_file",
             "portal_lock_file",
             "input_bridge_status_file",
@@ -1054,6 +1070,26 @@ H: Handlers=sysrq kbd event29
     def test_remove_display_continues_cleanup_when_stop_fails(self) -> None:
         state = manager._default_state()
         state["enabled"] = True
+        _remove_tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(_remove_tempdir.cleanup)
+        _remove_base = Path(_remove_tempdir.name)
+        state["paths"] = dict(state["paths"])
+        for _key in (
+            "state_path", "sway_config", "sway_start_script", "sunshine_start_script",
+            "sunshine_wrapper_script",
+            "input_bridge_script", "kwin_input_isolation_script",
+            "audio_guard_script", "audio_create_script", "audio_cleanup_script",
+            "launch_app_script", "resolve_stream_fps_script",
+            "apply_exact_refresh_script", "headless_prep_script",
+            "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
+            "portal_active_file", "portal_lock_file",
+            "input_bridge_status_file", "kwin_input_isolation_status_file",
+            "wayland_display_file", "audio_module_file",
+        ):
+            if state["paths"].get(_key):
+                _p = _remove_base / Path(state["paths"][_key]).name
+                _p.write_text("managed\n", encoding="utf-8")
+                state["paths"][_key] = str(_p)
         cleanup_calls = []
         original_load_state = manager.load_state
         original_stop_display = manager.stop_display
