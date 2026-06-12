@@ -30,6 +30,7 @@ from launchers.lutris import is_lutris_running
 from display.manager import (
     configure_exclusive_input_devices,
     configure_gpu,
+    configure_renderer_mode,
     custom_display_mode,
     dynamic_mangohud_fps_limit_enabled,
     is_enabled as display_is_enabled,
@@ -39,6 +40,7 @@ from display.manager import (
     set_custom_display_mode,
     set_dynamic_mangohud_fps_limit,
     set_refresh_rate_sync_mode,
+    set_renderer_mode,
     setup_display,
     start_display,
     restart_display,
@@ -258,6 +260,15 @@ def parse_args(argv=None):
         "display-gpu",
         help="Configure which GPU wlroots uses for the virtual display.",
     )
+    renderer_parser = display_subparsers.add_parser(
+        "renderer-mode",
+        help="Choose between the default wlroots renderer and the Vulkan renderer (WLR_RENDERER=vulkan).",
+    )
+    renderer_parser.add_argument(
+        "mode",
+        choices=["default", "vulkan"],
+        help="'default' lets wlroots choose, 'vulkan' forces WLR_RENDERER=vulkan.",
+    )
 
     return parser.parse_args(argv)
 
@@ -320,6 +331,7 @@ def handle_display_command(args) -> int:
         print(_format_kv("Status:", _hub_status_summary(snapshot)))
         print(_format_kv("Display sync:", _hub_display_sync_summary(snapshot)))
         print(_format_kv("Display GPU:", snapshot['gpu_status_label']))
+        print(_format_kv("Display renderer:", snapshot['renderer_status_label']))
         print(_format_kv("Controllers:", _hub_controller_summary(snapshot)))
         attention_items = _hub_attention_items(snapshot, blocked_apps, blocked_error)
         if attention_items:
@@ -415,6 +427,7 @@ def handle_display_command(args) -> int:
             )
         )
         print(_format_kv("Virtual display GPU:", snapshot['gpu_status_label']))
+        print(_format_kv("Display renderer:", snapshot['renderer_status_label']))
         if snapshot["controller_detection_error"]:
             print(
                 _format_kv(
@@ -661,9 +674,10 @@ def handle_display_command(args) -> int:
             print(f"{accent('3.')} Configure host controllers")
             print(f"{accent('4.')} Configure display sync mode")
             print(f"{accent('5.')} Configure display GPU")
-            print(f"{accent('6.')} Advanced tools")
+            print(f"{accent('6.')} Configure display renderer")
+            print(f"{accent('7.')} Advanced tools")
             print(f"{muted('0.')} Exit")
-            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6"])
+            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
             if choice == "0":
                 return 0
             if choice == "1":
@@ -705,6 +719,10 @@ def handle_display_command(args) -> int:
                 if result != 0:
                     return result
             elif choice == "6":
+                result = configure_renderer_mode()
+                if result != 0:
+                    return result
+            elif choice == "7":
                 result = run_advanced_tools_menu()
                 if result != 0:
                     return result
@@ -765,6 +783,8 @@ def handle_display_command(args) -> int:
         return display_logs(args.lines)
     if action == "display-gpu":
         return configure_gpu()
+    if action == "renderer-mode":
+        return set_renderer_mode(args.mode)
     print(f"Unknown display action: {action}")
     return 1
 

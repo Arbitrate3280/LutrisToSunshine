@@ -291,6 +291,8 @@ class DisplayCliTests(unittest.TestCase):
                 "controller_count": 0,
                 "controllers": [],
                 "gpu_status_label": "[AUTO] wlroots chooses GPU",
+                "renderer_mode": "default",
+                "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run enable.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
@@ -316,7 +318,7 @@ class DisplayCliTests(unittest.TestCase):
         original_display_snapshot = lutristosunshine.display_snapshot
         original_get_display_blocked_apps = lutristosunshine.get_display_blocked_apps
         original_get_menu_choice = lutristosunshine.get_menu_choice
-        choices = iter(["6", "0", "0"])
+        choices = iter(["7", "0", "0"])
         try:
             lutristosunshine.display_snapshot = lambda: {
                 "configured": True,
@@ -338,6 +340,8 @@ class DisplayCliTests(unittest.TestCase):
                 "controller_count": 0,
                 "controllers": [],
                 "gpu_status_label": "[AUTO] wlroots chooses GPU",
+                "renderer_mode": "default",
+                "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run start.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
@@ -394,6 +398,8 @@ class DisplayCliTests(unittest.TestCase):
                     }
                 ],
                 "gpu_status_label": "[AUTO] wlroots chooses GPU",
+                "renderer_mode": "default",
+                "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run doctor.",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)

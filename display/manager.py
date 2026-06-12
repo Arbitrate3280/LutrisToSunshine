@@ -641,6 +641,7 @@ def _default_state() -> Dict[str, Any]:
         "gpu_mode": "auto",
         "gpu_card_path": "",
         "gpu_render_path": "",
+        "renderer_mode": "default",
     }
     state["paths"] = _state_paths(_svc.sunshine_unit())
     return state
@@ -670,6 +671,7 @@ def load_state() -> Dict[str, Any]:
     state["gpu_mode"] = safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
     state["gpu_card_path"] = safe_string(state.get("gpu_card_path"))
     state["gpu_render_path"] = safe_string(state.get("gpu_render_path"))
+    state["renderer_mode"] = safe_string(state.get("renderer_mode")).lower() if safe_string(state.get("renderer_mode")).lower() in {"default", "vulkan"} else "default"
     state["paths"] = _state_paths(state["sunshine_unit_name"])
     return state
 
@@ -907,6 +909,48 @@ def configure_gpu() -> int:
         gpu = gpus[idx]
         set_gpu_mode("manual", gpu["card_path"], gpu["render_path"])
         print(f"GPU selection set to {gpu['label']} ({gpu['card_path']}).")
+    return 0
+
+
+def renderer_status_label(state: Dict[str, Any]) -> str:
+    mode = safe_string(state.get("renderer_mode")).lower()
+    if mode == "vulkan":
+        return "[VULKAN] HDR capable, may have less GPU support"
+    return "[DEFAULT] GLES2 — stable, broad GPU support, no HDR"
+
+
+def set_renderer_mode(mode: str) -> Dict[str, Any]:
+    state = load_state()
+    if mode not in ("default", "vulkan"):
+        mode = "default"
+    state["renderer_mode"] = mode
+    return refresh_managed_files(state)
+
+
+def configure_renderer_mode() -> int:
+    state = load_state()
+    print("")
+    print("Virtual display renderer")
+    print("Controls which wlroots renderer Sway uses for the headless virtual display.")
+    print("GLES2: stable, broad GPU support, no HDR.")
+    print("Vulkan: enables HDR pass-through, may have less GPU support.")
+    current = safe_string(state.get("renderer_mode")).lower()
+    print(f"Current: {'[VULKAN] HDR capable, may have less GPU support' if current == 'vulkan' else '[DEFAULT] GLES2 — stable, broad GPU support, no HDR'}")
+    print("")
+    print("  0. GLES2 — stable, broad GPU support (no HDR)")
+    print("  1. Vulkan — HDR pass-through (may have less GPU support)")
+    print("")
+    choice = get_user_input(
+        "Choose renderer mode: ",
+        lambda value: value.strip() if value.strip() in {"0", "1"} else (_ for _ in ()).throw(ValueError()),
+        "Enter 0 for GLES2 or 1 for Vulkan.",
+    )
+    if choice == "0":
+        set_renderer_mode("default")
+        print("Renderer set to GLES2. Stable and broad GPU support, no HDR.")
+    else:
+        set_renderer_mode("vulkan")
+        print("Renderer set to Vulkan. HDR pass-through enabled (may have less GPU support).")
     return 0
 
 
@@ -3148,6 +3192,13 @@ fi
         )
     fi
 """
+    renderer_env_vars_block = ""
+    if state.get("renderer_mode") == "vulkan":
+        renderer_env_vars_block = """
+    sway_cmd+=(
+        "WLR_RENDERER=vulkan"
+    )
+"""
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
@@ -3219,7 +3270,7 @@ unset KDE_SESSION_VERSION
         "WLR_BACKENDS=headless,libinput"
         "LIBSEAT_BACKEND=noop"
     )
-{gpu_env_vars_block}
+{gpu_env_vars_block}{renderer_env_vars_block}
     sway_cmd+=(/usr/bin/sway --config "{paths['sway_config']}")
     "${{sway_cmd[@]}}" &
 sway_pid=$!
@@ -5394,6 +5445,8 @@ def display_snapshot() -> Dict[str, Any]:
         "gpu_card_path": safe_string(state.get("gpu_card_path")),
         "gpu_render_path": safe_string(state.get("gpu_render_path")),
         "gpu_status_label": gpu_status_label(state),
+        "renderer_mode": safe_string(state.get("renderer_mode")).lower() if safe_string(state.get("renderer_mode")).lower() in {"default", "vulkan"} else "default",
+        "renderer_status_label": renderer_status_label(state),
         "next_step": "",
     }
     if not configured:
@@ -5652,6 +5705,7 @@ def display_status() -> int:
         print("- No host controllers are currently reserved for passthrough.")
     print(f"Logs: {snapshot['last_launch_log_file']}")
     print(f"Virtual display GPU: {snapshot['gpu_status_label']}")
+    print(f"Display renderer: {snapshot['renderer_status_label']}")
     print(f"Next step: {snapshot['next_step']}")
     return 0
 
