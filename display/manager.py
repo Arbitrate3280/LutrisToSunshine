@@ -869,12 +869,12 @@ def configure_gpu() -> int:
     state = load_state()
     print("")
     print("Virtual display GPU selection")
-    print("This controls which GPU wlroots uses for the headless virtual display.")
+    print("Pick which graphics card drives the virtual display.")
     print("Most users should leave this on Auto.")
     current_label = gpu_status_label(state)
     print(f"Current: {current_label}")
     print("")
-    print("  0. Auto — wlroots chooses GPU automatically")
+    print("  0. Auto — let the system decide")
     gpus = _detect_available_gpus()
     if not gpus:
         print("")
@@ -903,7 +903,7 @@ def configure_gpu() -> int:
     )
     if choice == "0":
         set_gpu_mode("auto")
-        print("GPU selection set to Auto. wlroots will choose the GPU.")
+        print("GPU selection set to Auto.")
     else:
         idx = int(choice) - 1
         gpu = gpus[idx]
@@ -935,9 +935,9 @@ def configure_renderer_mode() -> int:
     state = load_state()
     print("")
     print("Virtual display renderer")
-    print("Controls which wlroots renderer Sway uses for the headless virtual display.")
-    print("GLES2: stable, broad GPU support, no HDR.")
-    print("Vulkan: enables HDR pass-through, may have less GPU support.")
+    print("Controls how graphics are drawn on the virtual display.")
+    print("GLES2: works on most GPUs, no HDR.")
+    print("Vulkan: HDR capable, may not work on all GPUs.")
     current = safe_string(state.get("renderer_mode")).lower()
     print(f"Current: {'[VULKAN] HDR capable, may have less GPU support' if current == 'vulkan' else '[DEFAULT] GLES2 — stable, broad GPU support, no HDR'}")
     print("")
@@ -5195,36 +5195,36 @@ def configure_exclusive_input_devices() -> int:
 
     if not devices:
         if selections:
-            print("No eligible host controllers are currently connected.")
-            print("Saved exclusive controllers:")
+            print("No gamepads detected.")
+            print("Saved gamepads:")
             for selection in selections:
                 print(f"- {selection['label']}")
             get_user_input(
-                "Enter 0 to clear saved controller selections, or press Ctrl+C to cancel: ",
+                "Enter 0 to clear saved gamepads, or Ctrl+C to cancel: ",
                 lambda raw: raw.strip() if raw.strip() == "0" else (_ for _ in ()).throw(ValueError()),
-                "Invalid selection. Enter 0 to clear the saved controller selections.",
+                "Enter 0 to clear.",
             )
             state["exclusive_input_devices"] = _empty_exclusive_input_state()
             save_state(state)
             _apply_input_bridge_runtime_state(state)
-            print("Exclusive host controller routing cleared.")
+            print("Gamepad routing cleared.")
             return 0
 
-        print("No eligible host controllers are currently connected.")
+        print("No gamepads detected.")
         return 0
 
-    print("Connected host controllers:")
+    print("Connected gamepads:")
     for index, device in enumerate(devices, start=1):
         selected = " [selected]" if _device_matches_any_selection(device, selections) else ""
         print(f"{index}. {device['label']}{selected}")
 
     toggled_indices = get_user_input(
-        "Toggle controller numbers for exclusive routing (comma-separated or ranges), press Enter to keep, or 0 to clear: ",
+        "Toggle numbers to route them to the stream (e.g. 1,3-4), Enter to keep, or 0 to clear: ",
         lambda raw: _parse_selection_toggle_numbers(raw, len(devices)),
-        "Invalid selection. Please use comma-separated numbers or ranges such as 1,3-4.",
+        "Invalid selection. Use comma-separated numbers or ranges such as 1,3-4.",
     )
     if toggled_indices is None:
-        print("Exclusive host controller routing unchanged.")
+        print("Gamepad routing unchanged.")
         return 0
 
     state["exclusive_input_devices"] = {
@@ -5235,9 +5235,9 @@ def configure_exclusive_input_devices() -> int:
 
     selected_devices = state["exclusive_input_devices"]["devices"]
     if selected_devices:
-        print(f"Saved {len(selected_devices)} exclusive host controller(s).")
+        print(f"Routed {len(selected_devices)} gamepad(s) to the stream.")
     else:
-        print("Exclusive host controller routing cleared.")
+        print("Gamepad routing cleared.")
     return 0
 
 

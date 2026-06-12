@@ -150,7 +150,7 @@ class DisplayCliTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertEqual(result, 0)
-        self.assertIn("Sunshine app launches were restored to normal mode", rendered)
+        self.assertIn("Headless streaming removed. Sunshine apps restored to normal.", rendered)
 
     def test_handle_display_start_runs_service_start_only(self) -> None:
         args = lutristosunshine.parse_args(["display", "start"])
@@ -204,7 +204,7 @@ class DisplayCliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(result, 0)
         self.assertEqual(calls, [True])
-        self.assertIn("Dynamic MangoHud FPS limit enabled", rendered)
+        self.assertIn("Auto FPS limit turned on.", rendered)
 
     def test_handle_display_refresh_rate_mode_exact_updates_setting(self) -> None:
         args = lutristosunshine.parse_args(["display", "refresh-rate-mode", "exact"])
@@ -308,7 +308,7 @@ class DisplayCliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(result, 0)
         self.assertIn("Show full status", rendered)
-        self.assertIn("Advanced tools", rendered)
+        self.assertIn("More tools", rendered)
         self.assertNotIn("Run doctor", rendered)
         self.assertNotIn("Host session:", rendered)
 
@@ -356,10 +356,10 @@ class DisplayCliTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertEqual(result, 0)
-        self.assertIn("Advanced tools", rendered)
-        self.assertIn("Start Sunshine service", rendered)
-        self.assertIn("Stop Sunshine service", rendered)
-        self.assertIn("Restart Sunshine service", rendered)
+        self.assertIn("More tools", rendered)
+        self.assertIn("Start Sunshine", rendered)
+        self.assertIn("Stop Sunshine", rendered)
+        self.assertIn("Restart Sunshine", rendered)
 
     def test_handle_display_status_renders_plain_dashboard_without_ansi(self) -> None:
         args = lutristosunshine.parse_args(["display", "status"])
@@ -414,7 +414,7 @@ class DisplayCliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(result, 0)
         self.assertIn("Virtual display", rendered)
-        self.assertIn("Dynamic MangoHud FPS limit: [ENABLED]", rendered)
+        self.assertIn("Auto FPS limit (MangoHud): [ENABLED]", rendered)
         self.assertIn("MangoHud env value: read_cfg,fps_limit=59.94", rendered)
         self.assertIn("Refresh rate sync mode: client's refresh rate", rendered)
         self.assertIn("Current headless mode: 2560x1440 @ 120 Hz", rendered)

@@ -280,16 +280,16 @@ def handle_display_command(args) -> int:
 
     def _hub_status_summary(snapshot: dict) -> str:
         if snapshot["dependencies_missing"]:
-            return f"{badge('NEEDS SETUP', 'error')} missing required dependencies"
+            return f"{badge('NEEDS SETUP', 'error')} install required packages first"
         if not snapshot["configured"]:
-            return f"{badge('NOT SET UP', 'warning')} run enable to install the managed stack"
+            return f"{badge('NOT SET UP', 'warning')} run \"Set up headless streaming\""
         if snapshot["sunshine_active"] and snapshot["sway_active"]:
             if snapshot["controller_count"] and snapshot["bridge_state"] != "active":
-                return f"{badge('PARTIAL', 'warning')} stack is running, but host-controller bridging needs attention"
-            return f"{badge('READY', 'success')} stack is running"
+                return f"{badge('PARTIAL', 'warning')} running, but gamepad passthrough needs attention"
+            return f"{badge('READY', 'success')} running"
         if snapshot["sunshine_active"] or snapshot["sway_active"]:
-            return f"{badge('PARTIAL', 'warning')} only part of the stack is running"
-        return f"{badge('STOPPED', 'info')} setup is installed but not running"
+            return f"{badge('PARTIAL', 'warning')} only part is running"
+        return f"{badge('STOPPED', 'info')} installed but not running"
 
     def _hub_display_sync_summary(snapshot: dict) -> str:
         mode_summary = _refresh_rate_sync_mode_summary(snapshot["refresh_rate_sync_mode"])
@@ -302,9 +302,8 @@ def handle_display_command(args) -> int:
         if snapshot["controller_detection_error"]:
             return f"{badge('WARN', 'warning')} {snapshot['controller_detection_error']}"
         if snapshot["controller_count"]:
-            suffix = "" if snapshot["controller_count"] == 1 else "s"
-            return f"{badge('RESERVED', 'success')} {snapshot['controller_count']} host controller{suffix}"
-        return f"{badge('AUTO', 'info')} Moonlight/Sunshine client inputs work automatically"
+            return f"{badge('ROUTED', 'success')} {snapshot['controller_count']} gamepad(s)"
+        return f"{badge('AUTO', 'info')} gamepads from Moonlight/Sunshine work automatically"
 
     def _hub_attention_items(snapshot: dict, blocked_apps, blocked_error) -> list[str]:
         items = []
@@ -351,9 +350,9 @@ def handle_display_command(args) -> int:
             f"Sway={_format_status_value('active' if snapshot['sway_active'] else 'inactive')}",
         ]
         runtime_parts = [
-            f"input bridge={_format_status_value(snapshot['bridge_state'])}",
-            f"audio guard={_format_status_value(snapshot['audio_guard_state'])}",
-            f"portal handoff={_format_status_value('active' if snapshot['portal_handoff_active'] else 'idle')}",
+            f"gamepads={_format_status_value(snapshot['bridge_state'])}",
+            f"audio={_format_status_value(snapshot['audio_guard_state'])}",
+            f"launch helper={_format_status_value('active' if snapshot['portal_handoff_active'] else 'idle')}",
         ]
         print(_format_kv("Status:", ", ".join(status_parts)))
         print(_format_kv("Runtime:", ", ".join(runtime_parts)))
@@ -391,11 +390,11 @@ def handle_display_command(args) -> int:
             )
         )
         mangohud_status = (
-            f"{badge('ENABLED', 'success')} wrapped launches that already use MangoHud follow the selected refresh source"
+            f"{badge('ENABLED', 'success')} MangoHud games cap FPS to match the stream"
             if snapshot["dynamic_mangohud_fps_limit"]
-            else f"{badge('DISABLED', 'info')} wrapped launches keep their normal MangoHud FPS behavior"
+            else f"{badge('DISABLED', 'info')} MangoHud games keep their normal FPS"
         )
-        print(_format_kv("Dynamic MangoHud FPS limit:", mangohud_status))
+        print(_format_kv("Auto FPS limit (MangoHud):", mangohud_status))
         print(
             _format_kv(
                 "MangoHud env value:",
@@ -431,15 +430,15 @@ def handle_display_command(args) -> int:
         if snapshot["controller_detection_error"]:
             print(
                 _format_kv(
-                    "Host controllers:",
+                    "Gamepads:",
                     f"{badge('UNAVAILABLE', 'error')} {snapshot['controller_detection_error']}",
                 )
             )
         elif snapshot["controller_count"]:
             print(
                 _format_kv(
-                    "Host controllers:",
-                    f"{badge('CONFIGURED', 'success')} {snapshot['controller_count']} selected",
+                    "Gamepads:",
+                    f"{badge('ROUTED', 'success')} {snapshot['controller_count']} selected",
                 )
             )
             for controller in snapshot["controllers"]:
@@ -448,20 +447,20 @@ def handle_display_command(args) -> int:
         else:
             print(
                 _format_kv(
-                    "Host controllers:",
-                    f"{badge('AUTO', 'info')} none reserved; client inputs from Moonlight/Sunshine already work automatically",
+                    "Gamepads:",
+                    f"{badge('AUTO', 'info')} none routed; gamepads from Moonlight/Sunshine work automatically",
                 )
             )
         if include_blocked_apps:
             blocked_apps, error = get_blocked_apps_report()
             if error:
-                print(_format_kv("Blocked Flatpak apps:", f"{badge('WARN', 'warning')} {error}"))
+                print(_format_kv("Blocked apps:", f"{badge('WARN', 'warning')} {error}"))
             elif blocked_apps:
-                print(_format_kv("Blocked Flatpak apps:", badge("WARN", "warning")))
+                print(_format_kv("Blocked apps:", badge("WARN", "warning")))
                 for app_name, issue in blocked_apps:
                     print(f"- {app_name}: {issue}")
             else:
-                print(_format_kv("Blocked Flatpak apps:", f"{badge('OK', 'success')} none detected"))
+                print(_format_kv("Blocked apps:", f"{badge('OK', 'success')} none detected"))
         print(_format_kv("Next step:", state_text(snapshot['next_step'], "accent")))
 
     def print_doctor_report() -> None:
@@ -538,8 +537,8 @@ def handle_display_command(args) -> int:
 
         if interactive:
             print("")
-            print("Client inputs from Moonlight/Sunshine already work automatically.")
-            if get_yes_no_input("Reserve any physical host controllers for the virtual display now?", default=False):
+            print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
+            if get_yes_no_input("Route physical gamepads plugged into this PC to the stream instead?", default=False):
                 return configure_exclusive_input_devices()
         return 0
 
@@ -550,9 +549,9 @@ def handle_display_command(args) -> int:
         remove_status = remove_display()
         if remove_status == 0:
             if reconcile_status == 0:
-                print("Sunshine app launches were restored to normal mode and the managed virtual-display setup was removed.")
+                print("Headless streaming removed. Sunshine apps restored to normal.")
             else:
-                print("Managed virtual-display setup was removed. Sunshine app launches may still reference virtual display wrappers; re-add them manually if needed.")
+                print("Headless streaming files removed. Sunshine apps may still point to old wrappers; re-add them if needed.")
         return remove_status
 
     def run_start() -> int:
@@ -565,12 +564,12 @@ def handle_display_command(args) -> int:
         previous = dynamic_mangohud_fps_limit_enabled()
         set_dynamic_mangohud_fps_limit(enabled)
         if previous == enabled:
-            state = "enabled" if enabled else "disabled"
-            print(f"Dynamic MangoHud FPS limit is already {state} for virtual-display launches.")
+            state = "on" if enabled else "off"
+            print(f"Auto FPS limit already {state}.")
         else:
-            state = "enabled" if enabled else "disabled"
-            print(f"Dynamic MangoHud FPS limit {state} for virtual-display launches.")
-        print("This only affects wrapped launches that already use MangoHud.")
+            state = "on" if enabled else "off"
+            print(f"Auto FPS limit turned {state}.")
+        print("Only affects games that already use MangoHud.")
         return 0
 
     def update_refresh_rate_mode(mode: str) -> int:
@@ -610,14 +609,14 @@ def handle_display_command(args) -> int:
         def run_advanced_tools_menu() -> int:
             while True:
                 print("")
-                print(heading("Advanced tools"))
-                print(f"{accent('1.')} Start Sunshine service")
-                print(f"{accent('2.')} Stop Sunshine service")
-                print(f"{accent('3.')} Restart Sunshine service")
-                print(f"{accent('4.')} Toggle dynamic MangoHud FPS limit")
+                print(heading("More tools"))
+                print(f"{accent('1.')} Start Sunshine")
+                print(f"{accent('2.')} Stop Sunshine")
+                print(f"{accent('3.')} Restart Sunshine")
+                print(f"{accent('4.')} Auto FPS limit (MangoHud)")
                 print(f"{accent('5.')} Test controller rumble")
                 print(f"{accent('6.')} Show logs")
-                print(f"{accent('7.')} Remove virtual-display setup")
+                print(f"{accent('7.')} Remove headless streaming")
                 print(f"{muted('0.')} Back")
                 tool_choice = get_menu_choice(
                     f"{accent('Choose a tool: ')}",
@@ -640,9 +639,9 @@ def handle_display_command(args) -> int:
                 elif tool_choice == "4":
                     enabling = not dynamic_mangohud_fps_limit_enabled()
                     prompt = (
-                        "Enable dynamic MangoHud FPS limit for virtual-display launches?"
+                        "Cap FPS to match the stream?"
                         if enabling
-                        else "Disable dynamic MangoHud FPS limit for virtual-display launches?"
+                        else "Stop capping FPS to match the stream?"
                     )
                     if get_yes_no_input(prompt, default=True):
                         result = update_mangohud_fps_limit(enabling)
@@ -658,7 +657,7 @@ def handle_display_command(args) -> int:
                         return result
                 elif tool_choice == "7":
                     confirmed = get_yes_no_input(
-                        "Remove the virtual-display setup and restore normal Sunshine app launches? This uninstalls the managed headless files, scripts, and service overrides.",
+                        "This removes all headless streaming files and restores Sunshine to normal. Continue?",
                         default=False,
                     )
                     if confirmed:
@@ -669,13 +668,13 @@ def handle_display_command(args) -> int:
             print_hub_overview()
             print("")
             print(heading("Actions"))
-            print(f"{accent('1.')} Setup or update virtual display")
+            print(f"{accent('1.')} Set up headless streaming")
             print(f"{accent('2.')} Show full status")
-            print(f"{accent('3.')} Configure host controllers")
+            print(f"{accent('3.')} Use host gamepads in the stream")
             print(f"{accent('4.')} Configure display sync mode")
-            print(f"{accent('5.')} Configure display GPU")
-            print(f"{accent('6.')} Configure display renderer")
-            print(f"{accent('7.')} Advanced tools")
+            print(f"{accent('5.')} Choose which GPU to use")
+            print(f"{accent('6.')} Choose renderer (GLES2 / Vulkan)")
+            print(f"{accent('7.')} More tools")
             print(f"{muted('0.')} Exit")
             choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
             if choice == "0":
@@ -689,8 +688,8 @@ def handle_display_command(args) -> int:
                 print_dashboard()
             elif choice == "3":
                 print("")
-                print("Client inputs from Moonlight/Sunshine do not need any extra setup.")
-                print("Use this only if you want physical controllers connected to the host PC to be reserved for streamed games.")
+                print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
+                print("Use this for physical gamepads plugged into this PC.")
                 result = configure_exclusive_input_devices()
                 if result != 0:
                     return result
@@ -740,8 +739,8 @@ def handle_display_command(args) -> int:
         print_doctor_report()
         return 0
     if action == "controllers":
-        print("Client inputs from Moonlight/Sunshine do not need any extra setup.")
-        print("Only reserve host controllers here if you want them removed from the desktop and used only inside streamed games.")
+        print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
+        print("Use this for physical gamepads plugged into this PC.")
         return configure_exclusive_input_devices()
     if action == "status":
         print_dashboard()
