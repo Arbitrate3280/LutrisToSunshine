@@ -928,6 +928,8 @@ H: Handlers=sysrq kbd event29
         )
         self.assertIn('mangohud_config_value="read_cfg,fps_limit=$resolved_stream_fps"', launch_script)
         self.assertIn('launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")', launch_script)
+        self.assertIn('is_flatpak_command "$command_to_run"', launch_script)
+        self.assertIn("--env=MANGOHUD_CONFIG=", launch_script)
 
     def test_launch_script_waits_for_exact_stream_fps_before_launch(self) -> None:
         state = manager._default_state()

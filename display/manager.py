@@ -3165,7 +3165,21 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
 """.replace("{resolve_stream_fps_script}", paths["resolve_stream_fps_script"]).replace("{refresh_rate_sync_mode}", refresh_rate_sync_mode)
         mangohud_env_append_block = """
     if [ -n "$mangohud_config_value" ]; then
-        launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
+        if is_flatpak_command "$command_to_run"; then
+            command_to_run="$(python3 - "$command_to_run" "$mangohud_config_value" <<'PY'
+import shlex, sys
+tokens = shlex.split(sys.argv[1])
+env_val = sys.argv[2]
+idx = 0
+if len(tokens) >= 2 and tokens[:2] == ["flatpak-spawn", "--host"]:
+    idx = 2
+tokens.insert(idx + 2, f"--env=MANGOHUD_CONFIG={env_val}")
+print(shlex.join(tokens))
+PY
+)"
+        else
+            launch_command+=("MANGOHUD_CONFIG=$mangohud_config_value")
+        fi
     fi
 """
     gpu_card_path = safe_string(state.get("gpu_card_path"))
@@ -3777,6 +3791,16 @@ if [ -z "$encoded_command" ]; then
     exit 1
 fi
 
+if [ -f /.flatpak-info ]; then
+    sunshine_env=()
+    for var in SUNSHINE_CLIENT_FPS SUNSHINE_CLIENT_WIDTH SUNSHINE_CLIENT_HEIGHT SUNSHINE_CLIENT_HMAX SUNSHINE_CLIENT_VMAX; do
+        if [ -n "${{!var:-}}" ]; then
+            sunshine_env+=("--env=$var=${{!var}}")
+        fi
+    done
+    exec flatpak-spawn --host "${{sunshine_env[@]}}" "{paths['headless_prep_script']}" "$@"
+fi
+
 if [ ! -S "{state['sway_socket']}" ]; then
     echo "Headless sway IPC socket is not ready." >&2
     exit 1
@@ -4044,7 +4068,13 @@ if [ -z "$encoded_command" ]; then
 fi
 
 if [ -f /.flatpak-info ]; then
-    exec flatpak-spawn --host "{paths['launch_app_script']}" "$@"
+    sunshine_env=()
+    for var in SUNSHINE_CLIENT_FPS SUNSHINE_CLIENT_WIDTH SUNSHINE_CLIENT_HEIGHT SUNSHINE_CLIENT_HMAX SUNSHINE_CLIENT_VMAX; do
+        if [ -n "${{!var:-}}" ]; then
+            sunshine_env+=("--env=$var=${{!var}}")
+        fi
+    done
+    exec flatpak-spawn --host "${{sunshine_env[@]}}" "{paths['launch_app_script']}" "$@"
 fi
 
 if [ ! -S "{state['sway_socket']}" ]; then
@@ -4742,6 +4772,16 @@ echo $discrete_gpu-$internal_gpu
         Path(paths["resolve_stream_fps_script"]): f"""#!/bin/bash
 set -euo pipefail
 
+if [ -f /.flatpak-info ]; then
+    sunshine_env=()
+    for var in SUNSHINE_CLIENT_FPS SUNSHINE_CLIENT_WIDTH SUNSHINE_CLIENT_HEIGHT SUNSHINE_CLIENT_HMAX SUNSHINE_CLIENT_VMAX; do
+        if [ -n "${{!var:-}}" ]; then
+            sunshine_env+=("--env=$var=${{!var}}")
+        fi
+    done
+    exec flatpak-spawn --host "${{sunshine_env[@]}}" "{paths['resolve_stream_fps_script']}" "$@"
+fi
+
 requested_fps="${{SUNSHINE_CLIENT_FPS:-}}"
 mode_override="${{1:-}}"
 fallback_mode="${{2:-fallback}}"
@@ -4862,6 +4902,16 @@ set -euo pipefail
 
 if [ "${{#}}" -lt 2 ]; then
     exit 0
+fi
+
+if [ -f /.flatpak-info ]; then
+    sunshine_env=()
+    for var in SUNSHINE_CLIENT_FPS SUNSHINE_CLIENT_WIDTH SUNSHINE_CLIENT_HEIGHT SUNSHINE_CLIENT_HMAX SUNSHINE_CLIENT_VMAX; do
+        if [ -n "${{!var:-}}" ]; then
+            sunshine_env+=("--env=$var=${{!var}}")
+        fi
+    done
+    exec flatpak-spawn --host "${{sunshine_env[@]}}" "{paths['apply_exact_refresh_script']}" "$@"
 fi
 
 width="${{1}}"
