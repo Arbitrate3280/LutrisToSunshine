@@ -175,6 +175,13 @@ def detect_sunshine_config_root() -> Path:
     return _config_root_candidates()[0]
 
 
+def _resolve_sunshine_config_root(unit_name: str) -> Path:
+    if unit_name and unit_name.startswith("app-"):
+        flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
+        return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
+    return detect_sunshine_config_root()
+
+
 def _evdev_import_error() -> Optional[str]:
     try:
         __import__("evdev")
@@ -618,7 +625,7 @@ def _state_paths(unit_name: str) -> Dict[str, str]:
         "sunshine_override": str(override_dir / "override.conf"),
         "input_bridge_script": str(BIN_ROOT / "lutristosunshine-input-bridge.py"),
         "kwin_input_isolation_script": str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
-        "sunshine_conf": str(detect_sunshine_config_root() / "sunshine.conf"),
+        "sunshine_conf": str(_resolve_sunshine_config_root(unit_name) / "sunshine.conf"),
         "kwin_input_isolation_status_file": str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
     }
 
