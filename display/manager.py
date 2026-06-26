@@ -53,6 +53,10 @@ SUNSHINE_INPUT_NAME_MARKERS = [
 BRIDGE_DEVICE_PHYS_PREFIX = "lts-inputbridge/"
 HIDRAW_BUFFER_MAX = 4096
 AUDIO_GUARD_POLL_INTERVAL_SECONDS = 0.5
+AUDIO_STREAM_MARKER_KEY = "lutristosunshine.stream"
+AUDIO_STREAM_MARKER_VALUE = "game"
+AUDIO_STREAM_PULSE_PROP = f"{AUDIO_STREAM_MARKER_KEY}={AUDIO_STREAM_MARKER_VALUE}"
+AUDIO_STREAM_PIPEWIRE_PROPS = f'{{ {AUDIO_STREAM_MARKER_KEY} = "{AUDIO_STREAM_MARKER_VALUE}" }}'
 HEADLESS_PREP_PREFIX = "headless:"
 SUNSHINE_OWNED_SINK_NAMES = [
     "sink-sunshine-stereo",
@@ -150,6 +154,8 @@ FLATPAK_PORTAL_ENV_KEYS = [
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
     "PULSE_SINK",
+    "PULSE_PROP",
+    "PIPEWIRE_PROPS",
 ]
 FLATPAK_PORTAL_SWITCH_TIMEOUT = 20
 FLATPAK_PORTAL_SPAWN_TIMEOUT = 15
@@ -1393,12 +1399,59 @@ def _pactl_info_value(key: str) -> str:
     return ""
 
 
+def _pactl_list_short(entity: str) -> str:
+    """Return raw output of `pactl list short <entity>`."""
+    probe_env = dict(os.environ)
+    probe_env["LANG"] = "C"
+    probe_env["LC_ALL"] = "C"
+    try:
+        result = subprocess.run(
+            ["pactl", "list", "short", entity],
+            text=True, capture_output=True, check=False, timeout=5,
+            env=probe_env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return safe_string(result.stdout or "")
+
+
+def _find_hardware_sink(exclude_names: List[str]) -> str:
+    """Return the first non-managed sink name from pactl."""
+    for line in _pactl_list_short("sinks").strip().split("\n"):
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1] not in exclude_names:
+            return parts[1]
+    return ""
+
+
+def _find_hardware_source(exclude_names: List[str]) -> str:
+    """Return the first non-managed input source name from pactl.
+    Skips monitor sources (.monitor) since those capture playback of an
+    output sink rather than an actual input device like a microphone.
+    """
+    for line in _pactl_list_short("sources").strip().split("\n"):
+        parts = line.split("\t")
+        if (
+            len(parts) >= 2
+            and parts[1] not in exclude_names
+            and ".monitor" not in parts[1]
+        ):
+            return parts[1]
+    return ""
+
+
 def _snapshot_host_audio_defaults(state: Dict[str, Any]) -> None:
+    managed_sinks = _managed_audio_sink_names(state)
+    managed_sources = _managed_audio_source_names(state)
     current_sink = _pactl_info_value("Default Sink")
     current_source = _pactl_info_value("Default Source")
-    if not current_sink or not current_source:
-        return
-    if current_sink in _managed_audio_sink_names(state) or current_source in _managed_audio_source_names(state):
+
+    if not current_sink or current_sink in managed_sinks:
+        current_sink = _find_hardware_sink(managed_sinks)
+    if not current_source or current_source in managed_sources:
+        current_source = _find_hardware_source(managed_sources)
+
+    if not current_sink and not current_source:
         return
     state["host_audio_defaults"] = {
         "sink": current_sink,
@@ -3765,9 +3818,8 @@ enforce_host_defaults() {{
     current_sink="$(printf '%s\\n' "$pactl_info" | awk -F': ' '/^Default Sink:/ {{print $2; exit}}')"
     current_source="$(printf '%s\\n' "$pactl_info" | awk -F': ' '/^Default Source:/ {{print $2; exit}}')"
 
-    mapfile -t host_defaults < <(read_host_defaults)
-    host_sink="${{host_defaults[0]:-}}"
-    host_source="${{host_defaults[1]:-}}"
+    local host_sink="$1"
+    local host_source="$2"
 
     if [ -n "$host_sink" ] && [ "$current_sink" != "$host_sink" ] && is_managed_sink "$current_sink"; then
         run_audio_command pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
@@ -3777,9 +3829,161 @@ enforce_host_defaults() {{
     fi
 }}
 
+enforce_headless_routing() {{
+    # Sunshine (re)connect moves the game's audio onto its own sink-sunshine-*
+    # sinks, but Sunshine records the monitor of our managed sink. Move any
+    # stranded playback back so the stream keeps its audio after a reconnect.
+    local managed_sink="{audio_sink}"
+    local ssid si_id
+    while IFS= read -r ssid; do
+        [ -n "$ssid" ] || continue
+        while IFS= read -r si_id; do
+            [ -n "$si_id" ] || continue
+            run_audio_command pactl move-sink-input "$si_id" "$managed_sink" >/dev/null 2>&1 || true
+        done < <(run_audio_command pactl list short sink-inputs 2>/dev/null | awk -v sid="$ssid" '$2==sid {{print $1}}')
+    done < <(run_audio_command pactl list short sinks 2>/dev/null | awk -v m="$managed_sink" '$2 ~ /^sink-sunshine-/ && $2 != m {{print $1}}')
+}}
+
+enforce_sunshine_capture_source() {{
+    # KDE/PipeWire can retarget Sunshine's recorder to the host default monitor
+    # when the user manually selects the managed sink.  Force the recorder back
+    # to the managed monitor so host playback is not captured by the stream.
+    local managed_source="{audio_sink}.monitor"
+    local managed_source_id
+    managed_source_id="$(
+        run_audio_command pactl list short sources 2>/dev/null \
+            | awk -v managed_source="$managed_source" '$2 == managed_source {{print $1; exit}}'
+    )"
+    [ -n "$managed_source_id" ] || return 0
+
+    local source_output
+    while IFS= read -r source_output; do
+        [ -n "$source_output" ] || continue
+        run_audio_command pactl move-source-output "$source_output" "$managed_source" >/dev/null 2>&1 || true
+    done < <(
+        run_audio_command pactl list source-outputs 2>/dev/null \
+            | awk -v managed_source_id="$managed_source_id" '
+/Source Output #/ {{
+    if (NR > 1 && is_sunshine_record && current_source != managed_source_id) print so
+    so = $3; sub(/#/, "", so)
+    current_source = ""; is_sunshine_record = 0
+}}
+/^\\tSource: / {{ current_source = $2 }}
+/application\\.name = "sunshine"/ {{ is_sunshine_record = 1 }}
+/media\\.name = "sunshine-record"/ {{ is_sunshine_record = 1 }}
+/stream\\.capture\\.sink = "true"/ {{ is_sunshine_record = 1 }}
+END {{
+    if (is_sunshine_record && current_source != managed_source_id) print so
+}}'
+    )
+}}
+
+enforce_game_routing() {{
+    # If the desktop moves a launched game's marked stream back to the host
+    # sink, pull it to the managed sink so Sunshine can capture it.
+    local managed_sink="{audio_sink}"
+    local managed_sink_id
+    managed_sink_id="$(
+        run_audio_command pactl list short sinks 2>/dev/null \
+            | awk -v managed_sink="$managed_sink" '$2 == managed_sink {{print $1; exit}}'
+    )"
+    [ -n "$managed_sink_id" ] || return 0
+
+    local marker_key="{AUDIO_STREAM_MARKER_KEY}"
+    local marker_value="{AUDIO_STREAM_MARKER_VALUE}"
+    local game_streams
+    game_streams="$(
+        run_audio_command pactl list sink-inputs 2>/dev/null \
+            | awk -v managed_sink_id="$managed_sink_id" -v marker_key="$marker_key" -v marker_value="$marker_value" '
+/Sink Input #/ {{
+    if (NR > 1 && has_game_marker && current_sink != managed_sink_id) print si
+    si = $3; sub(/#/, "", si)
+    current_sink = ""; has_game_marker = 0
+}}
+/^\\tSink: / {{ current_sink = $2 }}
+index($0, marker_key " = \\\"" marker_value "\\\"") {{ has_game_marker = 1 }}
+index($0, "PULSE_PROP=" marker_key "=" marker_value) {{ has_game_marker = 1 }}
+index($0, "PIPEWIRE_PROPS=") && index($0, marker_key) && index($0, marker_value) {{ has_game_marker = 1 }}
+END {{
+    if (has_game_marker && current_sink != managed_sink_id) print si
+}}'
+    )"
+
+    local si
+    while IFS= read -r si; do
+        [ -n "$si" ] || continue
+        run_audio_command pactl move-sink-input "$si" "$managed_sink" >/dev/null 2>&1 || true
+    done <<< "$game_streams"
+}}
+
+enforce_stray_routing() {{
+    [ -n "$IS_PIPEWIRE_PULSE" ] || return 0
+
+    # Host apps that follow the default sink can get routed to our managed sink
+    # whenever the user or the desktop switches the default.  Game launchers get
+    # an explicit LutrisToSunshine stream marker; unmarked playback on a managed
+    # sink belongs back on the host hardware sink.
+    local host_sink="$1"
+    [ -n "$host_sink" ] || return 0
+
+    # Build pipe-separated list of managed sink indices.
+    local managed_pat
+    managed_pat="$(
+        run_audio_command pactl list short sinks 2>/dev/null \
+            | awk -v m="{audio_sink}" '$2 ~ /^sink-sunshine-/ || $2 == m {{print $1}}' \
+            | tr '\\n' '|'
+    )"
+    [ -n "$managed_pat" ] || return 0
+
+    local marker_key="{AUDIO_STREAM_MARKER_KEY}"
+    local marker_value="{AUDIO_STREAM_MARKER_VALUE}"
+    local stray
+    stray="$(
+        run_audio_command pactl list sink-inputs 2>/dev/null \
+            | awk -v m="$managed_pat" -v marker_key="$marker_key" -v marker_value="$marker_value" '
+/Sink Input #/ {{
+    if (NR > 1 && in_managed && !has_game_marker) print si
+    si = $3; sub(/#/, "", si)
+    in_managed = 0; has_game_marker = 0
+}}
+/^\\tSink: / {{
+    sink_id = $2
+    if (index("|" m "|", "|" sink_id "|")) in_managed = 1
+}}
+index($0, marker_key " = \\\"" marker_value "\\\"") {{ has_game_marker = 1 }}
+index($0, "PULSE_PROP=" marker_key "=" marker_value) {{ has_game_marker = 1 }}
+index($0, "PIPEWIRE_PROPS=") && index($0, marker_key) && index($0, marker_value) {{ has_game_marker = 1 }}
+END {{
+    if (in_managed && !has_game_marker) print si
+}}'
+    )"
+
+    local si
+    while IFS= read -r si; do
+        [ -n "$si" ] || continue
+        run_audio_command pactl move-sink-input "$si" "$host_sink" >/dev/null 2>&1 || true
+    done <<< "$stray"
+}}
+
+# Detect PipeWire-pulse at startup.  The stream metadata exposed by classic
+# PulseAudio is not reliable enough for this guard to evict unmarked playback
+# without risking legitimate game audio, so gate the correction on PipeWire.
+IS_PIPEWIRE_PULSE=""
+if run_audio_command pactl info 2>/dev/null | grep -qi "PipeWire"; then
+    IS_PIPEWIRE_PULSE="1"
+fi
+
 poll_host_defaults() {{
+    local host_sink host_source
     while true; do
-        enforce_host_defaults
+        mapfile -t host_defaults < <(read_host_defaults)
+        host_sink="${{host_defaults[0]:-}}"
+        host_source="${{host_defaults[1]:-}}"
+        enforce_host_defaults "$host_sink" "$host_source"
+        enforce_headless_routing
+        enforce_sunshine_capture_source
+        enforce_game_routing
+        enforce_stray_routing "$host_sink"
         sleep "$poll_interval"
     done
 }}
@@ -3900,6 +4104,8 @@ run_headless_command() {{
         "DESKTOP_SESSION=sway"
         "LTS_VDISPLAY=1"
         "PULSE_SINK={audio_sink}"
+        "PULSE_PROP={AUDIO_STREAM_PULSE_PROP}"
+        "PIPEWIRE_PROPS={AUDIO_STREAM_PIPEWIRE_PROPS}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
     )
@@ -3940,6 +4146,8 @@ apply_headless_portal_env() {{
     export XDG_SESSION_DESKTOP="sway"
     export XDG_SESSION_TYPE="wayland"
     export PULSE_SINK="{audio_sink}"
+    export PULSE_PROP="{AUDIO_STREAM_PULSE_PROP}"
+    export PIPEWIRE_PROPS='{AUDIO_STREAM_PIPEWIRE_PROPS}'
 
     import_portal_env { " ".join(FLATPAK_PORTAL_ENV_KEYS) }
     restart_flatpak_portal
@@ -4253,6 +4461,8 @@ launch_headless_direct() {{
         "LTS_LAUNCH_ID=$launch_id"
         "LTS_VDISPLAY=1"
         "PULSE_SINK={audio_sink}"
+        "PULSE_PROP={AUDIO_STREAM_PULSE_PROP}"
+        "PIPEWIRE_PROPS={AUDIO_STREAM_PIPEWIRE_PROPS}"
         "PULSE_SERVER=$pulse_server_value"
         "PULSE_CLIENTCONFIG=$pulse_clientconfig_value"
     )
@@ -4485,6 +4695,8 @@ apply_headless_portal_env() {{
     export XDG_SESSION_DESKTOP="sway"
     export XDG_SESSION_TYPE="wayland"
     export PULSE_SINK="{audio_sink}"
+    export PULSE_PROP="{AUDIO_STREAM_PULSE_PROP}"
+    export PIPEWIRE_PROPS='{AUDIO_STREAM_PIPEWIRE_PROPS}'
 
     import_portal_env { " ".join(FLATPAK_PORTAL_ENV_KEYS) }
     restart_flatpak_portal

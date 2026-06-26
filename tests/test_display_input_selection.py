@@ -317,17 +317,142 @@ H: Handlers=sysrq kbd event29
     def test_snapshot_host_audio_defaults_ignores_managed_defaults(self) -> None:
         state = manager._default_state()
         original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
         try:
             values = {
                 "Default Sink": "lts-sunshine-stereo",
                 "Default Source": "lts-sunshine-stereo.monitor",
             }
             manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: ""
+            manager._find_hardware_source = lambda exclude: ""
             manager._snapshot_host_audio_defaults(state)
         finally:
             manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
 
         self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
+
+    def test_snapshot_host_audio_defaults_falls_back_to_hardware(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
+        try:
+            values = {
+                "Default Sink": "lts-sunshine-stereo",
+                "Default Source": "lts-sunshine-stereo.monitor",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_00_1f.3.analog-stereo"
+            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_00_1f.3.analog-stereo"
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
+
+        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
+        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
+
+    def test_snapshot_host_audio_defaults_partial_sink_only(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
+        try:
+            values = {
+                "Default Sink": "lts-sunshine-stereo",
+                "Default Source": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_00_1f.3.analog-stereo"
+            manager._find_hardware_source = lambda exclude: ""
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
+
+        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
+        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
+
+    def test_snapshot_host_audio_defaults_partial_source_only(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
+        try:
+            values = {
+                "Default Sink": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+                "Default Source": "lts-sunshine-stereo.monitor",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: ""
+            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_00_1f.3.analog-stereo"
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
+
+        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
+        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
+
+    def test_find_hardware_sink_excludes_managed_names(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\talsa_output.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
+                "1\tlts-sunshine-stereo\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                "2\tsink-sunshine-surround51\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                if entity == "sinks" else ""
+            )
+            result = manager._find_hardware_sink(["lts-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "alsa_output.pci-0000_00_1f.3.analog-stereo")
+
+    def test_find_hardware_sink_returns_empty_when_no_hardware_found(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\tlts-sunshine-stereo\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                if entity == "sinks" else ""
+            )
+            result = manager._find_hardware_sink(["lts-sunshine-stereo"])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "")
+
+    def test_find_hardware_source_skips_monitors_and_managed(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\tlts-sunshine-stereo.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                "1\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
+                "2\talsa_input.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                if entity == "sources" else ""
+            )
+            result = manager._find_hardware_source(["lts-sunshine-stereo.monitor"])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "alsa_input.pci-0000_00_1f.3.analog-stereo")
+
+    def test_find_hardware_source_returns_empty_when_only_monitors_remain(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\tlts-sunshine-stereo.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                "1\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
+                if entity == "sources" else ""
+            )
+            result = manager._find_hardware_source(["lts-sunshine-stereo.monitor"])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "")
 
     def test_start_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
         state, _conf_path = self._temp_audio_state()
@@ -874,11 +999,13 @@ H: Handlers=sysrq kbd event29
         audio_cleanup = scripts[Path(state["paths"]["audio_cleanup_script"])]
         audio_guard = scripts[Path(state["paths"]["audio_guard_script"])]
         launch_script = scripts[Path(state["paths"]["launch_app_script"])]
+        headless_prep_script = scripts[Path(state["paths"]["headless_prep_script"])]
         sunshine_override = units[Path(state["paths"]["sunshine_override"])]
 
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sway_start)
         self.assertIn("sleep 0.1", sway_start)
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sunshine_start)
+        self.assertNotIn("PIPEWIRE_PROPS", sunshine_start)
         self.assertIn('audio_sink = {managed_sink}', sunshine_wrapper)
         self.assertIn('export XDG_RUNTIME_DIR="$runtime_dir"', sunshine_wrapper)
         self.assertIn('export DBUS_SESSION_BUS_ADDRESS="$dbus_value"', sunshine_wrapper)
@@ -902,12 +1029,43 @@ H: Handlers=sysrq kbd event29
         self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_guard)
         self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_guard)
         self.assertIn("enforce_host_defaults", audio_guard)
+        self.assertIn("enforce_headless_routing() {", audio_guard)
+        self.assertIn("        enforce_headless_routing\n", audio_guard)
+        self.assertIn("enforce_sunshine_capture_source() {", audio_guard)
+        self.assertIn("        enforce_sunshine_capture_source\n", audio_guard)
+        self.assertIn("sunshine-record", audio_guard)
+        self.assertIn("run_audio_command pactl move-source-output", audio_guard)
+        self.assertIn("enforce_game_routing() {", audio_guard)
+        self.assertIn("        enforce_game_routing\n", audio_guard)
+        self.assertIn("local game_streams", audio_guard)
+        # The guard must evict host audio from managed sinks using the explicit
+        # game stream marker. Host apps lack it; game apps inherit it at launch.
+        # The stray-routing is gated on PipeWire detection — classic PulseAudio does
+        # not expose enough reliable metadata for this guard to correct safely.
+        self.assertIn("IS_PIPEWIRE_PULSE", audio_guard)
+        self.assertIn('grep -qi "PipeWire"', audio_guard)
+        self.assertIn("enforce_stray_routing() {", audio_guard)
+        self.assertIn('        enforce_stray_routing "$host_sink"\n', audio_guard)
+        self.assertIn("lutristosunshine.stream", audio_guard)
+        self.assertIn("has_game_marker", audio_guard)
+        self.assertIn("pactl move-sink-input", audio_guard)
         self.assertIn("while true; do", audio_guard)
         self.assertIn("run_audio_command pactl info", audio_guard)
         self.assertIn("run_audio_command pactl set-default-sink", audio_guard)
         self.assertIn("run_audio_command pactl set-default-source", audio_guard)
+        # The guard must re-route playback that Sunshine strands on its own sinks back
+        # to our managed sink (fixes audio loss after client disconnect/reconnect).
+        self.assertIn("run_audio_command pactl move-sink-input", audio_guard)
         self.assertNotIn("pactl subscribe", audio_guard)
         self.assertIn('PULSE_SINK="lts-sunshine-stereo"', launch_script)
+        self.assertIn('"PULSE_PROP=lutristosunshine.stream=game"', launch_script)
+        self.assertIn('"PIPEWIRE_PROPS={ lutristosunshine.stream = "game" }"', launch_script)
+        self.assertIn('"PULSE_PROP=lutristosunshine.stream=game"', headless_prep_script)
+        self.assertIn('"PIPEWIRE_PROPS={ lutristosunshine.stream = "game" }"', headless_prep_script)
+        self.assertIn('export PULSE_PROP="lutristosunshine.stream=game"', launch_script)
+        self.assertIn('export PIPEWIRE_PROPS=\'{ lutristosunshine.stream = "game" }\'', launch_script)
+        self.assertIn('export PULSE_PROP="lutristosunshine.stream=game"', headless_prep_script)
+        self.assertIn('export PIPEWIRE_PROPS=\'{ lutristosunshine.stream = "game" }\'', headless_prep_script)
         self.assertNotIn("MANGOHUD_CONFIG", launch_script)
         self.assertIn("ExecStart=", sunshine_override)
         self.assertIn(state["paths"]["sunshine_wrapper_script"], sunshine_override)
