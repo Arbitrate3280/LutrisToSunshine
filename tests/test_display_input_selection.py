@@ -1057,15 +1057,36 @@ H: Handlers=sysrq kbd event29
         # to our managed sink (fixes audio loss after client disconnect/reconnect).
         self.assertIn("run_audio_command pactl move-sink-input", audio_guard)
         self.assertNotIn("pactl subscribe", audio_guard)
-        self.assertIn('PULSE_SINK="lts-sunshine-stereo"', launch_script)
+        # Per-process env -i still routes native (non-flatpak) games to the
+        # managed sink and tags their streams as games.
+        self.assertIn('"PULSE_SINK=lts-sunshine-stereo"', launch_script)
         self.assertIn('"PULSE_PROP=lutristosunshine.stream=game"', launch_script)
-        self.assertIn('"PIPEWIRE_PROPS={ lutristosunshine.stream = "game" }"', launch_script)
+        self.assertIn('"PULSE_SINK=lts-sunshine-stereo"', headless_prep_script)
         self.assertIn('"PULSE_PROP=lutristosunshine.stream=game"', headless_prep_script)
+        self.assertIn('"PIPEWIRE_PROPS={ lutristosunshine.stream = "game" }"', launch_script)
         self.assertIn('"PIPEWIRE_PROPS={ lutristosunshine.stream = "game" }"', headless_prep_script)
-        self.assertIn('export PULSE_PROP="lutristosunshine.stream=game"', launch_script)
-        self.assertIn('export PIPEWIRE_PROPS=\'{ lutristosunshine.stream = "game" }\'', launch_script)
-        self.assertIn('export PULSE_PROP="lutristosunshine.stream=game"', headless_prep_script)
-        self.assertIn('export PIPEWIRE_PROPS=\'{ lutristosunshine.stream = "game" }\'', headless_prep_script)
+        # The global Flatpak portal handoff must NOT export audio vars: doing so
+        # poisoned the systemd/DBus activation env and permanently tagged host
+        # apps (browsers, speech-dispatcher, ...) as games, stranding their audio
+        # on the managed sink even after the stream ended.
+        self.assertNotIn("export PULSE_SINK=", launch_script)
+        self.assertNotIn("export PULSE_PROP=", launch_script)
+        self.assertNotIn("export PIPEWIRE_PROPS=", launch_script)
+        self.assertNotIn("export PULSE_SINK=", headless_prep_script)
+        self.assertNotIn("export PULSE_PROP=", headless_prep_script)
+        self.assertNotIn("export PIPEWIRE_PROPS=", headless_prep_script)
+        # apply_headless_portal_env drains stale audio vars from the activation
+        # environment (leftover from earlier versions that leaked them globally).
+        self.assertIn("systemctl --user unset-environment PULSE_SINK PULSE_PROP PIPEWIRE_PROPS", launch_script)
+        self.assertIn("systemctl --user unset-environment PULSE_SINK PULSE_PROP PIPEWIRE_PROPS", headless_prep_script)
+        self.assertIn("dbus-update-activation-environment --systemd", launch_script)
+        self.assertIn("dbus-update-activation-environment --systemd", headless_prep_script)
+        # Flatpak apps get the audio routing scoped per-launch via
+        # inject_flatpak_audio_env (flatpak run --env=...), never globally.
+        self.assertIn("inject_flatpak_audio_env() {", launch_script)
+        self.assertIn("inject_flatpak_audio_env() {", headless_prep_script)
+        self.assertIn('--env=PULSE_SINK=" + sink', launch_script)
+        self.assertIn('--env=PULSE_SINK=" + sink', headless_prep_script)
         self.assertNotIn("MANGOHUD_CONFIG", launch_script)
         self.assertIn("ExecStart=", sunshine_override)
         self.assertIn(state["paths"]["sunshine_wrapper_script"], sunshine_override)

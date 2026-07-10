@@ -131,6 +131,117 @@ FLATPAK_VALUE_OPTIONS = {
     "--usr-path",
 }
 FLATPAK_VALUE_PREFIXES = tuple(f"{option}=" for option in FLATPAK_VALUE_OPTIONS)
+# ponytail: shell-side flatpak option parser.  @FLAGS@ and @VALUE_OPTS@ are
+# rendered at script-generation time from the same FLATPAK_FLAG_OPTIONS /
+# FLATPAK_VALUE_OPTIONS constants that _parse_flatpak_run_command uses.
+# If the parser's option sets change, this heredoc picks up the change
+# automatically via the shared constants — but the two parsers' logic
+# (option boundary, --env handling) must stay in sync.
+_INJECT_FLATPAK_AUDIO_ENV_HEREDOC = """\
+inject_flatpak_audio_env() {
+    python3 - "$1" "@AUDIO_SINK@" "@PULSE_PROP@" '@PIPEWIRE_PROPS@' <<'PY'
+import shlex
+import sys
+
+cmd = sys.argv[1]
+sink = sys.argv[2]
+prop = sys.argv[3]
+pwprop = sys.argv[4]
+
+AUDIO_PREFIXES = ("PULSE_SINK=", "PULSE_PROP=", "PIPEWIRE_PROPS=")
+FLAGS = frozenset(@FLAGS@)
+VALUE_OPTS = frozenset(@VALUE_OPTS@)
+PREFIX_OPTS = frozenset(f"{opt}=" for opt in VALUE_OPTS)
+
+try:
+    tokens = shlex.split(cmd)
+except ValueError:
+    print(cmd)
+    raise SystemExit(0)
+
+prefix = ["flatpak-spawn", "--host"]
+index = len(prefix) if tokens[: len(prefix)] == prefix else 0
+if tokens[index : index + 2] != ["flatpak", "run"]:
+    print(cmd)
+    raise SystemExit(0)
+index += 2
+
+# Walk options using flatpak's own flag/value/prefix classification.
+# Only strip audio --env tokens from the option region (before app_id);
+# app_id and app_args pass through untouched.  For example, in
+#   flatpak run --env PULSE_SINK=custom org.foo --env PULSE_SINK=bar
+# the first --env PULSE_SINK=custom is a Flatpak option (stripped);
+# --env PULSE_SINK=bar after org.foo is an app argument (kept).
+filtered = list(tokens[:index])  # prefix + flatpak + run
+i = index
+while i < len(tokens):
+    tok = tokens[i]
+    if not tok.startswith("-"):
+        break  # app_id
+    if tok == "--":
+        break  # separator -> app_id follows
+    if tok in FLAGS:
+        filtered.append(tok)
+        i += 1
+        continue
+    if tok in VALUE_OPTS:
+        if i + 1 < len(tokens):
+            value = tokens[i + 1]
+            if tok == "--env" and any(
+                value.startswith(p) for p in AUDIO_PREFIXES
+            ):
+                i += 2  # skip both --env and its audio value
+            else:
+                filtered.append(tok)
+                filtered.append(value)
+                i += 2
+        else:
+            filtered.append(tok)
+            i += 1
+        continue
+    matched = next(
+        (p for p in PREFIX_OPTS if tok.startswith(p)), None
+    )
+    if matched:
+        if tok.startswith("--env=") and any(
+            tok[6:].startswith(p) for p in AUDIO_PREFIXES
+        ):
+            pass  # skip audio prefix option
+        else:
+            filtered.append(tok)
+        i += 1
+        continue
+    break  # unknown -> app_id boundary
+
+# Inject the managed audio tuple and game marker right after
+# "flatpak run", then append app_id and any remaining app_args.
+inject = [
+    "--env=PULSE_SINK=" + sink,
+    "--env=PULSE_PROP=" + prop,
+    "--env=PIPEWIRE_PROPS=" + pwprop,
+]
+print(shlex.join(filtered[:index] + inject + filtered[index:] + tokens[i:]))
+PY
+}
+"""
+_CLEAR_AUDIO_ACTIVATION_ENV = """\
+    # Replace stale audio values inherited from a prior session.
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        dbus-update-activation-environment --systemd \
+            PULSE_SINK= PULSE_PROP= PIPEWIRE_PROPS= >/dev/null 2>&1 || true
+    fi
+    systemctl --user unset-environment PULSE_SINK PULSE_PROP PIPEWIRE_PROPS >/dev/null 2>&1 || true"""
+
+
+def _rendered_inject_heredoc(heredoc: str, audio_sink: str) -> str:
+    """Substitute audio-env placeholders in a pre-rendered inject heredoc."""
+    return (
+        heredoc.replace("@AUDIO_SINK@", audio_sink)
+        .replace("@PULSE_PROP@", AUDIO_STREAM_PULSE_PROP)
+        .replace("@PIPEWIRE_PROPS@", AUDIO_STREAM_PIPEWIRE_PROPS)
+    )
+
+
 VIRTUALDISPLAY_SANDBOX_UNSET_VARS = [
     "DESKTOP_STARTUP_ID",
     "KDE_FULL_SESSION",
@@ -153,9 +264,6 @@ FLATPAK_PORTAL_ENV_KEYS = [
     "XDG_CURRENT_DESKTOP",
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
-    "PULSE_SINK",
-    "PULSE_PROP",
-    "PIPEWIRE_PROPS",
 ]
 FLATPAK_PORTAL_SWITCH_TIMEOUT = 20
 FLATPAK_PORTAL_SPAWN_TIMEOUT = 15
@@ -3205,6 +3313,12 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     sunshine_command = safe_string(state.get("sunshine_execstart")) or _svc.sunshine_binary() or "sunshine"
     sunshine_unit = _resolve_sunshine_unit(state)
     audio_sink = state["audio_sink"]
+    _inject_heredoc = _INJECT_FLATPAK_AUDIO_ENV_HEREDOC.replace(
+        "@FLAGS@", repr(sorted(FLATPAK_FLAG_OPTIONS))
+    ).replace(
+        "@VALUE_OPTS@", repr(sorted(FLATPAK_VALUE_OPTIONS))
+    )
+    _inject_heredoc_rendered = _rendered_inject_heredoc(_inject_heredoc, audio_sink)
     refresh_rate_sync_mode = _normalized_refresh_rate_sync_mode(state.get("refresh_rate_sync_mode"))
     custom_mode = _normalized_custom_display_mode(state.get("custom_display_mode"))
     custom_width = custom_mode["width"]
@@ -4078,6 +4192,7 @@ if tokens[: len(FLATPAK_SPAWN_HOST_PREFIX)] == FLATPAK_SPAWN_HOST_PREFIX:
 raise SystemExit(0 if tokens[index : index + 2] == ["flatpak", "run"] else 1)
 PY
 }}
+{_inject_heredoc_rendered}
 
 run_headless_command() {{
     local command_to_run="$1"
@@ -4145,9 +4260,7 @@ apply_headless_portal_env() {{
     export XDG_CURRENT_DESKTOP="sway"
     export XDG_SESSION_DESKTOP="sway"
     export XDG_SESSION_TYPE="wayland"
-    export PULSE_SINK="{audio_sink}"
-    export PULSE_PROP="{AUDIO_STREAM_PULSE_PROP}"
-    export PIPEWIRE_PROPS='{AUDIO_STREAM_PIPEWIRE_PROPS}'
+{_CLEAR_AUDIO_ACTIVATION_ENV}
 
     import_portal_env { " ".join(FLATPAK_PORTAL_ENV_KEYS) }
     restart_flatpak_portal
@@ -4232,6 +4345,7 @@ cleanup() {{
 }}
 
 trap cleanup EXIT INT TERM HUP
+decoded_command="$(inject_flatpak_audio_env "$decoded_command")"
 
 if is_flatpak_command "$decoded_command"; then
     exec 9>"$portal_lock_file"
@@ -4433,6 +4547,9 @@ if tokens[: len(FLATPAK_SPAWN_HOST_PREFIX)] == FLATPAK_SPAWN_HOST_PREFIX:
 raise SystemExit(0 if tokens[index : index + 2] == ["flatpak", "run"] else 1)
 PY
 }}
+
+{_inject_heredoc_rendered}
+
 
 launch_headless_direct() {{
     local command_to_run="$1"
@@ -4694,13 +4811,12 @@ apply_headless_portal_env() {{
     export XDG_CURRENT_DESKTOP="sway"
     export XDG_SESSION_DESKTOP="sway"
     export XDG_SESSION_TYPE="wayland"
-    export PULSE_SINK="{audio_sink}"
-    export PULSE_PROP="{AUDIO_STREAM_PULSE_PROP}"
-    export PIPEWIRE_PROPS='{AUDIO_STREAM_PIPEWIRE_PROPS}'
+{_CLEAR_AUDIO_ACTIVATION_ENV}
 
     import_portal_env { " ".join(FLATPAK_PORTAL_ENV_KEYS) }
     restart_flatpak_portal
 }}
+
 
 restore_host_portal_env() {{
     local -a restore_names
@@ -4809,6 +4925,7 @@ handle_signal() {{
 trap handle_signal INT TERM HUP
 
 trap cleanup EXIT
+decoded_command="$(inject_flatpak_audio_env "$decoded_command")"
 
 if is_flatpak_command "$decoded_command"; then
     exec 9>"$portal_lock_file"
@@ -5510,6 +5627,49 @@ def configure_exclusive_input_devices() -> int:
     return 0
 
 
+def _drain_stale_audio_activation_env() -> None:
+    """Clear stale audio vars from the systemd/DBus activation environment.
+
+    The Flatpak portal handoff imported ``PULSE_SINK``, ``PULSE_PROP``,
+    and ``PIPEWIRE_PROPS`` into the global activation environment where
+    they persist for the login session, permanently tagging host apps as
+    game streams.  Sets the DBus and systemd values to empty; then
+    ``systemctl --user unset-environment`` removes them from systemd.
+    """
+    try:
+        if shutil.which("dbus-update-activation-environment"):
+            subprocess.run(
+                [
+                    "dbus-update-activation-environment",
+                    "--systemd",
+                    "PULSE_SINK=",
+                    "PULSE_PROP=",
+                    "PIPEWIRE_PROPS=",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+    except OSError:
+        pass
+    try:
+        subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "unset-environment",
+                "PULSE_SINK",
+                "PULSE_PROP",
+                "PIPEWIRE_PROPS",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        pass
+
+
 def setup_display() -> int:
     missing = _ensure_dependencies()
     if missing:
@@ -5526,6 +5686,9 @@ def setup_display() -> int:
 
     state = _remember_sunshine_execstart(state)
     state = refresh_managed_files(state)
+    # Drain stale audio vars from the activation environment so host apps
+    # never inherit the game marker, even without launching another flatpak.
+    _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
     save_state(state)
 
