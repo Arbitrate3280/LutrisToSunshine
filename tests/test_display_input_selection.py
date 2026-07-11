@@ -460,8 +460,10 @@ H: Handlers=sysrq kbd event29
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
+        original_drain_stale_audio_activation_env = manager._drain_stale_audio_activation_env
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_start_sunshine_unit = sunshine_service.start_sunshine_unit
+        drained = []
         try:
             manager.load_state = lambda: state
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
@@ -469,6 +471,7 @@ H: Handlers=sysrq kbd event29
             manager._snapshot_host_audio_defaults = lambda current: current.update(
                 {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
             )
+            manager._drain_stale_audio_activation_env = lambda: drained.append(True)
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "start", unit], 0, "", ""
@@ -480,10 +483,12 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
+            manager._drain_stale_audio_activation_env = original_drain_stale_audio_activation_env
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.start_sunshine_unit = original_start_sunshine_unit
 
         self.assertEqual(result, 0)
+        self.assertEqual(drained, [True])
         self.assertEqual(state["host_audio_defaults"], {"sink": "host-sink", "source": "host-source"})
 
     def test_start_display_restores_audio_on_sunshine_start_failure(self) -> None:
@@ -1033,8 +1038,7 @@ H: Handlers=sysrq kbd event29
         self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_guard)
         self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_guard)
         self.assertIn("enforce_host_defaults", audio_guard)
-        self.assertIn("enforce_headless_routing() {", audio_guard)
-        self.assertIn("        enforce_headless_routing\n", audio_guard)
+        self.assertNotIn("enforce_headless_routing", audio_guard)
         self.assertIn("enforce_sunshine_capture_source() {", audio_guard)
         self.assertIn("        enforce_sunshine_capture_source\n", audio_guard)
         self.assertIn("sunshine-record", audio_guard)

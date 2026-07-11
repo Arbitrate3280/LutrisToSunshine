@@ -3943,21 +3943,6 @@ enforce_host_defaults() {{
     fi
 }}
 
-enforce_headless_routing() {{
-    # Sunshine (re)connect moves the game's audio onto its own sink-sunshine-*
-    # sinks, but Sunshine records the monitor of our managed sink. Move any
-    # stranded playback back so the stream keeps its audio after a reconnect.
-    local managed_sink="{audio_sink}"
-    local ssid si_id
-    while IFS= read -r ssid; do
-        [ -n "$ssid" ] || continue
-        while IFS= read -r si_id; do
-            [ -n "$si_id" ] || continue
-            run_audio_command pactl move-sink-input "$si_id" "$managed_sink" >/dev/null 2>&1 || true
-        done < <(run_audio_command pactl list short sink-inputs 2>/dev/null | awk -v sid="$ssid" '$2==sid {{print $1}}')
-    done < <(run_audio_command pactl list short sinks 2>/dev/null | awk -v m="$managed_sink" '$2 ~ /^sink-sunshine-/ && $2 != m {{print $1}}')
-}}
-
 enforce_sunshine_capture_source() {{
     # KDE/PipeWire can retarget Sunshine's recorder to the host default monitor
     # when the user manually selects the managed sink.  Force the recorder back
@@ -4094,7 +4079,6 @@ poll_host_defaults() {{
         host_sink="${{host_defaults[0]:-}}"
         host_source="${{host_defaults[1]:-}}"
         enforce_host_defaults "$host_sink" "$host_source"
-        enforce_headless_routing
         enforce_sunshine_capture_source
         enforce_game_routing
         enforce_stray_routing "$host_sink"
@@ -5719,6 +5703,7 @@ def start_display() -> int:
         print("Virtual display is not set up. Run 'python3 lutristosunshine.py display enable' first.")
         return 1
     state = refresh_managed_files(state)
+    _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
     _snapshot_host_audio_defaults(state)
     save_state(state)
