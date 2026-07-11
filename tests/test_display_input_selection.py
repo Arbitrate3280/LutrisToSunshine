@@ -651,7 +651,11 @@ H: Handlers=sysrq kbd event29
         self.assertFalse(override_dir.exists())
 
     def test_display_snapshot_not_configured_has_enable_next_step(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
         state = manager._default_state()
+        state["paths"] = dict(state["paths"])
+        state["paths"]["portal_active_file"] = str(Path(tempdir.name) / "portal-active")
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         try:

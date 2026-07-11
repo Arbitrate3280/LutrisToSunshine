@@ -1,15 +1,14 @@
 import os
 import json
 import base64
-import requests
+import requests  # type: ignore[import-untyped]  # Fedora ships no stubs
 import getpass
-import urllib3
+import urllib3  # type: ignore[import-not-found]  # Fedora ships no stubs
 import subprocess
 import shlex
 from typing import Tuple, Optional, Dict, List
-from requests.utils import dict_from_cookiejar, cookiejar_from_dict
+from requests.utils import dict_from_cookiejar, cookiejar_from_dict  # type: ignore[import-untyped]
 from config.constants import (
-    DEFAULT_IMAGE,
     DEFAULT_SUNSHINE_HOST,
     DEFAULT_SUNSHINE_PORT,
 )
@@ -22,8 +21,7 @@ from launchers.retroarch import get_retroarch_command
 from launchers.eden import get_eden_command
 
 # Re-exported for compatibility with main CLI launcher
-from sunshine.detection import detect_sunshine_installation
-
+from sunshine.detection import detect_sunshine_installation  # noqa: F401
 from display.manager import (
     get_app_prep_commands,
     HEADLESS_PREP_PREFIX,
@@ -63,6 +61,8 @@ def _normalize_api_host(host: Optional[str]) -> str:
 
 
 def _normalize_api_port(port: Optional[object]) -> int:
+    if not isinstance(port, (str, int, float)):
+        raise ValueError("Port must be an integer.")
     try:
         normalized = int(port)
     except (TypeError, ValueError):
@@ -146,10 +146,11 @@ def get_api_connection(server_name: Optional[str] = None) -> Tuple[str, int]:
     settings = _load_api_connection_settings()
     saved = settings.get(target_server, {}) if isinstance(settings.get(target_server, {}), dict) else {}
 
+    saved_host = saved.get("host")
     host = (
         API_HOST_OVERRIDE
         or _get_environment_api_host(target_server)
-        or _normalize_api_host(saved.get("host"))
+        or _normalize_api_host(saved_host if isinstance(saved_host, str) else None)
     )
 
     saved_port = saved.get("port")
@@ -337,10 +338,10 @@ def _normalize_single_prep_command(command: str, enable_display: bool) -> str:
         return command
 
     if is_headless_prep_wrapped(command):
-        raw_command = unwrap_headless_prep_command(command)
-        if not raw_command:
+        unwrapped_command = unwrap_headless_prep_command(command)
+        if not unwrapped_command:
             return ""
-        return f"{HEADLESS_PREP_PREFIX}{raw_command}"
+        return f"{HEADLESS_PREP_PREFIX}{unwrapped_command}"
 
     return command
 
@@ -705,7 +706,7 @@ def get_auth_token() -> Optional[str]:
 
         # Validate the existing token
         if not _validate_token(token):
-            print(f"Error: Existing token is invalid. Please re-enter your credentials.")
+            print("Error: Existing token is invalid. Please re-enter your credentials.")
             os.remove(token_path)  # Remove the invalid token file
         else:
             AUTH_TOKEN = token
@@ -722,7 +723,7 @@ def get_auth_token() -> Optional[str]:
 
     # Validate the new token
     if not _validate_token(token):
-        print(f"Error: Authentication failed. Please check your credentials.")
+        print("Error: Authentication failed. Please check your credentials.")
         return None
 
     # Save the new token if it's valid
@@ -761,26 +762,29 @@ def build_game_command(game_id: str, runner) -> Optional[str]:
         return f'{retroarch_cmd} -L "{core_path}" "{game_id}"'
     return f'flatpak run --command=bottles-cli com.usebottles.bottles run -b "{runner}" -p "{game_id}"'
 
+def _submit_command_to_sunshine(game_name: str, cmd: str, image_path: str) -> None:
+    """Apply flatpak/display wrapping and POST the app to the active server."""
+    if INSTALLATION_TYPE == "flatpak":
+        cmd = f"flatpak-spawn --host {cmd}"
+    enable_display = SERVER_NAME == "sunshine" and display_enabled()
+    if enable_display:
+        cmd = wrap_command(cmd, "cmd") or cmd
+    prep_cmd = get_app_prep_commands() if enable_display else []
+    add_game_to_sunshine_api(game_name, cmd, image_path, prep_cmd=prep_cmd, detached=[])
+
+
 def add_game_to_sunshine(game_id: str, game_name: str, image_path: str, runner) -> None:
     """Add a game to the Sunshine configuration."""
     cmd = build_game_command(game_id, runner)
     if not cmd:
         print(f"Warning: Unable to determine launch command for {game_name}. Skipping.")
         return
+    _submit_command_to_sunshine(game_name, cmd, image_path)
 
-    # Prefix commands with flatpak-spawn --host if Sunshine is installed as Flatpak
-    if INSTALLATION_TYPE == "flatpak":
-        cmd = f"flatpak-spawn --host {cmd}"
 
-    enable_display = SERVER_NAME == "sunshine" and display_enabled()
-
-    if enable_display:
-        cmd = wrap_command(cmd, "cmd") or cmd
-
-    prep_cmd = get_app_prep_commands() if enable_display else []
-
-    # Use the API instead of directly modifying apps.json
-    add_game_to_sunshine_api(game_name, cmd, image_path, prep_cmd=prep_cmd, detached=[])
+def add_custom_command_to_sunshine(game_name: str, command: str, image_path: str) -> None:
+    """Add a user-provided command to the active server configuration."""
+    _submit_command_to_sunshine(game_name, command, image_path)
 
 def get_existing_apps() -> List[Dict]:
     """Retrieves the list of existing apps from the active server API."""

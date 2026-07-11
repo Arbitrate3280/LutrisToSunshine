@@ -21,9 +21,9 @@ from utils.utils import (
     dedupe_selected_games_by_name,
     normalize_game_name_for_dedup,
 )
-from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection
+from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, badge, heading, muted, state_text
-from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_display_apps, get_display_blocked_apps
+from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running, reconcile_display_apps, get_display_blocked_apps
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from config.registry import LAUNCHER_REGISTRY
 from launchers.lutris import is_lutris_running
@@ -783,9 +783,35 @@ def handle_display_command(args) -> int:
     if action == "display-gpu":
         return configure_gpu()
     if action == "renderer-mode":
-        return set_renderer_mode(args.mode)
+        set_renderer_mode(args.mode)
+        return 0
     print(f"Unknown display action: {action}")
     return 1
+
+
+
+def add_custom_command_flow() -> None:
+    """Prompt for a name + command and add it to the active server."""
+    print("")
+    print(heading("Add custom command"))
+    name = get_required_input("Entry name: ", "Name cannot be empty.")
+    command = get_required_input("Command to run: ", "Command cannot be empty.")
+
+    existing = {normalize_game_name_for_dedup(app["name"]) for app in get_existing_apps()}
+    if normalize_game_name_for_dedup(name) in existing:
+        print(f"Warning: an entry named '{name}' already exists in {get_server_display_name()}.")
+
+    image_path = DEFAULT_IMAGE
+    if get_yes_no_input(f"Download a cover from SteamGridDB for '{name}'? (y/n): "):
+        api_key = manage_api_key()
+        if api_key:
+            try:
+                image_path = download_image_from_steamgriddb(name, api_key)
+            except Exception as e:
+                print(f"Error downloading image for {name}: {e}")
+                image_path = DEFAULT_IMAGE
+
+    add_custom_command_to_sunshine(name, command, image_path)
 
 
 def main(argv=None):
@@ -904,6 +930,14 @@ def main(argv=None):
         if not any(detected_launchers.values()):
             names = ", ".join(LAUNCHER_NAMES[:-1]) + " or " + LAUNCHER_NAMES[-1]
             print(f"No {names} installation detected.")
+            if args.all:
+                return
+            print("")
+            print(f"{accent('1.')} Add custom command")
+            print(f"{muted('0.')} Exit")
+            choice = get_menu_choice(f"{accent('Choose an option: ')}", ["0", "1"])
+            if choice == "1":
+                add_custom_command_flow()
             return
 
         if detected_launchers["Lutris"] and is_lutris_running():
@@ -924,6 +958,14 @@ def main(argv=None):
 
         if not all_games:
             print("No games found in any detected launcher.")
+            if args.all:
+                return
+            print("")
+            print(f"{accent('1.')} Add custom command")
+            print(f"{muted('0.')} Exit")
+            choice = get_menu_choice(f"{accent('Choose an option: ')}", ["0", "1"])
+            if choice == "1":
+                add_custom_command_flow()
             return
 
         games_found_message = get_games_found_message(detected_launchers)
@@ -957,7 +999,11 @@ def main(argv=None):
         if args.all:
             selected_indices = list(range(len(all_games)))
         else:
-            selected_indices = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+            selection = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+            if selection == CUSTOM_COMMAND_SELECTION:
+                add_custom_command_flow()
+                return
+            selected_indices = selection
 
         selected_games = [
             all_games[i]

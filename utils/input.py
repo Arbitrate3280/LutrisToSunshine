@@ -1,6 +1,7 @@
-from typing import Any, List, Tuple, Callable, Optional
+from typing import Any, List, Tuple, Callable, Optional, Union
 from utils.utils import handle_interrupt
 
+CUSTOM_COMMAND_SELECTION = "__custom_command__"
 def get_user_input(prompt: str, validator: Callable[[str], Any], error_message: str) -> Any:
     """Get and validate user input."""
     while True:
@@ -56,13 +57,27 @@ def get_menu_choice(prompt: str, valid_choices: List[str]) -> str:
         f"Invalid selection. Choose one of: {', '.join(valid_choices)}."
     )
 
-def get_user_selection(games: List[Tuple[str, str]]) -> List[int]:
+def _non_empty_validator(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError()
+    return stripped
+
+
+def get_required_input(prompt: str, error_message: str = "Input cannot be empty.") -> str:
+    """Prompt for a non-empty trimmed string."""
+    return get_user_input(prompt, _non_empty_validator, error_message)
+
+def get_user_selection(games: List[Tuple[str, str]]) -> Union[List[int], str]:
     """Get user selection of games to add."""
     print(f"{len(games) + 1}. Add all games")
+    print(f"{len(games) + 2}. Add custom command")
 
-    def selection_validator(value: str) -> List[int]:
+    def selection_validator(value: str) -> Union[List[int], str]:
         if value.strip() == str(len(games) + 1):
             return list(range(len(games)))
+        if value.strip() == str(len(games) + 2):
+            return CUSTOM_COMMAND_SELECTION
 
         indices = []
         for part in value.split(','):
