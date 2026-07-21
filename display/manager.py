@@ -3700,13 +3700,8 @@ stop_child() {{
 cleanup() {{
     local exit_code=$?
     stop_child "$sunshine_pid"
-    if [ -f "{paths['audio_guard_pid_file']}" ]; then
-        guard_pid="$(cat "{paths['audio_guard_pid_file']}" 2>/dev/null || true)"
-        if [ -n "$guard_pid" ] && kill -0 "$guard_pid" 2>/dev/null; then
-            kill -- "-$guard_pid" >/dev/null 2>&1 || kill "$guard_pid" >/dev/null 2>&1 || true
-        fi
-        rm -f "{paths['audio_guard_pid_file']}"
-    fi
+    pkill -f "{paths['audio_guard_script']}" >/dev/null 2>&1 || true
+    rm -f "{paths['audio_guard_pid_file']}"
     stop_child "$input_bridge_pid"
     stop_child "$kwin_input_isolation_pid"
     stop_child "$sway_pid"
