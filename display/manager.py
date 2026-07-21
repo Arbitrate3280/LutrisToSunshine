@@ -63,6 +63,9 @@ SUNSHINE_OWNED_SINK_NAMES = [
     "sink-sunshine-surround51",
     "sink-sunshine-surround71",
 ]
+PIPEWIRE_VIRTUAL_SINK_NAMES = [
+    "auto_null",
+]
 FLATPAK_SPAWN_HOST_PREFIX = ["flatpak-spawn", "--host"]
 FLATPAK_FLAG_OPTIONS = {
     "-d",
@@ -1525,9 +1528,10 @@ def _pactl_list_short(entity: str) -> str:
 
 def _find_hardware_sink(exclude_names: List[str]) -> str:
     """Return the first non-managed sink name from pactl."""
+    skip = set(exclude_names) | set(PIPEWIRE_VIRTUAL_SINK_NAMES)
     for line in _pactl_list_short("sinks").strip().split("\n"):
         parts = line.split("\t")
-        if len(parts) >= 2 and parts[1] not in exclude_names:
+        if len(parts) >= 2 and parts[1] not in skip:
             return parts[1]
     return ""
 
@@ -1537,11 +1541,12 @@ def _find_hardware_source(exclude_names: List[str]) -> str:
     Skips monitor sources (.monitor) since those capture playback of an
     output sink rather than an actual input device like a microphone.
     """
+    skip = set(exclude_names) | {f"{s}.monitor" for s in PIPEWIRE_VIRTUAL_SINK_NAMES}
     for line in _pactl_list_short("sources").strip().split("\n"):
         parts = line.split("\t")
         if (
             len(parts) >= 2
-            and parts[1] not in exclude_names
+            and parts[1] not in skip
             and ".monitor" not in parts[1]
         ):
             return parts[1]
@@ -1551,12 +1556,14 @@ def _find_hardware_source(exclude_names: List[str]) -> str:
 def _snapshot_host_audio_defaults(state: Dict[str, Any]) -> None:
     managed_sinks = _managed_audio_sink_names(state)
     managed_sources = _managed_audio_source_names(state)
+    virtual_sinks = set(PIPEWIRE_VIRTUAL_SINK_NAMES)
+    virtual_sources = {f"{s}.monitor" for s in PIPEWIRE_VIRTUAL_SINK_NAMES}
     current_sink = _pactl_info_value("Default Sink")
     current_source = _pactl_info_value("Default Source")
 
-    if not current_sink or current_sink in managed_sinks:
+    if not current_sink or current_sink in managed_sinks or current_sink in virtual_sinks:
         current_sink = _find_hardware_sink(managed_sinks)
-    if not current_source or current_source in managed_sources:
+    if not current_source or current_source in managed_sources or current_source in virtual_sources:
         current_source = _find_hardware_source(managed_sources)
 
     if not current_sink and not current_source:
@@ -3575,6 +3582,8 @@ conf_path = Path(sys.argv[2])
 managed_sink = sys.argv[3]
 managed_sinks = set({managed_audio_sinks!r})
 managed_sources = set({managed_audio_sources!r})
+virtual_sinks = {{"auto_null"}}
+virtual_sources = {{"auto_null.monitor"}}
 
 try:
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -3648,7 +3657,12 @@ if pactl and pactl.returncode == 0:
         elif line.startswith("Default Source: "):
             current_source = line.split(": ", 1)[1].strip()
     if current_sink and current_source:
-        if not (current_sink in managed_sinks or current_source in managed_sources):
+        if not (
+            current_sink in managed_sinks
+            or current_sink in virtual_sinks
+            or current_source in managed_sources
+            or current_source in virtual_sources
+        ):
             state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
 
 state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3936,10 +3950,16 @@ enforce_host_defaults() {{
     local host_source="$2"
 
     if [ -n "$host_sink" ] && [ "$current_sink" != "$host_sink" ] && is_managed_sink "$current_sink"; then
-        run_audio_command pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
+        if ! run_audio_command pactl list short sinks 2>/dev/null | awk '{{print $2}}' | grep -qx "$host_sink"; then
+            host_sink="$(run_audio_command pactl list short sinks 2>/dev/null | awk -v m="{audio_sink}" '$2 !~ /^sink-sunshine-/ && $2 != m && $2 != "auto_null" {{print $2; exit}}')"
+        fi
+        [ -n "$host_sink" ] && run_audio_command pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
     fi
     if [ -n "$host_source" ] && [ "$current_source" != "$host_source" ] && is_managed_source "$current_source"; then
-        run_audio_command pactl set-default-source "$host_source" >/dev/null 2>&1 || true
+        if ! run_audio_command pactl list short sources 2>/dev/null | awk '{{print $2}}' | grep -qx "$host_source"; then
+            host_source="$(run_audio_command pactl list short sources 2>/dev/null | awk '$2 !~ /\.monitor$/ && $2 !~ /^sink-sunshine-/ && $2 != "auto_null.monitor" {{print $2; exit}}')"
+        fi
+        [ -n "$host_source" ] && run_audio_command pactl set-default-source "$host_source" >/dev/null 2>&1 || true
     fi
 }}
 

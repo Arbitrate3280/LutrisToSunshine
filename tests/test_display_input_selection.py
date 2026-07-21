@@ -454,6 +454,73 @@ H: Handlers=sysrq kbd event29
             manager._pactl_list_short = original
         self.assertEqual(result, "")
 
+    def test_find_hardware_sink_skips_auto_null(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\tauto_null\tmodule-null-sink.c\ts16le 2ch 48000Hz\tIDLE\n"
+                "1\talsa_output.pci-0000_2d_00.1.hdmi-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                if entity == "sinks" else ""
+            )
+            result = manager._find_hardware_sink([])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "alsa_output.pci-0000_2d_00.1.hdmi-stereo")
+
+    def test_find_hardware_source_skips_auto_null_monitor(self) -> None:
+        original = manager._pactl_list_short
+        try:
+            manager._pactl_list_short = lambda entity: (
+                "0\tauto_null.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tIDLE\n"
+                "1\talsa_input.pci-0000_2d_00.1.hdmi-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
+                if entity == "sources" else ""
+            )
+            result = manager._find_hardware_source([])
+        finally:
+            manager._pactl_list_short = original
+        self.assertEqual(result, "alsa_input.pci-0000_2d_00.1.hdmi-stereo")
+
+    def test_snapshot_ignores_auto_null_default(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
+        try:
+            values = {
+                "Default Sink": "auto_null",
+                "Default Source": "auto_null.monitor",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_2d_00.1.hdmi-stereo"
+            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_2d_00.1.hdmi-stereo"
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
+        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_2d_00.1.hdmi-stereo")
+        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_2d_00.1.hdmi-stereo")
+
+    def test_snapshot_auto_null_no_fallback(self) -> None:
+        state = manager._default_state()
+        original_pactl_info_value = manager._pactl_info_value
+        original_find_hardware_sink = manager._find_hardware_sink
+        original_find_hardware_source = manager._find_hardware_source
+        try:
+            values = {
+                "Default Sink": "auto_null",
+                "Default Source": "auto_null.monitor",
+            }
+            manager._pactl_info_value = lambda key: values.get(key, "")
+            manager._find_hardware_sink = lambda exclude: ""
+            manager._find_hardware_source = lambda exclude: ""
+            manager._snapshot_host_audio_defaults(state)
+        finally:
+            manager._pactl_info_value = original_pactl_info_value
+            manager._find_hardware_sink = original_find_hardware_sink
+            manager._find_hardware_source = original_find_hardware_source
+        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
+
     def test_start_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
         state, _conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
