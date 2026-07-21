@@ -4156,8 +4156,7 @@ PY
 if [ -f "$audio_guard_pid_file" ] && kill -0 "$(cat "$audio_guard_pid_file")" 2>/dev/null; then
     exit 0
 fi
-setsid "$audio_guard_script" &
-echo $! > "$audio_guard_pid_file"
+setsid bash -c 'echo $$ > "$1"; exec "$2"' _ "$audio_guard_pid_file" "$audio_guard_script" &
 """,
         Path(paths["stream_audio_stop_script"]): f"""#!/bin/bash
 set -euo pipefail
