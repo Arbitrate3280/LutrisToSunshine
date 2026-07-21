@@ -1403,9 +1403,15 @@ H: Handlers=sysrq kbd event29
         self.assertIn("stream-audio-stop", conf_text)
 
     def test_global_prep_cmd_restored_on_stop(self) -> None:
-        state, conf_path = self._temp_audio_state("global_prep_cmd = original_value\n")
+        user_entry = {"do": "user-cmd", "undo": "user-undo"}
+        our_entry = {
+            "do": manager._default_state()["paths"]["stream_audio_start_script"],
+            "undo": manager._default_state()["paths"]["stream_audio_stop_script"],
+        }
+        import json as _json
+        combined = _json.dumps([user_entry, our_entry])
+        state, conf_path = self._temp_audio_state(f"global_prep_cmd = {combined}\n")
         state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
-        state["sunshine_global_prep_cmd"] = {"present": True, "value": "original_value"}
         original_load_state = manager.load_state
         original_save_state = manager.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
@@ -1426,10 +1432,9 @@ H: Handlers=sysrq kbd event29
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
         self.assertEqual(result, 0)
-        self.assertEqual(
-            conf_path.read_text(encoding="utf-8"),
-            "global_prep_cmd = original_value\n\naudio_sink = host-speakers\n",
-        )
+        conf_text = conf_path.read_text(encoding="utf-8")
+        self.assertIn("user-cmd", conf_text)
+        self.assertNotIn("stream-audio-start", conf_text)
 
     def test_global_prep_cmd_removed_if_absent_originally(self) -> None:
         state, conf_path = self._temp_audio_state()

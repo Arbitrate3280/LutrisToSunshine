@@ -764,7 +764,6 @@ def _default_state() -> Dict[str, Any]:
         "sway_socket": DISPLAY_SOCKET_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
-        "sunshine_global_prep_cmd": None,
         "exclusive_input_devices": _empty_exclusive_input_state(),
         "gpu_mode": "auto",
         "gpu_card_path": "",
@@ -5575,26 +5574,43 @@ def _restore_sunshine_audio_sink(state: Dict[str, Any]) -> None:
         _remove_key(sunshine_conf, "audio_sink")
 
 
-def _remember_sunshine_global_prep_cmd(state: Dict[str, Any]) -> None:
-    if state.get("sunshine_global_prep_cmd") is None:
-        sunshine_conf = Path(state["paths"]["sunshine_conf"])
-        state["sunshine_global_prep_cmd"] = _read_key_value(sunshine_conf, "global_prep_cmd")
+def _read_global_prep_cmd_list(sunshine_conf: Path) -> List[Dict[str, str]]:
+    raw = _read_key_value(sunshine_conf, "global_prep_cmd")
+    if not raw.get("present"):
+        return []
+    try:
+        parsed = json.loads(raw.get("value", ""))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [entry for entry in parsed if isinstance(entry, dict)]
+
+
+def _our_prep_cmd_entry(state: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "do": state["paths"]["stream_audio_start_script"],
+        "undo": state["paths"]["stream_audio_stop_script"],
+    }
+
+
+def _is_our_prep_cmd_entry(entry: Dict[str, str], state: Dict[str, Any]) -> bool:
+    ours = _our_prep_cmd_entry(state)
+    return entry.get("do") == ours["do"] or entry.get("undo") == ours["undo"]
 
 
 def _set_runtime_global_prep_cmd(state: Dict[str, Any]) -> None:
     sunshine_conf = Path(state["paths"]["sunshine_conf"])
-    _remember_sunshine_global_prep_cmd(state)
-    start_script = state["paths"]["stream_audio_start_script"]
-    stop_script = state["paths"]["stream_audio_stop_script"]
-    value = json.dumps([{"do": start_script, "undo": stop_script}])
-    _set_key_value(sunshine_conf, "global_prep_cmd", value)
+    entries = [e for e in _read_global_prep_cmd_list(sunshine_conf) if not _is_our_prep_cmd_entry(e, state)]
+    entries.append(_our_prep_cmd_entry(state))
+    _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(entries))
 
 
 def _restore_sunshine_global_prep_cmd(state: Dict[str, Any]) -> None:
     sunshine_conf = Path(state["paths"]["sunshine_conf"])
-    original = state.get("sunshine_global_prep_cmd") or {"present": False, "value": ""}
-    if original.get("present"):
-        _set_key_value(sunshine_conf, "global_prep_cmd", original.get("value", ""))
+    entries = [e for e in _read_global_prep_cmd_list(sunshine_conf) if not _is_our_prep_cmd_entry(e, state)]
+    if entries:
+        _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(entries))
     else:
         _remove_key(sunshine_conf, "global_prep_cmd")
 
@@ -5841,14 +5857,12 @@ def setup_display() -> int:
     # never inherit the game marker, even without launching another flatpak.
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
-    _remember_sunshine_global_prep_cmd(state)
     save_state(state)
 
     if not _install_udev_rule(state):
         _restore_sunshine_audio_sink(state)
         state["sunshine_audio_sink"] = None
         _restore_sunshine_global_prep_cmd(state)
-        state["sunshine_global_prep_cmd"] = None
         save_state(state)
         print("Error: unable to install the Sunshine input isolation udev rule.")
         print("Install sudo or pkexec, then rerun the command.")
@@ -5875,7 +5889,6 @@ def start_display() -> int:
     state = refresh_managed_files(state)
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
-    _remember_sunshine_global_prep_cmd(state)
     _set_runtime_global_prep_cmd(state)
     save_state(state)
     sunshine_unit = _resolve_sunshine_unit(state)
