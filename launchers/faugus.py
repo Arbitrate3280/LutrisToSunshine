@@ -47,11 +47,11 @@ def get_faugus_paths() -> Dict[str, str]:
     return {
         "config": config_dir,
         "data": data_dir,
-        "games_json": os.path.join(config_dir, "games.json"),
-        "config_ini": os.path.join(config_dir, "config.ini"),
+        "games_json": os.path.join(data_dir, "games.json"),
+        "config_json": os.path.join(config_dir, "config.json"),
         "umu_run": os.path.join(data_dir, "umu-run"),
-        "eac": os.path.join(config_dir, "components", "eac"),
-        "be": os.path.join(config_dir, "components", "be"),
+        "eac": os.path.join(data_dir, "components", "eac"),
+        "be": os.path.join(data_dir, "components", "be"),
     }
 
 
@@ -59,8 +59,8 @@ def get_faugus_command() -> str:
     """Get the command to run Faugus games."""
     install_type = get_faugus_installation_type()
     if install_type == "flatpak":
-        return f"flatpak run --command=faugus-run {FAUGUS_FLATPAK_ID}"
-    return "faugus-run"
+        return f"flatpak run --command=faugus-launcher {FAUGUS_FLATPAK_ID}"
+    return "faugus-launcher"
 
 
 def _parse_bool(value) -> bool | None:
@@ -84,39 +84,28 @@ def _load_faugus_defaults() -> Dict[str, bool]:
     """Load global defaults from the Faugus config file."""
     defaults = {
         "mangohud": False,
-        "disable_hidraw": False,
-        "prevent_sleep": False,
+        "gamemode": False,
     }
 
     paths = get_faugus_paths()
-    config_path = paths["config_ini"]
+    config_path = paths["config_json"]
 
     if not os.path.exists(config_path):
         return defaults
 
-    key_map = {
-        "mangohud": "mangohud",
-        "disable-hidraw": "disable_hidraw",
-        "prevent-sleep": "prevent_sleep",
-    }
-
     try:
-        with open(config_path, "r", encoding="utf-8", errors="ignore") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if not line or "=" not in line:
-                    continue
+        with open(config_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return defaults
 
-                key, value = line.split("=", 1)
-                normalized_key = key.strip()
-                if normalized_key not in key_map:
-                    continue
+    if not isinstance(data, dict):
+        return defaults
 
-                parsed = _parse_bool(value)
-                if parsed is not None:
-                    defaults[key_map[normalized_key]] = parsed
-    except OSError:
-        pass
+    for key in ("mangohud", "gamemode"):
+        parsed = _parse_bool(data.get(key))
+        if parsed is not None:
+            defaults[key] = parsed
 
     return defaults
 
@@ -164,11 +153,12 @@ def list_faugus_games() -> List[Tuple[str, str, str, Dict[str, object]]]:
             "game_path": path.strip(),
             "prefix": prefix.strip(),
             "mangohud": defaults["mangohud"],
-            "disable_hidraw": defaults["disable_hidraw"],
-            "prevent_sleep": defaults["prevent_sleep"],
+            "gamemode": defaults["gamemode"],
+            "no_sleep": False,
+            "sdl_enabled": False,
         }
 
-        for key in ("mangohud", "disable_hidraw", "prevent_sleep"):
+        for key in ("mangohud", "gamemode", "no_sleep", "sdl_enabled"):
             parsed = _parse_bool(entry.get(key))
             if parsed is not None:
                 runner[key] = parsed
