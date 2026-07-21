@@ -737,6 +737,9 @@ def _state_paths(unit_name: str) -> Dict[str, str]:
         "input_bridge_status_file": str(INPUT_BRIDGE_STATUS_PATH),
         "wayland_display_file": str(WAYLAND_DISPLAY_PATH),
         "audio_module_file": str(AUDIO_MODULE_PATH),
+        "stream_audio_start_script": str(BIN_ROOT / "lutristosunshine-stream-audio-start.sh"),
+        "stream_audio_stop_script": str(BIN_ROOT / "lutristosunshine-stream-audio-stop.sh"),
+        "audio_guard_pid_file": str(PROFILE_ROOT / "audio-guard.pid"),
         "systemd_user_dir": str(systemd_user_dir),
         "sunshine_override_dir": str(override_dir),
         "sunshine_override": str(override_dir / "override.conf"),
@@ -761,6 +764,7 @@ def _default_state() -> Dict[str, Any]:
         "sway_socket": DISPLAY_SOCKET_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
+        "sunshine_global_prep_cmd": None,
         "exclusive_input_devices": _empty_exclusive_input_state(),
         "gpu_mode": "auto",
         "gpu_card_path": "",
@@ -3549,7 +3553,6 @@ runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 pulse_server_value="${{PULSE_SERVER:-}}"
 pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
-audio_guard_pid=""
 input_bridge_pid=""
 kwin_input_isolation_pid=""
 sway_pid=""
@@ -3572,18 +3575,12 @@ fi
 prepare_audio_state() {{
     python3 - "$state_path" "$sunshine_conf" "$audio_sink" <<'PY'
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 state_path = Path(sys.argv[1])
 conf_path = Path(sys.argv[2])
 managed_sink = sys.argv[3]
-managed_sinks = set({managed_audio_sinks!r})
-managed_sources = set({managed_audio_sources!r})
-virtual_sinks = {{"auto_null"}}
-virtual_sources = {{"auto_null.monitor"}}
 
 try:
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -3591,17 +3588,6 @@ except (OSError, json.JSONDecodeError):
     sys.exit(1)
 if not isinstance(state, dict):
     state = {{}}
-
-host_defaults = state.get("host_audio_defaults") or {{}}
-if not isinstance(host_defaults, dict):
-    host_defaults = {{}}
-
-
-def pactl_env():
-    env = dict(os.environ)
-    env["LANG"] = "C"
-    env["LC_ALL"] = "C"
-    return env
 
 lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
 current_value = ""
@@ -3638,32 +3624,6 @@ if not replaced:
 conf_path.parent.mkdir(parents=True, exist_ok=True)
 conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
 
-try:
-    pactl = subprocess.run(
-        ["pactl", "info"],
-        text=True,
-        capture_output=True,
-        check=False,
-        env=pactl_env(),
-    )
-except OSError:
-    pactl = None
-if pactl and pactl.returncode == 0:
-    current_sink = ""
-    current_source = ""
-    for line in pactl.stdout.splitlines():
-        if line.startswith("Default Sink: "):
-            current_sink = line.split(": ", 1)[1].strip()
-        elif line.startswith("Default Source: "):
-            current_source = line.split(": ", 1)[1].strip()
-    if current_sink and current_source:
-        if not (
-            current_sink in managed_sinks
-            or current_sink in virtual_sinks
-            or current_source in managed_sources
-            or current_source in virtual_sources
-        ):
-            state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
 
 state_path.parent.mkdir(parents=True, exist_ok=True)
 state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
@@ -3673,8 +3633,6 @@ PY
 restore_audio_state() {{
     python3 - "$state_path" "$sunshine_conf" <<'PY'
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -3688,18 +3646,8 @@ if not isinstance(state, dict):
     raise SystemExit(0)
 
 original = state.get("sunshine_audio_sink") or {{}}
-host_defaults = state.get("host_audio_defaults") or {{}}
 if not isinstance(original, dict):
     original = {{}}
-if not isinstance(host_defaults, dict):
-    host_defaults = {{}}
-
-
-def pactl_env():
-    env = dict(os.environ)
-    env["LANG"] = "C"
-    env["LC_ALL"] = "C"
-    return env
 
 lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
 updated_lines = []
@@ -3721,13 +3669,6 @@ if not found and original.get("present"):
 conf_path.parent.mkdir(parents=True, exist_ok=True)
 conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
 
-sink_name = str(host_defaults.get("sink") or "").strip()
-source_name = str(host_defaults.get("source") or "").strip()
-if sink_name:
-    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False, env=pactl_env())
-if source_name:
-    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False, env=pactl_env())
-state["host_audio_defaults"] = {{"sink": "", "source": ""}}
 state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 PY
 }}
@@ -3759,9 +3700,15 @@ stop_child() {{
 cleanup() {{
     local exit_code=$?
     stop_child "$sunshine_pid"
+    if [ -f "{paths['audio_guard_pid_file']}" ]; then
+        guard_pid="$(cat "{paths['audio_guard_pid_file']}" 2>/dev/null || true)"
+        if [ -n "$guard_pid" ] && kill -0 "$guard_pid" 2>/dev/null; then
+            kill -- "-$guard_pid" >/dev/null 2>&1 || kill "$guard_pid" >/dev/null 2>&1 || true
+        fi
+        rm -f "{paths['audio_guard_pid_file']}"
+    fi
     stop_child "$input_bridge_pid"
     stop_child "$kwin_input_isolation_pid"
-    stop_child "$audio_guard_pid"
     stop_child "$sway_pid"
     rm -f "$bridge_status_file" "$kwin_input_isolation_status_file" "$display_file"
     "$audio_cleanup_script" >/dev/null 2>&1 || true
@@ -3791,8 +3738,6 @@ if [ ! -s "$display_file" ] || [ ! -S "$sway_socket" ]; then
     exit 1
 fi
 
-setsid "$audio_guard_script" &
-audio_guard_pid=$!
 
 if input_bridge_enabled; then
     setsid python3 "$input_bridge_script" &
@@ -4107,6 +4052,188 @@ poll_host_defaults() {{
 }}
 
 poll_host_defaults
+""",
+        Path(paths["stream_audio_start_script"]): f"""#!/bin/bash
+set -euo pipefail
+
+state_path="{paths['state_path']}"
+audio_guard_script="{paths['audio_guard_script']}"
+audio_guard_pid_file="{paths['audio_guard_pid_file']}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
+
+run_audio_command() {{
+    local command=(/usr/bin/env
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "LANG=C"
+        "LC_ALL=C"
+    )
+    if [ -n "$pulse_server_value" ]; then
+        command+=("PULSE_SERVER=$pulse_server_value")
+    fi
+    if [ -n "$pulse_clientconfig_value" ]; then
+        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
+    fi
+    "${{command[@]}}" "$@"
+}}
+
+# Snapshot host audio defaults into state file.
+python3 - "$state_path" <<'PY'
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+managed_sinks = set({managed_audio_sinks!r})
+managed_sources = set({managed_audio_sources!r})
+virtual_sinks = {{"auto_null"}}
+virtual_sources = {{"auto_null.monitor"}}
+
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    state = {{}}
+if not isinstance(state, dict):
+    state = {{}}
+
+def pactl_env():
+    env = dict(os.environ)
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
+
+def pactl_info_value(key):
+    try:
+        r = subprocess.run(["pactl", "info"], text=True, capture_output=True, check=False, env=pactl_env())
+    except OSError:
+        return ""
+    if r.returncode != 0:
+        return ""
+    prefix = key + ": "
+    for line in r.stdout.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    return ""
+
+def pactl_list_short(entity):
+    try:
+        r = subprocess.run(["pactl", "list", "short", entity], text=True, capture_output=True, check=False, timeout=5, env=pactl_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout or ""
+
+def find_hardware_sink(exclude):
+    skip = exclude | virtual_sinks
+    for line in pactl_list_short("sinks").strip().split("\\n"):
+        parts = line.split("\\t")
+        if len(parts) >= 2 and parts[1] not in skip:
+            return parts[1]
+    return ""
+
+def find_hardware_source(exclude):
+    skip = exclude | virtual_sources
+    for line in pactl_list_short("sources").strip().split("\\n"):
+        parts = line.split("\\t")
+        if len(parts) >= 2 and parts[1] not in skip and ".monitor" not in parts[1]:
+            return parts[1]
+    return ""
+
+current_sink = pactl_info_value("Default Sink")
+current_source = pactl_info_value("Default Source")
+
+if not current_sink or current_sink in managed_sinks or current_sink in virtual_sinks:
+    current_sink = find_hardware_sink(managed_sinks)
+if not current_source or current_source in managed_sources or current_source in virtual_sources:
+    current_source = find_hardware_source(managed_sources)
+
+if current_sink or current_source:
+    state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+PY
+
+# Start the audio guard if not already running.
+if [ -f "$audio_guard_pid_file" ] && kill -0 "$(cat "$audio_guard_pid_file")" 2>/dev/null; then
+    exit 0
+fi
+setsid "$audio_guard_script" &
+echo $! > "$audio_guard_pid_file"
+""",
+        Path(paths["stream_audio_stop_script"]): f"""#!/bin/bash
+set -euo pipefail
+
+state_path="{paths['state_path']}"
+audio_guard_pid_file="{paths['audio_guard_pid_file']}"
+runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
+pulse_server_value="${{PULSE_SERVER:-}}"
+pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
+
+run_audio_command() {{
+    local command=(/usr/bin/env
+        "XDG_RUNTIME_DIR=$runtime_dir"
+        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
+        "LANG=C"
+        "LC_ALL=C"
+    )
+    if [ -n "$pulse_server_value" ]; then
+        command+=("PULSE_SERVER=$pulse_server_value")
+    fi
+    if [ -n "$pulse_clientconfig_value" ]; then
+        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
+    fi
+    "${{command[@]}}" "$@"
+}}
+
+# Kill the audio guard.
+if [ -f "$audio_guard_pid_file" ]; then
+    guard_pid="$(cat "$audio_guard_pid_file")"
+    if [ -n "$guard_pid" ] && kill -0 "$guard_pid" 2>/dev/null; then
+        kill -- "-$guard_pid" >/dev/null 2>&1 || kill "$guard_pid" >/dev/null 2>&1 || true
+    fi
+    rm -f "$audio_guard_pid_file"
+fi
+
+# Restore host audio defaults from state file.
+python3 - "$state_path" <<'PY'
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+try:
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+if not isinstance(state, dict):
+    raise SystemExit(0)
+
+host_defaults = state.get("host_audio_defaults") or {{}}
+if not isinstance(host_defaults, dict):
+    raise SystemExit(0)
+
+def pactl_env():
+    env = dict(os.environ)
+    env["LANG"] = "C"
+    env["LC_ALL"] = "C"
+    return env
+
+sink_name = str(host_defaults.get("sink") or "").strip()
+source_name = str(host_defaults.get("source") or "").strip()
+if sink_name:
+    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False, env=pactl_env())
+if source_name:
+    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False, env=pactl_env())
+state["host_audio_defaults"] = {{"sink": "", "source": ""}}
+state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+PY
 """,
         Path(paths["input_bridge_script"]): _input_bridge_script(state),
         Path(paths["kwin_input_isolation_script"]): _kwin_input_isolation_script(state),
@@ -5454,6 +5581,30 @@ def _restore_sunshine_audio_sink(state: Dict[str, Any]) -> None:
         _remove_key(sunshine_conf, "audio_sink")
 
 
+def _remember_sunshine_global_prep_cmd(state: Dict[str, Any]) -> None:
+    if state.get("sunshine_global_prep_cmd") is None:
+        sunshine_conf = Path(state["paths"]["sunshine_conf"])
+        state["sunshine_global_prep_cmd"] = _read_key_value(sunshine_conf, "global_prep_cmd")
+
+
+def _set_runtime_global_prep_cmd(state: Dict[str, Any]) -> None:
+    sunshine_conf = Path(state["paths"]["sunshine_conf"])
+    _remember_sunshine_global_prep_cmd(state)
+    start_script = state["paths"]["stream_audio_start_script"]
+    stop_script = state["paths"]["stream_audio_stop_script"]
+    value = json.dumps([{"do": start_script, "undo": stop_script}])
+    _set_key_value(sunshine_conf, "global_prep_cmd", value)
+
+
+def _restore_sunshine_global_prep_cmd(state: Dict[str, Any]) -> None:
+    sunshine_conf = Path(state["paths"]["sunshine_conf"])
+    original = state.get("sunshine_global_prep_cmd") or {"present": False, "value": ""}
+    if original.get("present"):
+        _set_key_value(sunshine_conf, "global_prep_cmd", original.get("value", ""))
+    else:
+        _remove_key(sunshine_conf, "global_prep_cmd")
+
+
 def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
     paths = state["paths"]
     keys = [
@@ -5464,6 +5615,8 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
         "audio_create_script",
         "audio_cleanup_script",
         "audio_guard_script",
+        "stream_audio_start_script",
+        "stream_audio_stop_script",
         "launch_app_script",
         "resolve_stream_fps_script",
         "apply_exact_refresh_script",
@@ -5694,11 +5847,14 @@ def setup_display() -> int:
     # never inherit the game marker, even without launching another flatpak.
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
+    _remember_sunshine_global_prep_cmd(state)
     save_state(state)
 
     if not _install_udev_rule(state):
         _restore_sunshine_audio_sink(state)
         state["sunshine_audio_sink"] = None
+        _restore_sunshine_global_prep_cmd(state)
+        state["sunshine_global_prep_cmd"] = None
         save_state(state)
         print("Error: unable to install the Sunshine input isolation udev rule.")
         print("Install sudo or pkexec, then rerun the command.")
@@ -5725,7 +5881,8 @@ def start_display() -> int:
     state = refresh_managed_files(state)
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
-    _snapshot_host_audio_defaults(state)
+    _remember_sunshine_global_prep_cmd(state)
+    _set_runtime_global_prep_cmd(state)
     save_state(state)
     sunshine_unit = _resolve_sunshine_unit(state)
     result = _svc.start_sunshine_unit(sunshine_unit)
@@ -5733,6 +5890,7 @@ def start_display() -> int:
         stderr = (result.stderr or "").strip()
         _svc.stop_sunshine_unit(sunshine_unit)
         _restore_sunshine_audio_sink(state)
+        _restore_sunshine_global_prep_cmd(state)
         _restore_host_audio_defaults(state)
         save_state(state)
         if stderr:
@@ -5768,6 +5926,7 @@ def stop_display() -> int:
     except OSError:
         pass
     _restore_sunshine_audio_sink(state)
+    _restore_sunshine_global_prep_cmd(state)
     _restore_host_audio_defaults(state)
     save_state(state)
     print("Virtual display stopped.")
@@ -5794,7 +5953,7 @@ def display_snapshot() -> Dict[str, Any]:
     )
     current_headless_mode = _current_headless_mode(state, sunshine_active, sway_active)
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
-    audio_guard_state = "active" if sunshine_active and Path(state["paths"]["audio_module_file"]).exists() else "inactive"
+    audio_guard_state = "active" if Path(state["paths"]["audio_guard_pid_file"]).exists() else "inactive"
     kwin_status = _kwin_input_isolation_status(state) if configured else _empty_kwin_input_isolation_status()
     sunshine_input_devices = _sunshine_virtual_input_devices() if configured else []
     selections = state["exclusive_input_devices"]["devices"]
@@ -6187,6 +6346,7 @@ def remove_display() -> int:
         "kwin_input_isolation_status_file",
         "wayland_display_file",
         "audio_module_file",
+        "audio_guard_pid_file",
     ]:
         try:
             path_value = state["paths"].get(path_key)

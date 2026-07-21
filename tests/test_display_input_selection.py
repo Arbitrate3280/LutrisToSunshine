@@ -521,12 +521,11 @@ H: Handlers=sysrq kbd event29
             manager._find_hardware_source = original_find_hardware_source
         self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
 
-    def test_start_display_snapshots_host_audio_defaults_before_service_start(self) -> None:
+    def test_start_display_does_not_snapshot_host_audio_defaults(self) -> None:
         state, _conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
-        original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
         original_drain_stale_audio_activation_env = manager._drain_stale_audio_activation_env
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_start_sunshine_unit = sunshine_service.start_sunshine_unit
@@ -535,9 +534,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = lambda: state
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
-            manager._snapshot_host_audio_defaults = lambda current: current.update(
-                {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
-            )
             manager._drain_stale_audio_activation_env = lambda: drained.append(True)
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
@@ -549,14 +545,13 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
-            manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
             manager._drain_stale_audio_activation_env = original_drain_stale_audio_activation_env
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.start_sunshine_unit = original_start_sunshine_unit
 
         self.assertEqual(result, 0)
         self.assertEqual(drained, [True])
-        self.assertEqual(state["host_audio_defaults"], {"sink": "host-sink", "source": "host-source"})
+        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
 
     def test_start_display_restores_audio_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
@@ -1085,7 +1080,6 @@ H: Handlers=sysrq kbd event29
         self.assertIn('audio_sink = {managed_sink}', sunshine_wrapper)
         self.assertIn('export XDG_RUNTIME_DIR="$runtime_dir"', sunshine_wrapper)
         self.assertIn('export DBUS_SESSION_BUS_ADDRESS="$dbus_value"', sunshine_wrapper)
-        self.assertIn('env=pactl_env()', sunshine_wrapper)
         self.assertIn('run_audio_command() {', audio_create)
         self.assertIn('local command=(/usr/bin/env', audio_create)
         self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_create)
@@ -1374,6 +1368,100 @@ H: Handlers=sysrq kbd event29
         self.assertIn("udev", cleanup_calls)
         self.assertIn("overrides", cleanup_calls)
 
+
+    def test_global_prep_cmd_written_on_start(self) -> None:
+        state, conf_path = self._temp_audio_state()
+        original_load_state = manager.load_state
+        original_refresh_managed_files = manager.refresh_managed_files
+        original_save_state = manager.save_state
+        original_drain_stale_audio_activation_env = manager._drain_stale_audio_activation_env
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_start_sunshine_unit = sunshine_service.start_sunshine_unit
+        try:
+            manager.load_state = lambda: state
+            manager.refresh_managed_files = lambda current=None: current if current is not None else state
+            manager.save_state = lambda current: None
+            manager._drain_stale_audio_activation_env = lambda: None
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "start", unit], 0, "", ""
+            )
+
+            result = manager.start_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.refresh_managed_files = original_refresh_managed_files
+            manager.save_state = original_save_state
+            manager._drain_stale_audio_activation_env = original_drain_stale_audio_activation_env
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.start_sunshine_unit = original_start_sunshine_unit
+
+        self.assertEqual(result, 0)
+        conf_text = conf_path.read_text(encoding="utf-8")
+        self.assertIn("global_prep_cmd", conf_text)
+        self.assertIn("stream-audio-start", conf_text)
+        self.assertIn("stream-audio-stop", conf_text)
+
+    def test_global_prep_cmd_restored_on_stop(self) -> None:
+        state, conf_path = self._temp_audio_state("global_prep_cmd = original_value\n")
+        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
+        state["sunshine_global_prep_cmd"] = {"present": True, "value": "original_value"}
+        original_load_state = manager.load_state
+        original_save_state = manager.save_state
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
+        try:
+            manager.load_state = lambda: state
+            manager.save_state = lambda current: None
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "stop", unit], 0, "", ""
+            )
+
+            result = manager.stop_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.save_state = original_save_state
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            conf_path.read_text(encoding="utf-8"),
+            "global_prep_cmd = original_value\n\naudio_sink = host-speakers\n",
+        )
+
+    def test_global_prep_cmd_removed_if_absent_originally(self) -> None:
+        state, conf_path = self._temp_audio_state()
+        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
+        original_load_state = manager.load_state
+        original_save_state = manager.save_state
+        original_sunshine_unit = sunshine_service.sunshine_unit
+        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
+        try:
+            manager.load_state = lambda: state
+            manager.save_state = lambda current: None
+            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
+                ["systemctl", "--user", "stop", unit], 0, "", ""
+            )
+
+            result = manager.stop_display()
+        finally:
+            manager.load_state = original_load_state
+            manager.save_state = original_save_state
+            sunshine_service.sunshine_unit = original_sunshine_unit
+            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
+
+        self.assertEqual(result, 0)
+        self.assertNotIn("global_prep_cmd", conf_path.read_text(encoding="utf-8"))
+
+    def test_stream_audio_scripts_in_managed_paths(self) -> None:
+        state = manager._default_state()
+        paths = manager._managed_setup_paths(state)
+        path_names = [p.name for p in paths]
+        self.assertIn("lutristosunshine-stream-audio-start.sh", path_names)
+        self.assertIn("lutristosunshine-stream-audio-stop.sh", path_names)
 
 if __name__ == "__main__":
     unittest.main()
