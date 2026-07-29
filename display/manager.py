@@ -3408,10 +3408,7 @@ fi
     return {
         Path(paths["sway_config"]): f"""# Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution {FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz
-output * allow_tearing yes
-output * max_render_time off
-
-exec swaybg -c '#111827'
+output HEADLESS-1 bg #111827 solid_color
 
 input * events disabled
 input "48879:57005:Keyboard_passthrough" events enabled
@@ -5422,11 +5419,14 @@ import time
 print(f"{{time.time():.6f}}")
 PY
 )"
-swaymsg_cmd "output HEADLESS-1 mode ${{target_width}}x${{target_height}}@${{target_fps}}Hz" >/dev/null 2>&1 || true
 if [ "$mode" = "exact" ]; then
+    # Exact mode: let apply_exact_refresh resolve the real FPS from
+    # Sunshine's journal and do a single, correct mode switch.
     setsid "{paths['apply_exact_refresh_script']}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &
+else
+    swaymsg_cmd "output HEADLESS-1 mode ${{target_width}}x${{target_height}}@${{target_fps}}Hz" >/dev/null 2>&1 || true
 fi
-# Removed sleep after resolution change for faster startup
+
 """.replace("{custom_width}", str(custom_width)).replace("{custom_height}", str(custom_height)).replace("{custom_refresh}", custom_refresh),
         Path(paths["reset_resolution_script"]): f"""#!/bin/bash
 set -euo pipefail
