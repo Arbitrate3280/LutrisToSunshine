@@ -52,7 +52,13 @@ SUNSHINE_INPUT_NAME_MARKERS = [
 ]
 BRIDGE_DEVICE_PHYS_PREFIX = "lts-inputbridge/"
 HIDRAW_BUFFER_MAX = 4096
-AUDIO_GUARD_POLL_INTERVAL_SECONDS = 0.5
+# LutrisToSunshine audio policy lives in WirePlumber (event-driven, host-level)
+# rather than a polling bash guard. WP 0.5+ loads user scripts from XDG_DATA and
+# merges XDG_CONFIG fragments.
+WIREPLUMBER_SCRIPTS_DIR = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "wireplumber" / "scripts"
+WIREPLUMBER_CONF_DIR = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "wireplumber" / "wireplumber.conf.d"
+WIREPLUMBER_POLICY_SCRIPT_NAME = "lts-audio-policy.lua"
+WIREPLUMBER_POLICY_CONF_NAME = "54-lts-audio-policy.conf"
 AUDIO_STREAM_MARKER_KEY = "lutristosunshine.stream"
 AUDIO_STREAM_MARKER_VALUE = "game"
 AUDIO_STREAM_PULSE_PROP = f"{AUDIO_STREAM_MARKER_KEY}={AUDIO_STREAM_MARKER_VALUE}"
@@ -723,7 +729,8 @@ def _state_paths(unit_name: str) -> Dict[str, str]:
         "sunshine_wrapper_script": str(BIN_ROOT / "lutristosunshine-run-display-service.sh"),
         "audio_create_script": str(BIN_ROOT / "lutristosunshine-create-audio-sink.sh"),
         "audio_cleanup_script": str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
-        "audio_guard_script": str(BIN_ROOT / "lutristosunshine-guard-audio-defaults.sh"),
+        "wireplumber_policy_script": str(WIREPLUMBER_SCRIPTS_DIR / WIREPLUMBER_POLICY_SCRIPT_NAME),
+        "wireplumber_policy_conf": str(WIREPLUMBER_CONF_DIR / WIREPLUMBER_POLICY_CONF_NAME),
         "launch_app_script": str(BIN_ROOT / "lutristosunshine-launch-app.sh"),
         "resolve_stream_fps_script": str(BIN_ROOT / "lutristosunshine-resolve-stream-fps.sh"),
         "apply_exact_refresh_script": str(BIN_ROOT / "lutristosunshine-apply-exact-refresh.sh"),
@@ -737,9 +744,6 @@ def _state_paths(unit_name: str) -> Dict[str, str]:
         "input_bridge_status_file": str(INPUT_BRIDGE_STATUS_PATH),
         "wayland_display_file": str(WAYLAND_DISPLAY_PATH),
         "audio_module_file": str(AUDIO_MODULE_PATH),
-        "stream_audio_start_script": str(BIN_ROOT / "lutristosunshine-stream-audio-start.sh"),
-        "stream_audio_stop_script": str(BIN_ROOT / "lutristosunshine-stream-audio-stop.sh"),
-        "audio_guard_pid_file": str(PROFILE_ROOT / "audio-guard.pid"),
         "systemd_user_dir": str(systemd_user_dir),
         "sunshine_override_dir": str(override_dir),
         "sunshine_override": str(override_dir / "override.conf"),
@@ -760,7 +764,6 @@ def _default_state() -> Dict[str, Any]:
         "sunshine_unit_name": "",
         "profile": PROFILE_NAME,
         "audio_sink": "lts-sunshine-stereo",
-        "host_audio_defaults": {"sink": "", "source": ""},
         "sway_socket": DISPLAY_SOCKET_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
@@ -1556,47 +1559,160 @@ def _find_hardware_source(exclude_names: List[str]) -> str:
     return ""
 
 
-def _snapshot_host_audio_defaults(state: Dict[str, Any]) -> None:
-    managed_sinks = _managed_audio_sink_names(state)
-    managed_sources = _managed_audio_source_names(state)
-    virtual_sinks = set(PIPEWIRE_VIRTUAL_SINK_NAMES)
-    virtual_sources = {f"{s}.monitor" for s in PIPEWIRE_VIRTUAL_SINK_NAMES}
-    current_sink = _pactl_info_value("Default Sink")
-    current_source = _pactl_info_value("Default Source")
+_WIREPLUMBER_POLICY_SCRIPT_TEMPLATE = """-- WirePlumber policy: LutrisToSunshine audio enforcement.
+--
+-- Sunshine forces the system default sink to its capture sink at stream start
+-- (src/platform/linux/audio.cpp :: set_sink -> pa_context_set_default_sink) and
+-- there is no Sunshine config to disable it; LTS instead routes the game per-app
+-- (PULSE_SINK) and captures the managed sink's monitor, so the system default
+-- must stay on host hardware. This script enforces the invariants declaratively,
+-- in-process and event-driven (no polling, no subprocesses):
+--   1. The default sink is never a managed sink (select-default-node hook).
+--   2. A game stream (lutristosunshine.stream=game) targets the managed sink.
+--   3. Sunshine's recorder targets the managed sink's monitor.
 
-    if not current_sink or current_sink in managed_sinks or current_sink in virtual_sinks:
-        current_sink = _find_hardware_sink(managed_sinks)
-    if not current_source or current_source in managed_sources or current_source in virtual_sources:
-        current_source = _find_hardware_source(managed_sources)
+local log = Log.open_topic("s-lts-audio")
 
-    if not current_sink and not current_source:
-        return
-    state["host_audio_defaults"] = {
-        "sink": current_sink,
-        "source": current_source,
-    }
+local audio_sink = "__AUDIO_SINK__"
+local managed_sinks = {
+__MANAGED_SINKS_TABLE__}
+
+SimpleEventHook {
+  name = "lts-audio/guard-default-sink",
+  after = { "default-nodes/find-best-default-node",
+            "default-nodes/find-selected-default-node",
+            "default-nodes/find-stored-default-node" },
+  before = { "default-nodes/apply-default-node" },
+  interests = {
+    EventInterest {
+      Constraint { "event.type", "=", "select-default-node" },
+    },
+  },
+  execute = function (event)
+    local props = event:get_properties ()
+    if props ["default-node.type"] ~= "audio.sink" then return end
+
+    local selected = event:get_data ("selected-node")
+    if type (selected) ~= "string" and selected then
+      local ok, v = pcall (function () return selected:parse () end)
+      if ok then selected = v end
+    end
+
+    if selected and managed_sinks [selected] then
+      local om = event:get_source ():call ("get-object-manager", "node")
+      local best_name, best_prio = nil, -1
+      for node in om:iterate () do
+        local p = node.properties
+        local name = p ["node.name"]
+        if name and not managed_sinks [name] and p ["node.virtual"] ~= "true"
+           and (p ["media.class"] or ""):match ("Audio/Sink") then
+          local prio = tonumber (p ["priority.session"] or "0") or 0
+          if prio > best_prio then best_name, best_prio = name, prio end
+        end
+      end
+      if best_name then
+        log:info ("override default sink " .. selected .. " -> " .. best_name)
+        event:set_data ("selected-node", best_name)
+      end
+    end
+  end,
+}:register ()
+
+-- Pin game streams to the managed sink and Sunshine's recorder to the managed
+-- monitor, authoritatively: a tagged stream is always re-pinned even if
+-- stream-restore or the Flatpak portal pre-set another target (the host default
+-- on a client disconnect/reconnect), which would otherwise strand game audio on
+-- the host. Untagged streams are left to WirePlumber's native linking.
+local lutils = require ("linking-utils")
+
+local function find_linkable (om, node_name)
+  return om:lookup {
+    Constraint { "node.name", "=", node_name, type = "pw-global" },
+  }
+end
+
+SimpleEventHook {
+  name = "lts-audio/route-game-and-recorder",
+  before = { "linking/find-best-target" },
+  interests = {
+    EventInterest {
+      Constraint { "event.type", "=", "select-target" },
+    },
+  },
+  execute = function (event)
+    local source, om, si, si_props =
+      lutils:unwrap_select_target_event (event)
+    -- Authoritative for streams we manage: override any target that
+    -- stream-restore or the Flatpak portal pre-set (e.g. the host default on a
+    -- client disconnect/reconnect graph change). Streams we do not manage fall
+    -- through the `if not want` guard below, so this never hijacks them.
+
+    local marker = si_props ["lutristosunshine.stream"]
+    local class = si_props ["media.class"] or ""
+    local want
+    if marker == "game" then
+      want = audio_sink
+    elseif (class:match ("Source") or class:match ("Record"))
+       and (si_props ["application.name"] == "sunshine"
+            or si_props ["media.name"] == "sunshine-record") then
+      want = audio_sink .. ".monitor"
+    end
+    if not want then return end
+
+    local t = find_linkable (om, want)
+    if t then
+      log:info ("pin " .. tostring (si_props ["node.name"]) .. " -> " .. want)
+      event:set_data ("target", t)
+    end
+  end,
+}:register ()
+
+Log.info ("LTS audio policy registered")
+"""
 
 
-def _restore_host_audio_defaults(state: Dict[str, Any]) -> None:
-    defaults = state.get("host_audio_defaults") or {}
-    sink_name = str(defaults.get("sink") or "").strip()
-    source_name = str(defaults.get("source") or "").strip()
+def _wireplumber_policy_script(state: Dict[str, Any]) -> str:
+    audio_sink = _sunshine_audio_capture_target(state)
+    managed = list(dict.fromkeys([audio_sink, *SUNSHINE_OWNED_SINK_NAMES]))
+    table = "".join(f'  ["{name}"] = true,\n' for name in managed if name)
+    return (
+        _WIREPLUMBER_POLICY_SCRIPT_TEMPLATE
+        .replace("__AUDIO_SINK__", audio_sink)
+        .replace("__MANAGED_SINKS_TABLE__", table)
+    )
 
-    if sink_name:
-        subprocess.run(
-            ["pactl", "set-default-sink", sink_name],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    if source_name:
-        subprocess.run(
-            ["pactl", "set-default-source", source_name],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    state["host_audio_defaults"] = {"sink": "", "source": ""}
+
+def _wireplumber_policy_conf() -> str:
+    return (
+        "# LutrisToSunshine: register the host audio policy in WirePlumber.\n"
+        "wireplumber.components = [\n"
+        "  {\n"
+        f"    name = {WIREPLUMBER_POLICY_SCRIPT_NAME}, type = script/lua,\n"
+        "    provides = script.lts-audio-policy\n"
+        "  }\n"
+        "]\n"
+        "wireplumber.profiles = {\n"
+        "  main = {\n"
+        "    script.lts-audio-policy = required\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _remove_wireplumber_policy(state: Dict[str, Any]) -> None:
+    for key in ("wireplumber_policy_script", "wireplumber_policy_conf"):
+        try:
+            Path(state["paths"][key]).unlink()
+        except OSError:
+            pass
+    _reload_wireplumber()
+
+
+def _reload_wireplumber() -> None:
+    subprocess.run(
+        ["systemctl", "--user", "reload-or-restart", "wireplumber"],
+        text=True, capture_output=True, check=False,
+    )
 
 
 def _write_file(path: Path, content: str, executable: bool = False) -> None:
@@ -3334,8 +3450,6 @@ def _script_templates(state: Dict[str, Any]) -> Dict[Path, str]:
     custom_width = custom_mode["width"]
     custom_height = custom_mode["height"]
     custom_refresh = _format_refresh_rate_hz(custom_mode["refresh"]) or str(FALLBACK_FPS)
-    managed_audio_sinks = _managed_audio_sink_names(state)
-    managed_audio_sources = _managed_audio_source_names(state)
     mangohud_fps_limit_block = ""
     mangohud_env_append_block = ""
     if state.get("dynamic_mangohud_fps_limit"):
@@ -3536,7 +3650,6 @@ sunshine_conf="{paths['sunshine_conf']}"
 audio_sink="{audio_sink}"
 audio_create_script="{paths['audio_create_script']}"
 audio_cleanup_script="{paths['audio_cleanup_script']}"
-audio_guard_script="{paths['audio_guard_script']}"
 input_bridge_script="{paths['input_bridge_script']}"
 kwin_input_isolation_script="{paths['kwin_input_isolation_script']}"
 sway_start_script="{paths['sway_start_script']}"
@@ -3696,8 +3809,6 @@ stop_child() {{
 cleanup() {{
     local exit_code=$?
     stop_child "$sunshine_pid"
-    pkill -f "{paths['audio_guard_script']}" >/dev/null 2>&1 || true
-    rm -f "{paths['audio_guard_pid_file']}"
     stop_child "$input_bridge_pid"
     stop_child "$kwin_input_isolation_pid"
     stop_child "$sway_pid"
@@ -3812,418 +3923,6 @@ if [ -n "$module_id" ]; then
     run_audio_command pactl unload-module "$module_id" >/dev/null 2>&1 || true
 fi
 rm -f "$module_file"
-""",
-        Path(paths["audio_guard_script"]): f"""#!/bin/bash
-set -euo pipefail
-
-state_path="{paths['state_path']}"
-poll_interval="{AUDIO_GUARD_POLL_INTERVAL_SECONDS}"
-runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
-pulse_server_value="${{PULSE_SERVER:-}}"
-pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
-
-run_audio_command() {{
-    local command=(/usr/bin/env
-        "XDG_RUNTIME_DIR=$runtime_dir"
-        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
-        "LANG=C"
-        "LC_ALL=C"
-    )
-    if [ -n "$pulse_server_value" ]; then
-        command+=("PULSE_SERVER=$pulse_server_value")
-    fi
-    if [ -n "$pulse_clientconfig_value" ]; then
-        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
-    fi
-    "${{command[@]}}" "$@"
-}}
-
-is_managed_sink() {{
-    local value="${{1:-}}"
-    case "$value" in
-{chr(10).join(f'        {shlex.quote(name)}) return 0 ;;' for name in managed_audio_sinks)}
-        *) return 1 ;;
-    esac
-}}
-
-is_managed_source() {{
-    local value="${{1:-}}"
-    case "$value" in
-{chr(10).join(f'        {shlex.quote(name)}) return 0 ;;' for name in managed_audio_sources)}
-        *) return 1 ;;
-    esac
-}}
-
-read_host_defaults() {{
-    python3 - "$state_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-defaults = {{}}
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    payload = {{}}
-if isinstance(payload, dict):
-    defaults = payload.get("host_audio_defaults") or {{}}
-print(str(defaults.get("sink") or ""))
-print(str(defaults.get("source") or ""))
-PY
-}}
-
-enforce_host_defaults() {{
-    if ! pactl_info="$(run_audio_command pactl info 2>/dev/null)"; then
-        return 0
-    fi
-
-    current_sink="$(printf '%s\\n' "$pactl_info" | awk -F': ' '/^Default Sink:/ {{print $2; exit}}')"
-    current_source="$(printf '%s\\n' "$pactl_info" | awk -F': ' '/^Default Source:/ {{print $2; exit}}')"
-
-    local host_sink="$1"
-    local host_source="$2"
-
-    if [ -n "$host_sink" ] && [ "$current_sink" != "$host_sink" ] && is_managed_sink "$current_sink"; then
-        if ! run_audio_command pactl list short sinks 2>/dev/null | awk '{{print $2}}' | grep -qx "$host_sink"; then
-            host_sink="$(run_audio_command pactl list short sinks 2>/dev/null | awk -v m="{audio_sink}" '$2 !~ /^sink-sunshine-/ && $2 != m && $2 != "auto_null" {{print $2; exit}}')"
-        fi
-        [ -n "$host_sink" ] && run_audio_command pactl set-default-sink "$host_sink" >/dev/null 2>&1 || true
-    fi
-    if [ -n "$host_source" ] && [ "$current_source" != "$host_source" ] && is_managed_source "$current_source"; then
-        if ! run_audio_command pactl list short sources 2>/dev/null | awk '{{print $2}}' | grep -qx "$host_source"; then
-            host_source="$(run_audio_command pactl list short sources 2>/dev/null | awk '$2 !~ /\.monitor$/ && $2 !~ /^sink-sunshine-/ && $2 != "auto_null.monitor" {{print $2; exit}}')"
-        fi
-        [ -n "$host_source" ] && run_audio_command pactl set-default-source "$host_source" >/dev/null 2>&1 || true
-    fi
-}}
-
-enforce_sunshine_capture_source() {{
-    # KDE/PipeWire can retarget Sunshine's recorder to the host default monitor
-    # when the user manually selects the managed sink.  Force the recorder back
-    # to the managed monitor so host playback is not captured by the stream.
-    local managed_source="{audio_sink}.monitor"
-    local managed_source_id
-    managed_source_id="$(
-        run_audio_command pactl list short sources 2>/dev/null \
-            | awk -v managed_source="$managed_source" '$2 == managed_source {{print $1; exit}}'
-    )"
-    [ -n "$managed_source_id" ] || return 0
-
-    local source_output
-    while IFS= read -r source_output; do
-        [ -n "$source_output" ] || continue
-        run_audio_command pactl move-source-output "$source_output" "$managed_source" >/dev/null 2>&1 || true
-    done < <(
-        run_audio_command pactl list source-outputs 2>/dev/null \
-            | awk -v managed_source_id="$managed_source_id" '
-/Source Output #/ {{
-    if (NR > 1 && is_sunshine_record && current_source != managed_source_id) print so
-    so = $3; sub(/#/, "", so)
-    current_source = ""; is_sunshine_record = 0
-}}
-/^\\tSource: / {{ current_source = $2 }}
-/application\\.name = "sunshine"/ {{ is_sunshine_record = 1 }}
-/media\\.name = "sunshine-record"/ {{ is_sunshine_record = 1 }}
-/stream\\.capture\\.sink = "true"/ {{ is_sunshine_record = 1 }}
-END {{
-    if (is_sunshine_record && current_source != managed_source_id) print so
-}}'
-    )
-}}
-
-enforce_game_routing() {{
-    # If the desktop moves a launched game's marked stream back to the host
-    # sink, pull it to the managed sink so Sunshine can capture it.
-    local managed_sink="{audio_sink}"
-    local managed_sink_id
-    managed_sink_id="$(
-        run_audio_command pactl list short sinks 2>/dev/null \
-            | awk -v managed_sink="$managed_sink" '$2 == managed_sink {{print $1; exit}}'
-    )"
-    [ -n "$managed_sink_id" ] || return 0
-
-    local marker_key="{AUDIO_STREAM_MARKER_KEY}"
-    local marker_value="{AUDIO_STREAM_MARKER_VALUE}"
-    local game_streams
-    game_streams="$(
-        run_audio_command pactl list sink-inputs 2>/dev/null \
-            | awk -v managed_sink_id="$managed_sink_id" -v marker_key="$marker_key" -v marker_value="$marker_value" '
-/Sink Input #/ {{
-    if (NR > 1 && has_game_marker && current_sink != managed_sink_id) print si
-    si = $3; sub(/#/, "", si)
-    current_sink = ""; has_game_marker = 0
-}}
-/^\\tSink: / {{ current_sink = $2 }}
-index($0, marker_key " = \\\"" marker_value "\\\"") {{ has_game_marker = 1 }}
-index($0, "PULSE_PROP=" marker_key "=" marker_value) {{ has_game_marker = 1 }}
-index($0, "PIPEWIRE_PROPS=") && index($0, marker_key) && index($0, marker_value) {{ has_game_marker = 1 }}
-END {{
-    if (has_game_marker && current_sink != managed_sink_id) print si
-}}'
-    )"
-
-    local si
-    while IFS= read -r si; do
-        [ -n "$si" ] || continue
-        run_audio_command pactl move-sink-input "$si" "$managed_sink" >/dev/null 2>&1 || true
-    done <<< "$game_streams"
-}}
-
-enforce_stray_routing() {{
-    [ -n "$IS_PIPEWIRE_PULSE" ] || return 0
-
-    # Host apps that follow the default sink can get routed to our managed sink
-    # whenever the user or the desktop switches the default.  Game launchers get
-    # an explicit LutrisToSunshine stream marker; unmarked playback on a managed
-    # sink belongs back on the host hardware sink.
-    local host_sink="$1"
-    [ -n "$host_sink" ] || return 0
-
-    # Build pipe-separated list of managed sink indices.
-    local managed_pat
-    managed_pat="$(
-        run_audio_command pactl list short sinks 2>/dev/null \
-            | awk -v m="{audio_sink}" '$2 ~ /^sink-sunshine-/ || $2 == m {{print $1}}' \
-            | tr '\\n' '|'
-    )"
-    [ -n "$managed_pat" ] || return 0
-
-    local marker_key="{AUDIO_STREAM_MARKER_KEY}"
-    local marker_value="{AUDIO_STREAM_MARKER_VALUE}"
-    local stray
-    stray="$(
-        run_audio_command pactl list sink-inputs 2>/dev/null \
-            | awk -v m="$managed_pat" -v marker_key="$marker_key" -v marker_value="$marker_value" '
-/Sink Input #/ {{
-    if (NR > 1 && in_managed && !has_game_marker) print si
-    si = $3; sub(/#/, "", si)
-    in_managed = 0; has_game_marker = 0
-}}
-/^\\tSink: / {{
-    sink_id = $2
-    if (index("|" m "|", "|" sink_id "|")) in_managed = 1
-}}
-index($0, marker_key " = \\\"" marker_value "\\\"") {{ has_game_marker = 1 }}
-index($0, "PULSE_PROP=" marker_key "=" marker_value) {{ has_game_marker = 1 }}
-index($0, "PIPEWIRE_PROPS=") && index($0, marker_key) && index($0, marker_value) {{ has_game_marker = 1 }}
-END {{
-    if (in_managed && !has_game_marker) print si
-}}'
-    )"
-
-    local si
-    while IFS= read -r si; do
-        [ -n "$si" ] || continue
-        run_audio_command pactl move-sink-input "$si" "$host_sink" >/dev/null 2>&1 || true
-    done <<< "$stray"
-}}
-
-# Detect PipeWire-pulse at startup.  The stream metadata exposed by classic
-# PulseAudio is not reliable enough for this guard to evict unmarked playback
-# without risking legitimate game audio, so gate the correction on PipeWire.
-IS_PIPEWIRE_PULSE=""
-if run_audio_command pactl info 2>/dev/null | grep -qi "PipeWire"; then
-    IS_PIPEWIRE_PULSE="1"
-fi
-
-poll_host_defaults() {{
-    local host_sink host_source
-    while true; do
-        mapfile -t host_defaults < <(read_host_defaults)
-        host_sink="${{host_defaults[0]:-}}"
-        host_source="${{host_defaults[1]:-}}"
-        enforce_host_defaults "$host_sink" "$host_source"
-        enforce_sunshine_capture_source
-        enforce_game_routing
-        enforce_stray_routing "$host_sink"
-        sleep "$poll_interval"
-    done
-}}
-
-poll_host_defaults
-""",
-        Path(paths["stream_audio_start_script"]): f"""#!/bin/bash
-set -euo pipefail
-
-state_path="{paths['state_path']}"
-audio_guard_script="{paths['audio_guard_script']}"
-audio_guard_pid_file="{paths['audio_guard_pid_file']}"
-runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
-pulse_server_value="${{PULSE_SERVER:-}}"
-pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
-
-run_audio_command() {{
-    local command=(/usr/bin/env
-        "XDG_RUNTIME_DIR=$runtime_dir"
-        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
-        "LANG=C"
-        "LC_ALL=C"
-    )
-    if [ -n "$pulse_server_value" ]; then
-        command+=("PULSE_SERVER=$pulse_server_value")
-    fi
-    if [ -n "$pulse_clientconfig_value" ]; then
-        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
-    fi
-    "${{command[@]}}" "$@"
-}}
-
-# Snapshot host audio defaults into state file.
-python3 - "$state_path" <<'PY'
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-managed_sinks = set({managed_audio_sinks!r})
-managed_sources = set({managed_audio_sources!r})
-virtual_sinks = {{"auto_null"}}
-virtual_sources = {{"auto_null.monitor"}}
-
-try:
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    state = {{}}
-if not isinstance(state, dict):
-    state = {{}}
-
-def pactl_env():
-    env = dict(os.environ)
-    env["LANG"] = "C"
-    env["LC_ALL"] = "C"
-    return env
-
-def pactl_info_value(key):
-    try:
-        r = subprocess.run(["pactl", "info"], text=True, capture_output=True, check=False, env=pactl_env())
-    except OSError:
-        return ""
-    if r.returncode != 0:
-        return ""
-    prefix = key + ": "
-    for line in r.stdout.splitlines():
-        if line.startswith(prefix):
-            return line[len(prefix):].strip()
-    return ""
-
-def pactl_list_short(entity):
-    try:
-        r = subprocess.run(["pactl", "list", "short", entity], text=True, capture_output=True, check=False, timeout=5, env=pactl_env())
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return r.stdout or ""
-
-def find_hardware_sink(exclude):
-    skip = exclude | virtual_sinks
-    for line in pactl_list_short("sinks").strip().split("\\n"):
-        parts = line.split("\\t")
-        if len(parts) >= 2 and parts[1] not in skip:
-            return parts[1]
-    return ""
-
-def find_hardware_source(exclude):
-    skip = exclude | virtual_sources
-    for line in pactl_list_short("sources").strip().split("\\n"):
-        parts = line.split("\\t")
-        if len(parts) >= 2 and parts[1] not in skip and ".monitor" not in parts[1]:
-            return parts[1]
-    return ""
-
-current_sink = pactl_info_value("Default Sink")
-current_source = pactl_info_value("Default Source")
-
-if not current_sink or current_sink in managed_sinks or current_sink in virtual_sinks:
-    current_sink = find_hardware_sink(managed_sinks)
-if not current_source or current_source in managed_sources or current_source in virtual_sources:
-    current_source = find_hardware_source(managed_sources)
-
-if current_sink or current_source:
-    state["host_audio_defaults"] = {{"sink": current_sink, "source": current_source}}
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-PY
-
-# Start the audio guard if not already running.
-if [ -f "$audio_guard_pid_file" ] && kill -0 "$(cat "$audio_guard_pid_file")" 2>/dev/null; then
-    exit 0
-fi
-setsid bash -c 'echo $$ > "$1"; exec "$2"' _ "$audio_guard_pid_file" "$audio_guard_script" &
-""",
-        Path(paths["stream_audio_stop_script"]): f"""#!/bin/bash
-set -euo pipefail
-
-state_path="{paths['state_path']}"
-audio_guard_pid_file="{paths['audio_guard_pid_file']}"
-runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
-dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
-pulse_server_value="${{PULSE_SERVER:-}}"
-pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
-
-run_audio_command() {{
-    local command=(/usr/bin/env
-        "XDG_RUNTIME_DIR=$runtime_dir"
-        "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
-        "LANG=C"
-        "LC_ALL=C"
-    )
-    if [ -n "$pulse_server_value" ]; then
-        command+=("PULSE_SERVER=$pulse_server_value")
-    fi
-    if [ -n "$pulse_clientconfig_value" ]; then
-        command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
-    fi
-    "${{command[@]}}" "$@"
-}}
-
-# Kill the audio guard.
-if [ -f "$audio_guard_pid_file" ]; then
-    guard_pid="$(cat "$audio_guard_pid_file")"
-    if [ -n "$guard_pid" ] && kill -0 "$guard_pid" 2>/dev/null; then
-        kill -- "-$guard_pid" >/dev/null 2>&1 || kill "$guard_pid" >/dev/null 2>&1 || true
-    fi
-    rm -f "$audio_guard_pid_file"
-fi
-
-# Restore host audio defaults from state file.
-python3 - "$state_path" <<'PY'
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-try:
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(0)
-if not isinstance(state, dict):
-    raise SystemExit(0)
-
-host_defaults = state.get("host_audio_defaults") or {{}}
-if not isinstance(host_defaults, dict):
-    raise SystemExit(0)
-
-def pactl_env():
-    env = dict(os.environ)
-    env["LANG"] = "C"
-    env["LC_ALL"] = "C"
-    return env
-
-sink_name = str(host_defaults.get("sink") or "").strip()
-source_name = str(host_defaults.get("source") or "").strip()
-if sink_name:
-    subprocess.run(["pactl", "set-default-sink", sink_name], text=True, capture_output=True, check=False, env=pactl_env())
-if source_name:
-    subprocess.run(["pactl", "set-default-source", source_name], text=True, capture_output=True, check=False, env=pactl_env())
-state["host_audio_defaults"] = {{"sink": "", "source": ""}}
-state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-PY
 """,
         Path(paths["input_bridge_script"]): _input_bridge_script(state),
         Path(paths["kwin_input_isolation_script"]): _kwin_input_isolation_script(state),
@@ -5552,6 +5251,8 @@ def _write_managed_files(state: Dict[str, Any]) -> None:
         _write_file(path, content, executable=path.suffix == ".sh")
     for path, content in _systemd_templates(state).items():
         _write_file(path, content)
+    _write_file(Path(state["paths"]["wireplumber_policy_script"]), _wireplumber_policy_script(state))
+    _write_file(Path(state["paths"]["wireplumber_policy_conf"]), _wireplumber_policy_conf())
 
 
 def refresh_managed_files(state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5587,33 +5288,33 @@ def _read_global_prep_cmd_list(sunshine_conf: Path) -> List[Dict[str, str]]:
     return [entry for entry in parsed if isinstance(entry, dict)]
 
 
-def _our_prep_cmd_entry(state: Dict[str, Any]) -> Dict[str, str]:
-    return {
-        "do": state["paths"]["stream_audio_start_script"],
-        "undo": state["paths"]["stream_audio_stop_script"],
-    }
+_LEGACY_PREP_CMD_MARKERS = (
+    "lutristosunshine-stream-audio-start",
+    "lutristosunshine-stream-audio-stop",
+)
 
 
-def _is_our_prep_cmd_entry(entry: Dict[str, str], state: Dict[str, Any]) -> bool:
-    ours = _our_prep_cmd_entry(state)
-    return entry.get("do") == ours["do"] or entry.get("undo") == ours["undo"]
+def _strip_legacy_global_prep_cmd(state: Dict[str, Any]) -> None:
+    """Remove the obsolete LTS stream-audio hooks from Sunshine's global_prep_cmd.
 
-
-def _set_runtime_global_prep_cmd(state: Dict[str, Any]) -> None:
+    The WirePlumber policy replaces the old do/undo scripts; strip any stale
+    entries left from a previous install so Sunshine does not run dead commands.
+    """
     sunshine_conf = Path(state["paths"]["sunshine_conf"])
-    entries = [e for e in _read_global_prep_cmd_list(sunshine_conf) if not _is_our_prep_cmd_entry(e, state)]
-    entries.append(_our_prep_cmd_entry(state))
-    _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(entries))
-
-
-def _restore_sunshine_global_prep_cmd(state: Dict[str, Any]) -> None:
-    sunshine_conf = Path(state["paths"]["sunshine_conf"])
-    entries = [e for e in _read_global_prep_cmd_list(sunshine_conf) if not _is_our_prep_cmd_entry(e, state)]
-    if entries:
-        _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(entries))
+    entries = _read_global_prep_cmd_list(sunshine_conf)
+    kept = [
+        entry for entry in entries
+        if not any(
+            marker in str(entry.get("do", "")) or marker in str(entry.get("undo", ""))
+            for marker in _LEGACY_PREP_CMD_MARKERS
+        )
+    ]
+    if len(kept) == len(entries):
+        return
+    if kept:
+        _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(kept))
     else:
         _remove_key(sunshine_conf, "global_prep_cmd")
-
 
 def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
     paths = state["paths"]
@@ -5624,9 +5325,8 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
         "sunshine_wrapper_script",
         "audio_create_script",
         "audio_cleanup_script",
-        "audio_guard_script",
-        "stream_audio_start_script",
-        "stream_audio_stop_script",
+        "wireplumber_policy_script",
+        "wireplumber_policy_conf",
         "launch_app_script",
         "resolve_stream_fps_script",
         "apply_exact_refresh_script",
@@ -5853,6 +5553,8 @@ def setup_display() -> int:
 
     state = _remember_sunshine_execstart(state)
     state = refresh_managed_files(state)
+    _strip_legacy_global_prep_cmd(state)
+    _reload_wireplumber()
     # Drain stale audio vars from the activation environment so host apps
     # never inherit the game marker, even without launching another flatpak.
     _drain_stale_audio_activation_env()
@@ -5862,7 +5564,7 @@ def setup_display() -> int:
     if not _install_udev_rule(state):
         _restore_sunshine_audio_sink(state)
         state["sunshine_audio_sink"] = None
-        _restore_sunshine_global_prep_cmd(state)
+        _remove_wireplumber_policy(state)
         save_state(state)
         print("Error: unable to install the Sunshine input isolation udev rule.")
         print("Install sudo or pkexec, then rerun the command.")
@@ -5889,7 +5591,6 @@ def start_display() -> int:
     state = refresh_managed_files(state)
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
-    _set_runtime_global_prep_cmd(state)
     save_state(state)
     sunshine_unit = _resolve_sunshine_unit(state)
     result = _svc.start_sunshine_unit(sunshine_unit)
@@ -5897,8 +5598,6 @@ def start_display() -> int:
         stderr = (result.stderr or "").strip()
         _svc.stop_sunshine_unit(sunshine_unit)
         _restore_sunshine_audio_sink(state)
-        _restore_sunshine_global_prep_cmd(state)
-        _restore_host_audio_defaults(state)
         save_state(state)
         if stderr:
             print(stderr)
@@ -5933,8 +5632,6 @@ def stop_display() -> int:
     except OSError:
         pass
     _restore_sunshine_audio_sink(state)
-    _restore_sunshine_global_prep_cmd(state)
-    _restore_host_audio_defaults(state)
     save_state(state)
     print("Virtual display stopped.")
     return 0
@@ -5948,7 +5645,6 @@ def display_snapshot() -> Dict[str, Any]:
     sunshine_active = _svc.is_sunshine_service_active() if configured else False
     host_session = _host_session_name()
     input_isolation_mode = _input_isolation_mode()
-    host_defaults = state.get("host_audio_defaults") or {}
     wayland_display = ""
     if WAYLAND_DISPLAY_PATH.exists():
         wayland_display = WAYLAND_DISPLAY_PATH.read_text(encoding="utf-8").strip()
@@ -5960,7 +5656,7 @@ def display_snapshot() -> Dict[str, Any]:
     )
     current_headless_mode = _current_headless_mode(state, sunshine_active, sway_active)
     portal_handoff_active = PORTAL_ACTIVE_PATH.exists()
-    audio_guard_state = "active" if Path(state["paths"]["audio_guard_pid_file"]).exists() else "inactive"
+    wp_policy_state = "installed" if Path(state["paths"]["wireplumber_policy_conf"]).exists() else "absent"
     kwin_status = _kwin_input_isolation_status(state) if configured else _empty_kwin_input_isolation_status()
     sunshine_input_devices = _sunshine_virtual_input_devices() if configured else []
     selections = state["exclusive_input_devices"]["devices"]
@@ -6026,12 +5722,8 @@ def display_snapshot() -> Dict[str, Any]:
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
         "bridge_state": _bridge_service_state() if configured else "inactive",
-        "audio_guard_state": audio_guard_state,
+        "wireplumber_policy": wp_policy_state,
         "audio_sink": state["audio_sink"],
-        "host_audio_defaults": {
-            "sink": safe_string(host_defaults.get("sink")),
-            "source": safe_string(host_defaults.get("source")),
-        },
         "wayland_display": wayland_display,
         "current_headless_mode": current_headless_mode,
         "sway_socket": state["sway_socket"],
@@ -6267,7 +5959,7 @@ def display_status() -> int:
         f"Sunshine={'active' if snapshot['sunshine_active'] else 'inactive'}, "
         f"Sway={'active' if snapshot['sway_active'] else 'inactive'}, "
         f"Input bridge={snapshot['bridge_state']}, "
-        f"Audio guard={snapshot['audio_guard_state']}"
+        f"WP policy={snapshot['wireplumber_policy']}"
     )
     print(
         "Dynamic MangoHud FPS limit: "
@@ -6337,6 +6029,8 @@ def remove_display() -> int:
     if not _remove_udev_rule(state):
         print("Warning: failed to remove the managed udev rule.")
     _clean_kde_libinput_config()
+    _remove_wireplumber_policy(state)
+    _strip_legacy_global_prep_cmd(state)
 
     for path in _managed_setup_paths(state):
         try:
@@ -6353,7 +6047,6 @@ def remove_display() -> int:
         "kwin_input_isolation_status_file",
         "wayland_display_file",
         "audio_module_file",
-        "audio_guard_pid_file",
     ]:
         try:
             path_value = state["paths"].get(path_key)

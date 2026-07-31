@@ -351,7 +351,7 @@ def handle_display_command(args) -> int:
         ]
         runtime_parts = [
             f"gamepads={_format_status_value(snapshot['bridge_state'])}",
-            f"audio={_format_status_value(snapshot['audio_guard_state'])}",
+            f"audio={_format_status_value(snapshot['wireplumber_policy'])}",
             f"launch helper={_format_status_value('active' if snapshot['portal_handoff_active'] else 'idle')}",
         ]
         print(_format_kv("Status:", ", ".join(status_parts)))

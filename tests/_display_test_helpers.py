@@ -85,7 +85,6 @@ def temp_display_state(
             "sunshine_start_script",
             "input_bridge_script",
             "kwin_input_isolation_script",
-            "audio_guard_script",
             "audio_create_script",
             "audio_cleanup_script",
             "launch_app_script",
@@ -101,6 +100,8 @@ def temp_display_state(
             "kwin_input_isolation_status_file",
             "wayland_display_file",
             "audio_module_file",
+            "wireplumber_policy_script",
+            "wireplumber_policy_conf",
         ):
             if key in extra_paths:
                 target = extra_paths[key]

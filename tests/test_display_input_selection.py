@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from display import manager
 from display import sunshine_service
+from tests._display_test_helpers import temp_display_state
 
 
 class DisplayInputSelectionTests(unittest.TestCase):
@@ -314,253 +315,12 @@ H: Handlers=sysrq kbd event29
         manager._restore_sunshine_audio_sink(state)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
 
-    def test_snapshot_host_audio_defaults_ignores_managed_defaults(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "lts-sunshine-stereo",
-                "Default Source": "lts-sunshine-stereo.monitor",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: ""
-            manager._find_hardware_source = lambda exclude: ""
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-
-        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
-
-    def test_snapshot_host_audio_defaults_falls_back_to_hardware(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "lts-sunshine-stereo",
-                "Default Source": "lts-sunshine-stereo.monitor",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_00_1f.3.analog-stereo"
-            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_00_1f.3.analog-stereo"
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-
-        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
-        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
-
-    def test_snapshot_host_audio_defaults_partial_sink_only(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "lts-sunshine-stereo",
-                "Default Source": "alsa_input.pci-0000_00_1f.3.analog-stereo",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_00_1f.3.analog-stereo"
-            manager._find_hardware_source = lambda exclude: ""
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-
-        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
-        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
-
-    def test_snapshot_host_audio_defaults_partial_source_only(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "alsa_output.pci-0000_00_1f.3.analog-stereo",
-                "Default Source": "lts-sunshine-stereo.monitor",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: ""
-            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_00_1f.3.analog-stereo"
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-
-        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_00_1f.3.analog-stereo")
-        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_00_1f.3.analog-stereo")
-
-    def test_find_hardware_sink_excludes_managed_names(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\talsa_output.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
-                "1\tlts-sunshine-stereo\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                "2\tsink-sunshine-surround51\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                if entity == "sinks" else ""
-            )
-            result = manager._find_hardware_sink(["lts-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "alsa_output.pci-0000_00_1f.3.analog-stereo")
-
-    def test_find_hardware_sink_returns_empty_when_no_hardware_found(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\tlts-sunshine-stereo\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                if entity == "sinks" else ""
-            )
-            result = manager._find_hardware_sink(["lts-sunshine-stereo"])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "")
-
-    def test_find_hardware_source_skips_monitors_and_managed(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\tlts-sunshine-stereo.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                "1\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
-                "2\talsa_input.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                if entity == "sources" else ""
-            )
-            result = manager._find_hardware_source(["lts-sunshine-stereo.monitor"])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "alsa_input.pci-0000_00_1f.3.analog-stereo")
-
-    def test_find_hardware_source_returns_empty_when_only_monitors_remain(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\tlts-sunshine-stereo.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                "1\talsa_output.pci-0000_00_1f.3.analog-stereo.monitor\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tIDLE\n"
-                if entity == "sources" else ""
-            )
-            result = manager._find_hardware_source(["lts-sunshine-stereo.monitor"])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "")
-
-    def test_find_hardware_sink_skips_auto_null(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\tauto_null\tmodule-null-sink.c\ts16le 2ch 48000Hz\tIDLE\n"
-                "1\talsa_output.pci-0000_2d_00.1.hdmi-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                if entity == "sinks" else ""
-            )
-            result = manager._find_hardware_sink([])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "alsa_output.pci-0000_2d_00.1.hdmi-stereo")
-
-    def test_find_hardware_source_skips_auto_null_monitor(self) -> None:
-        original = manager._pactl_list_short
-        try:
-            manager._pactl_list_short = lambda entity: (
-                "0\tauto_null.monitor\tmodule-null-sink.c\ts16le 2ch 48000Hz\tIDLE\n"
-                "1\talsa_input.pci-0000_2d_00.1.hdmi-stereo\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n"
-                if entity == "sources" else ""
-            )
-            result = manager._find_hardware_source([])
-        finally:
-            manager._pactl_list_short = original
-        self.assertEqual(result, "alsa_input.pci-0000_2d_00.1.hdmi-stereo")
-
-    def test_snapshot_ignores_auto_null_default(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "auto_null",
-                "Default Source": "auto_null.monitor",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: "alsa_output.pci-0000_2d_00.1.hdmi-stereo"
-            manager._find_hardware_source = lambda exclude: "alsa_input.pci-0000_2d_00.1.hdmi-stereo"
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-        self.assertEqual(state["host_audio_defaults"]["sink"], "alsa_output.pci-0000_2d_00.1.hdmi-stereo")
-        self.assertEqual(state["host_audio_defaults"]["source"], "alsa_input.pci-0000_2d_00.1.hdmi-stereo")
-
-    def test_snapshot_auto_null_no_fallback(self) -> None:
-        state = manager._default_state()
-        original_pactl_info_value = manager._pactl_info_value
-        original_find_hardware_sink = manager._find_hardware_sink
-        original_find_hardware_source = manager._find_hardware_source
-        try:
-            values = {
-                "Default Sink": "auto_null",
-                "Default Source": "auto_null.monitor",
-            }
-            manager._pactl_info_value = lambda key: values.get(key, "")
-            manager._find_hardware_sink = lambda exclude: ""
-            manager._find_hardware_source = lambda exclude: ""
-            manager._snapshot_host_audio_defaults(state)
-        finally:
-            manager._pactl_info_value = original_pactl_info_value
-            manager._find_hardware_sink = original_find_hardware_sink
-            manager._find_hardware_source = original_find_hardware_source
-        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
-
-    def test_start_display_does_not_snapshot_host_audio_defaults(self) -> None:
-        state, _conf_path = self._temp_audio_state()
-        original_load_state = manager.load_state
-        original_refresh_managed_files = manager.refresh_managed_files
-        original_save_state = manager.save_state
-        original_drain_stale_audio_activation_env = manager._drain_stale_audio_activation_env
-        original_sunshine_unit = sunshine_service.sunshine_unit
-        original_start_sunshine_unit = sunshine_service.start_sunshine_unit
-        drained = []
-        try:
-            manager.load_state = lambda: state
-            manager.refresh_managed_files = lambda current=None: current if current is not None else state
-            manager.save_state = lambda current: None
-            manager._drain_stale_audio_activation_env = lambda: drained.append(True)
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
-            sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
-                ["systemctl", "--user", "start", unit], 0, "", ""
-            )
-
-            result = manager.start_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.refresh_managed_files = original_refresh_managed_files
-            manager.save_state = original_save_state
-            manager._drain_stale_audio_activation_env = original_drain_stale_audio_activation_env
-            sunshine_service.sunshine_unit = original_sunshine_unit
-            sunshine_service.start_sunshine_unit = original_start_sunshine_unit
-
-        self.assertEqual(result, 0)
-        self.assertEqual(drained, [True])
-        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
-
     def test_start_display_restores_audio_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_bridge_runtime_enabled = manager._bridge_runtime_enabled
-        original_snapshot_host_audio_defaults = manager._snapshot_host_audio_defaults
-        original_restore_host_audio_defaults = manager._restore_host_audio_defaults
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_start_sunshine_unit = sunshine_service.start_sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
@@ -569,12 +329,6 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
             manager._bridge_runtime_enabled = lambda current: False
-            manager._snapshot_host_audio_defaults = lambda current: current.update(
-                {"host_audio_defaults": {"sink": "host-sink", "source": "host-source"}}
-            )
-            manager._restore_host_audio_defaults = lambda current: current.update(
-                {"host_audio_defaults": {"sink": "", "source": ""}}
-            )
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "start", unit], 1, "", "boom"
@@ -589,15 +343,12 @@ H: Handlers=sysrq kbd event29
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._bridge_runtime_enabled = original_bridge_runtime_enabled
-            manager._snapshot_host_audio_defaults = original_snapshot_host_audio_defaults
-            manager._restore_host_audio_defaults = original_restore_host_audio_defaults
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.start_sunshine_unit = original_start_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
         self.assertEqual(result, 1)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
-        self.assertEqual(state["host_audio_defaults"], {"sink": "", "source": ""})
 
     def test_stop_display_restores_original_audio_target(self) -> None:
         state, conf_path = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
@@ -607,7 +358,6 @@ H: Handlers=sysrq kbd event29
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
         original_clear_input_bridge_status_file = manager._clear_input_bridge_status_file
-        original_restore_host_audio_defaults = manager._restore_host_audio_defaults
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
@@ -616,7 +366,6 @@ H: Handlers=sysrq kbd event29
                 ["systemctl", "--user", "stop", unit], 0, "", ""
             )
             manager._clear_input_bridge_status_file = lambda current: None
-            manager._restore_host_audio_defaults = lambda current: None
 
             result = manager.stop_display()
         finally:
@@ -625,7 +374,6 @@ H: Handlers=sysrq kbd event29
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
             manager._clear_input_bridge_status_file = original_clear_input_bridge_status_file
-            manager._restore_host_audio_defaults = original_restore_host_audio_defaults
 
         self.assertEqual(result, 0)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
@@ -647,7 +395,6 @@ H: Handlers=sysrq kbd event29
         state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
         state["paths"]["input_bridge_script"] = str(base / "lutristosunshine-input-bridge.py")
         state["paths"]["kwin_input_isolation_script"] = str(base / "lutristosunshine-kwin-input-isolation.py")
-        state["paths"]["audio_guard_script"] = str(base / "lutristosunshine-guard-audio-defaults.sh")
         state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-display-service.sh")
         state["paths"]["portal_active_file"] = str(base / "portal-active")
         state["paths"]["portal_lock_file"] = str(base / "portal-lock")
@@ -667,13 +414,15 @@ H: Handlers=sysrq kbd event29
         state["paths"]["set_resolution_script"] = str(base / "lutristosunshine-set-resolution.sh")
         state["paths"]["reset_resolution_script"] = str(base / "lutristosunshine-reset-resolution.sh")
         state["paths"]["get_gpu_addr"] = str(base / "lutristosunshine-get-gpu-addr.sh")
+        state["paths"]["wireplumber_policy_script"] = str(base / "lts-audio-policy.lua")
+        state["paths"]["wireplumber_policy_conf"] = str(base / "54-lts-audio-policy.conf")
 
         for key in [
             "sunshine_override",
             "sway_config", "sway_start_script", "sunshine_start_script",
             "input_bridge_script",
             "kwin_input_isolation_script",
-            "audio_guard_script", "audio_create_script", "audio_cleanup_script",
+            "audio_create_script", "audio_cleanup_script",
             "sunshine_wrapper_script",
             "launch_app_script", "resolve_stream_fps_script",
             "apply_exact_refresh_script", "headless_prep_script",
@@ -697,12 +446,14 @@ H: Handlers=sysrq kbd event29
         original_stop_display = manager.stop_display
         original_remove_udev_rule = manager._remove_udev_rule
         original_daemon_reload = manager._daemon_reload
+        original_remove_wireplumber_policy = manager._remove_wireplumber_policy
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
             manager.stop_display = lambda: 0
             manager._remove_udev_rule = lambda current: True
             manager._daemon_reload = lambda: None
+            manager._remove_wireplumber_policy = lambda current: None
 
             result = manager.remove_display()
         finally:
@@ -711,6 +462,7 @@ H: Handlers=sysrq kbd event29
             manager.stop_display = original_stop_display
             manager._remove_udev_rule = original_remove_udev_rule
             manager._daemon_reload = original_daemon_reload
+            manager._remove_wireplumber_policy = original_remove_wireplumber_policy
 
         self.assertEqual(result, 0)
         self.assertFalse(Path(state["paths"]["sunshine_override"]).exists())
@@ -1068,7 +820,6 @@ H: Handlers=sysrq kbd event29
         sunshine_wrapper = scripts[Path(state["paths"]["sunshine_wrapper_script"])]
         audio_create = scripts[Path(state["paths"]["audio_create_script"])]
         audio_cleanup = scripts[Path(state["paths"]["audio_cleanup_script"])]
-        audio_guard = scripts[Path(state["paths"]["audio_guard_script"])]
         launch_script = scripts[Path(state["paths"]["launch_app_script"])]
         headless_prep_script = scripts[Path(state["paths"]["headless_prep_script"])]
         sunshine_override = units[Path(state["paths"]["sunshine_override"])]
@@ -1089,43 +840,6 @@ H: Handlers=sysrq kbd event29
         self.assertIn('run_audio_command() {', audio_cleanup)
         self.assertIn('local command=(/usr/bin/env', audio_cleanup)
         self.assertIn('run_audio_command pactl unload-module', audio_cleanup)
-        self.assertIn("sink-sunshine-stereo", audio_guard)
-        self.assertIn("sink-sunshine-surround51", audio_guard)
-        self.assertIn("sink-sunshine-surround71", audio_guard)
-        self.assertIn('poll_interval="0.5"', audio_guard)
-        self.assertIn('run_audio_command() {', audio_guard)
-        self.assertIn('local command=(/usr/bin/env', audio_guard)
-        self.assertIn('"DBUS_SESSION_BUS_ADDRESS=$dbus_value"', audio_guard)
-        self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_guard)
-        self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_guard)
-        self.assertIn("enforce_host_defaults", audio_guard)
-        self.assertNotIn("enforce_headless_routing", audio_guard)
-        self.assertIn("enforce_sunshine_capture_source() {", audio_guard)
-        self.assertIn("        enforce_sunshine_capture_source\n", audio_guard)
-        self.assertIn("sunshine-record", audio_guard)
-        self.assertIn("run_audio_command pactl move-source-output", audio_guard)
-        self.assertIn("enforce_game_routing() {", audio_guard)
-        self.assertIn("        enforce_game_routing\n", audio_guard)
-        self.assertIn("local game_streams", audio_guard)
-        # The guard must evict host audio from managed sinks using the explicit
-        # game stream marker. Host apps lack it; game apps inherit it at launch.
-        # The stray-routing is gated on PipeWire detection — classic PulseAudio does
-        # not expose enough reliable metadata for this guard to correct safely.
-        self.assertIn("IS_PIPEWIRE_PULSE", audio_guard)
-        self.assertIn('grep -qi "PipeWire"', audio_guard)
-        self.assertIn("enforce_stray_routing() {", audio_guard)
-        self.assertIn('        enforce_stray_routing "$host_sink"\n', audio_guard)
-        self.assertIn("lutristosunshine.stream", audio_guard)
-        self.assertIn("has_game_marker", audio_guard)
-        self.assertIn("pactl move-sink-input", audio_guard)
-        self.assertIn("while true; do", audio_guard)
-        self.assertIn("run_audio_command pactl info", audio_guard)
-        self.assertIn("run_audio_command pactl set-default-sink", audio_guard)
-        self.assertIn("run_audio_command pactl set-default-source", audio_guard)
-        # The guard must re-route playback that Sunshine strands on its own sinks back
-        # to our managed sink (fixes audio loss after client disconnect/reconnect).
-        self.assertIn("run_audio_command pactl move-sink-input", audio_guard)
-        self.assertNotIn("pactl subscribe", audio_guard)
         # Per-process env -i still routes native (non-flatpak) games to the
         # managed sink and tags their streams as games.
         self.assertIn('"PULSE_SINK=lts-sunshine-stereo"', launch_script)
@@ -1328,13 +1042,14 @@ H: Handlers=sysrq kbd event29
             "state_path", "sway_config", "sway_start_script", "sunshine_start_script",
             "sunshine_wrapper_script",
             "input_bridge_script", "kwin_input_isolation_script",
-            "audio_guard_script", "audio_create_script", "audio_cleanup_script",
+            "audio_create_script", "audio_cleanup_script",
             "launch_app_script", "resolve_stream_fps_script",
             "apply_exact_refresh_script", "headless_prep_script",
             "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
             "portal_active_file", "portal_lock_file",
             "input_bridge_status_file", "kwin_input_isolation_status_file",
             "wayland_display_file", "audio_module_file",
+            "wireplumber_policy_script", "wireplumber_policy_conf",
         ):
             if state["paths"].get(_key):
                 _p = _remove_base / Path(state["paths"][_key]).name
@@ -1347,6 +1062,7 @@ H: Handlers=sysrq kbd event29
         original_cleanup_managed_overrides = sunshine_service.cleanup_managed_overrides
         original_daemon_reload = manager._daemon_reload
         original_save_state = manager.save_state
+        original_remove_wireplumber_policy = manager._remove_wireplumber_policy
         try:
             manager.load_state = lambda: state
             manager.stop_display = lambda: 1
@@ -1354,6 +1070,7 @@ H: Handlers=sysrq kbd event29
             sunshine_service.cleanup_managed_overrides = lambda current: cleanup_calls.append("overrides")
             manager._daemon_reload = lambda: None
             manager.save_state = lambda current: None
+            manager._remove_wireplumber_policy = lambda current: None
 
             result = manager.remove_display()
         finally:
@@ -1363,110 +1080,103 @@ H: Handlers=sysrq kbd event29
             sunshine_service.cleanup_managed_overrides = original_cleanup_managed_overrides
             manager._daemon_reload = original_daemon_reload
             manager.save_state = original_save_state
+            manager._remove_wireplumber_policy = original_remove_wireplumber_policy
 
         self.assertEqual(result, 0)
         self.assertIn("udev", cleanup_calls)
         self.assertIn("overrides", cleanup_calls)
 
 
-    def test_global_prep_cmd_written_on_start(self) -> None:
-        state, conf_path = self._temp_audio_state()
-        original_load_state = manager.load_state
-        original_refresh_managed_files = manager.refresh_managed_files
-        original_save_state = manager.save_state
-        original_drain_stale_audio_activation_env = manager._drain_stale_audio_activation_env
-        original_sunshine_unit = sunshine_service.sunshine_unit
-        original_start_sunshine_unit = sunshine_service.start_sunshine_unit
-        try:
-            manager.load_state = lambda: state
-            manager.refresh_managed_files = lambda current=None: current if current is not None else state
-            manager.save_state = lambda current: None
-            manager._drain_stale_audio_activation_env = lambda: None
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
-            sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
-                ["systemctl", "--user", "start", unit], 0, "", ""
-            )
+    def test_wireplumber_policy_script_names_managed_sinks(self) -> None:
+        state = manager._default_state()
+        script = manager._wireplumber_policy_script(state)
 
-            result = manager.start_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.refresh_managed_files = original_refresh_managed_files
-            manager.save_state = original_save_state
-            manager._drain_stale_audio_activation_env = original_drain_stale_audio_activation_env
-            sunshine_service.sunshine_unit = original_sunshine_unit
-            sunshine_service.start_sunshine_unit = original_start_sunshine_unit
+        self.assertIn('audio_sink = "lts-sunshine-stereo"', script)
+        for name in ("sink-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"):
+            self.assertIn(f'["{name}"] = true', script)
+        self.assertIn('name = "lts-audio/guard-default-sink"', script)
+        self.assertIn('name = "lts-audio/route-game-and-recorder"', script)
 
-        self.assertEqual(result, 0)
-        conf_text = conf_path.read_text(encoding="utf-8")
-        self.assertIn("global_prep_cmd", conf_text)
-        self.assertIn("stream-audio-start", conf_text)
-        self.assertIn("stream-audio-stop", conf_text)
+    def test_wireplumber_route_hook_overrides_preset_target(self) -> None:
+        # Regression for the strand-on-host bug: when a client disconnects and
+        # reconnects, stream-restore / the Flatpak portal rewrites a game
+        # stream's effective target.object to the host default, and the old
+        # route hook bailed on `if target then return end`, leaving game audio
+        # on the host. The hook must pin tagged streams authoritatively, so the
+        # defer line must be gone; untagged streams are skipped by the want-guard.
+        state = manager._default_state()
+        script = manager._wireplumber_policy_script(state)
+        self.assertNotIn("if target then return end", script)
 
-    def test_global_prep_cmd_restored_on_stop(self) -> None:
-        user_entry = {"do": "user-cmd", "undo": "user-undo"}
-        our_entry = {
-            "do": manager._default_state()["paths"]["stream_audio_start_script"],
-            "undo": manager._default_state()["paths"]["stream_audio_stop_script"],
-        }
-        import json as _json
-        combined = _json.dumps([user_entry, our_entry])
-        state, conf_path = self._temp_audio_state(f"global_prep_cmd = {combined}\n")
-        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
-        original_load_state = manager.load_state
-        original_save_state = manager.save_state
-        original_sunshine_unit = sunshine_service.sunshine_unit
-        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
-        try:
-            manager.load_state = lambda: state
-            manager.save_state = lambda current: None
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
-            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
-                ["systemctl", "--user", "stop", unit], 0, "", ""
-            )
+    def test_wireplumber_policy_conf_registers_component_and_profile(self) -> None:
+        conf = manager._wireplumber_policy_conf()
 
-            result = manager.stop_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.save_state = original_save_state
-            sunshine_service.sunshine_unit = original_sunshine_unit
-            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
+        self.assertIn(manager.WIREPLUMBER_POLICY_SCRIPT_NAME, conf)
+        self.assertIn("script/lua", conf)
+        self.assertIn("script.lts-audio-policy", conf)
+        self.assertIn("script.lts-audio-policy = required", conf)
 
-        self.assertEqual(result, 0)
-        conf_text = conf_path.read_text(encoding="utf-8")
-        self.assertIn("user-cmd", conf_text)
-        self.assertNotIn("stream-audio-start", conf_text)
-
-    def test_global_prep_cmd_removed_if_absent_originally(self) -> None:
-        state, conf_path = self._temp_audio_state()
-        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
-        original_load_state = manager.load_state
-        original_save_state = manager.save_state
-        original_sunshine_unit = sunshine_service.sunshine_unit
-        original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
-        try:
-            manager.load_state = lambda: state
-            manager.save_state = lambda current: None
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
-            sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
-                ["systemctl", "--user", "stop", unit], 0, "", ""
-            )
-
-            result = manager.stop_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.save_state = original_save_state
-            sunshine_service.sunshine_unit = original_sunshine_unit
-            sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
-
-        self.assertEqual(result, 0)
-        self.assertNotIn("global_prep_cmd", conf_path.read_text(encoding="utf-8"))
-
-    def test_stream_audio_scripts_in_managed_paths(self) -> None:
+    def test_wireplumber_policy_files_in_managed_paths(self) -> None:
         state = manager._default_state()
         paths = manager._managed_setup_paths(state)
         path_names = [p.name for p in paths]
-        self.assertIn("lutristosunshine-stream-audio-start.sh", path_names)
-        self.assertIn("lutristosunshine-stream-audio-stop.sh", path_names)
+
+        self.assertIn(manager.WIREPLUMBER_POLICY_SCRIPT_NAME, path_names)
+        self.assertIn(manager.WIREPLUMBER_POLICY_CONF_NAME, path_names)
+
+    def test_temp_display_state_redirects_wireplumber_paths(self) -> None:
+        # remove_display unlinks the WP policy files; if the helper ever stops
+        # redirecting these paths to the temp dir, that unlink hits the real
+        # ~/.config/wireplumber install. Guard the redirect in CI.
+        with temp_display_state(manager) as (state, base):
+            for key in ("wireplumber_policy_script", "wireplumber_policy_conf"):
+                self.assertTrue(
+                    state["paths"][key].startswith(str(base)),
+                    f"{key} leaked to real path: {state['paths'][key]}",
+                )
+
+    def test_write_and_remove_wireplumber_policy_files_round_trip(self) -> None:
+        with temp_display_state(manager) as (state, base):
+            script_path = Path(state["paths"]["wireplumber_policy_script"])
+            conf_path = Path(state["paths"]["wireplumber_policy_conf"])
+            manager._write_file(script_path, manager._wireplumber_policy_script(state))
+            manager._write_file(conf_path, manager._wireplumber_policy_conf())
+            self.assertTrue(script_path.exists())
+            self.assertTrue(conf_path.exists())
+            self.assertIn("LTS audio policy registered", script_path.read_text())
+            self.assertIn("script.lts-audio-policy = required", conf_path.read_text())
+            manager._remove_wireplumber_policy(state)
+            self.assertFalse(script_path.exists())
+            self.assertFalse(conf_path.exists())
+
+    def test_strip_legacy_global_prep_cmd_removes_lts_entries(self) -> None:
+        user_entry = {"do": "user-cmd", "undo": "user-undo"}
+        lts_entry = {
+            "do": "/opt/lutristosunshine/bin/lutristosunshine-stream-audio-start.sh",
+            "undo": "/opt/lutristosunshine/bin/lutristosunshine-stream-audio-stop.sh",
+        }
+        combined = json.dumps([user_entry, lts_entry])
+        state, conf_path = self._temp_audio_state(f"global_prep_cmd = {combined}\n")
+
+        manager._strip_legacy_global_prep_cmd(state)
+
+        conf_text = conf_path.read_text(encoding="utf-8")
+        self.assertIn("global_prep_cmd", conf_text)
+        self.assertIn("user-cmd", conf_text)
+        self.assertNotIn("stream-audio-start", conf_text)
+        self.assertNotIn("stream-audio-stop", conf_text)
+
+    def test_strip_legacy_global_prep_cmd_removes_key_when_only_lts_entries_remain(self) -> None:
+        lts_entry = {
+            "do": "/opt/lutristosunshine/bin/lutristosunshine-stream-audio-start.sh",
+            "undo": "/opt/lutristosunshine/bin/lutristosunshine-stream-audio-stop.sh",
+        }
+        combined = json.dumps([lts_entry])
+        state, conf_path = self._temp_audio_state(f"global_prep_cmd = {combined}\n")
+
+        manager._strip_legacy_global_prep_cmd(state)
+
+        self.assertNotIn("global_prep_cmd", conf_path.read_text(encoding="utf-8"))
 
 if __name__ == "__main__":
     unittest.main()
