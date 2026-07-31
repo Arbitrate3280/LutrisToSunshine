@@ -10,7 +10,7 @@ from display import sunshine_service
 from tests._display_test_helpers import temp_display_state
 
 
-class DisplayInputSelectionTests(unittest.TestCase):
+class DisplayLifecycleTests(unittest.TestCase):
     def _temp_audio_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
@@ -23,131 +23,9 @@ class DisplayInputSelectionTests(unittest.TestCase):
         state["paths"]["sunshine_conf"] = str(conf_path)
         return state, conf_path
 
-    def test_selection_id_is_stable(self) -> None:
-        fingerprint = {
-            "by_id": "/dev/input/by-id/bluetooth-Sony_Controller-event-joystick",
-            "uniq": "aa:bb:cc:dd",
-            "phys": "usb-0000:00:00.0-1/input0",
-            "vendor_id": "054c",
-            "product_id": "09cc",
-            "name": "Wireless Controller",
-        }
-        self.assertEqual(
-            manager._selection_id_from_fingerprint(fingerprint),
-            manager._selection_id_from_fingerprint(dict(fingerprint)),
-        )
-
-    def test_normalized_selection_entry_backfills_missing_fields(self) -> None:
-        normalized = manager._normalized_selection_entry(
-            {
-                "label": "",
-                "fingerprint": {
-                    "vendor_id": "054C",
-                    "product_id": "09CC",
-                    "name": "Wireless Controller",
-                },
-            }
-        )
-
-        self.assertEqual(normalized["label"], "Wireless Controller")
-        self.assertEqual(normalized["fingerprint"]["vendor_id"], "054c")
-        self.assertEqual(normalized["fingerprint"]["product_id"], "09cc")
-        self.assertTrue(normalized["selection_id"])
-
-    def test_selection_matches_by_id_first(self) -> None:
-        selection = manager._normalized_selection_entry(
-            {
-                "label": "DualShock",
-                "fingerprint": {
-                    "by_id": "/dev/input/by-id/bluetooth-Sony_Controller-event-joystick",
-                    "uniq": "aa:bb:cc:dd",
-                    "phys": "ignored",
-                    "vendor_id": "054c",
-                    "product_id": "09cc",
-                    "name": "Wireless Controller",
-                },
-            }
-        )
-        device = {
-            "fingerprint": {
-                "by_id": "/dev/input/by-id/bluetooth-Sony_Controller-event-joystick",
-                "uniq": "different",
-                "phys": "different",
-                "vendor_id": "054c",
-                "product_id": "09cc",
-                "name": "Wireless Controller",
-            }
-        }
-
-        self.assertTrue(manager._selection_matches_device(selection, device))
-
-    def test_parse_selection_numbers_supports_ranges(self) -> None:
-        parsed = manager._parse_selection_numbers("1,3-4", 4)
-        self.assertEqual(parsed, [0, 2, 3])
-
-    def test_parse_selection_toggle_numbers_keeps_existing_selection_on_blank(self) -> None:
-        self.assertIsNone(manager._parse_selection_toggle_numbers("", 3))
-
-    def test_toggle_selection_entries_adds_new_device_without_replacing_existing(self) -> None:
-        wireless = {
-            "selection_id": "wireless-controller",
-            "label": "Wireless Controller",
-            "fingerprint": {
-                "by_id": "/dev/input/by-id/bluetooth-Sony_Controller-event-joystick",
-                "uniq": "aa:bb:cc:dd",
-                "phys": "usb-0000:00:00.0-1/input0",
-                "vendor_id": "054c",
-                "product_id": "09cc",
-                "name": "Wireless Controller",
-            },
-        }
-        bitdo = {
-            "selection_id": "8bitdo-sn30-pro",
-            "label": "8Bitdo SN30 Pro",
-            "fingerprint": {
-                "by_id": "/dev/input/by-id/bluetooth-8Bitdo_SN30_Pro-event-joystick",
-                "uniq": "78:46:5c:ae:56:64",
-                "phys": "usb-0000:02:00.0-6/input0",
-                "vendor_id": "2dc8",
-                "product_id": "6101",
-                "name": "8Bitdo SN30 Pro",
-            },
-        }
-
-        updated = manager._toggle_selection_entries([wireless], [bitdo, wireless], [0])
-
-        self.assertEqual([entry["label"] for entry in updated], ["Wireless Controller", "8Bitdo SN30 Pro"])
-
-    def test_toggle_selection_entries_removes_selected_device(self) -> None:
-        wireless = {
-            "selection_id": "wireless-controller",
-            "label": "Wireless Controller",
-            "fingerprint": {
-                "by_id": "/dev/input/by-id/bluetooth-Sony_Controller-event-joystick",
-                "uniq": "aa:bb:cc:dd",
-                "phys": "usb-0000:00:00.0-1/input0",
-                "vendor_id": "054c",
-                "product_id": "09cc",
-                "name": "Wireless Controller",
-            },
-        }
-
-        updated = manager._toggle_selection_entries([wireless], [wireless], [0])
-
-        self.assertEqual(updated, [])
-
-    def test_bridge_phys_prefix_detection(self) -> None:
-        self.assertTrue(manager._is_bridge_input_phys("lts-inputbridge/controller-1"))
-        self.assertFalse(manager._is_bridge_input_phys("usb-0000:02:00.0-6/input0"))
-
     def test_udev_rule_does_not_match_bridge_phys_prefix(self) -> None:
         rule = manager._udev_rule()
         self.assertNotIn('ATTRS{phys}=="lts-inputbridge/*"', rule)
-
-    def test_udev_rule_grants_uhid_access(self) -> None:
-        rule = manager._udev_rule()
-        self.assertIn('KERNEL=="uhid"', rule)
-        self.assertIn('SUBSYSTEM=="misc"', rule)
 
     def test_udev_rule_grants_current_user_access_to_sunshine_inputs(self) -> None:
         original_user = manager.current_user_name
@@ -232,7 +110,7 @@ I: Bus=0003 Vendor=beef Product=dead Version=0111
 N: Name="Keyboard passthrough"
 H: Handlers=sysrq kbd event29
 """
-        with patch.object(manager.Path, "read_text", return_value=input_listing):
+        with patch("pathlib.Path.read_text", return_value=input_listing):
             devices = manager._sunshine_virtual_input_devices()
         self.assertEqual(
             devices,
@@ -320,7 +198,6 @@ H: Handlers=sysrq kbd event29
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
-        original_bridge_runtime_enabled = manager._bridge_runtime_enabled
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_start_sunshine_unit = sunshine_service.start_sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
@@ -328,7 +205,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = lambda: state
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
-            manager._bridge_runtime_enabled = lambda current: False
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "start", unit], 1, "", "boom"
@@ -342,7 +218,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
-            manager._bridge_runtime_enabled = original_bridge_runtime_enabled
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.start_sunshine_unit = original_start_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
@@ -357,7 +232,6 @@ H: Handlers=sysrq kbd event29
         original_save_state = manager.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
-        original_clear_input_bridge_status_file = manager._clear_input_bridge_status_file
         try:
             manager.load_state = lambda: state
             manager.save_state = lambda current: None
@@ -365,7 +239,6 @@ H: Handlers=sysrq kbd event29
             sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "stop", unit], 0, "", ""
             )
-            manager._clear_input_bridge_status_file = lambda current: None
 
             result = manager.stop_display()
         finally:
@@ -373,7 +246,6 @@ H: Handlers=sysrq kbd event29
             manager.save_state = original_save_state
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
-            manager._clear_input_bridge_status_file = original_clear_input_bridge_status_file
 
         self.assertEqual(result, 0)
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
@@ -393,12 +265,10 @@ H: Handlers=sysrq kbd event29
         state["paths"]["systemd_user_dir"] = str(base)
         state["paths"]["sunshine_override_dir"] = str(override_dir)
         state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
-        state["paths"]["input_bridge_script"] = str(base / "lutristosunshine-input-bridge.py")
         state["paths"]["kwin_input_isolation_script"] = str(base / "lutristosunshine-kwin-input-isolation.py")
         state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-display-service.sh")
         state["paths"]["portal_active_file"] = str(base / "portal-active")
         state["paths"]["portal_lock_file"] = str(base / "portal-lock")
-        state["paths"]["input_bridge_status_file"] = str(base / "input-bridge-status.json")
         state["paths"]["kwin_input_isolation_status_file"] = str(base / "kwin-input-isolation-status.json")
         state["paths"]["wayland_display_file"] = str(base / "wayland-display")
         state["paths"]["audio_module_file"] = str(base / "audio-module-id")
@@ -420,7 +290,6 @@ H: Handlers=sysrq kbd event29
         for key in [
             "sunshine_override",
             "sway_config", "sway_start_script", "sunshine_start_script",
-            "input_bridge_script",
             "kwin_input_isolation_script",
             "audio_create_script", "audio_cleanup_script",
             "sunshine_wrapper_script",
@@ -429,7 +298,6 @@ H: Handlers=sysrq kbd event29
             "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
             "portal_active_file",
             "portal_lock_file",
-            "input_bridge_status_file",
             "kwin_input_isolation_status_file",
             "wayland_display_file",
             "audio_module_file",
@@ -626,13 +494,11 @@ H: Handlers=sysrq kbd event29
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_bridge_service_state = manager._bridge_service_state
         original_installation_audit = sunshine_service.sunshine_installation_audit
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
             sunshine_service.is_sunshine_service_active = lambda: True
-            manager._bridge_service_state = lambda: "inactive"
             sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
                 managed_unit=sunshine_service.SUNSHINE_UNIT,
                 managed_type="native",
@@ -646,7 +512,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._bridge_service_state = original_bridge_service_state
             sunshine_service.sunshine_installation_audit = original_installation_audit
 
         install_check = next(check for check in report["checks"] if check["label"] == "Sunshine installation")
@@ -661,13 +526,11 @@ H: Handlers=sysrq kbd event29
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_bridge_service_state = manager._bridge_service_state
         original_installation_audit = sunshine_service.sunshine_installation_audit
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
             sunshine_service.is_sunshine_service_active = lambda: True
-            manager._bridge_service_state = lambda: "inactive"
             sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
                 managed_unit=sunshine_service.SUNSHINE_UNIT,
                 managed_type="native",
@@ -679,7 +542,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._bridge_service_state = original_bridge_service_state
             sunshine_service.sunshine_installation_audit = original_installation_audit
 
         self.assertFalse(any(check["label"] == "Sunshine installation" for check in report["checks"]))
@@ -713,13 +575,11 @@ H: Handlers=sysrq kbd event29
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_bridge_service_state = manager._bridge_service_state
         original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager._bridge_service_state = lambda: "inactive"
             manager._sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
             with patch.dict(
                 manager.os.environ,
@@ -736,7 +596,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._bridge_service_state = original_bridge_service_state
             manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 
         self.assertEqual(report["summary"], "degraded")
@@ -774,13 +633,11 @@ H: Handlers=sysrq kbd event29
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_bridge_service_state = manager._bridge_service_state
         original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
         try:
             manager.load_state = lambda: state
             manager._ensure_dependencies = lambda: []
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager._bridge_service_state = lambda: "inactive"
             manager._sunshine_virtual_input_devices = lambda: [
                 {"name": "Mouse passthrough", "event_path": "/dev/input/event27"},
                 {"name": "Mouse passthrough (absolute)", "event_path": "/dev/input/event28"},
@@ -803,7 +660,6 @@ H: Handlers=sysrq kbd event29
             manager.load_state = original_load_state
             manager._ensure_dependencies = original_ensure_dependencies
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._bridge_service_state = original_bridge_service_state
             manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 
         kwin_check = next(check for check in report["checks"] if check["label"] == "KWin isolation")
@@ -835,7 +691,7 @@ H: Handlers=sysrq kbd event29
         self.assertIn('local command=(/usr/bin/env', audio_create)
         self.assertIn('command+=("PULSE_SERVER=$pulse_server_value")', audio_create)
         self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_create)
-        self.assertIn('run_audio_command pactl list short sinks', audio_create)
+        self.assertIn('run_audio_command pactl list sinks short', audio_create)
         self.assertIn('run_audio_command pactl load-module', audio_create)
         self.assertIn('run_audio_command() {', audio_cleanup)
         self.assertIn('local command=(/usr/bin/env', audio_cleanup)
@@ -981,15 +837,6 @@ H: Handlers=sysrq kbd event29
             apply_exact_refresh_script,
         )
 
-    def test_input_bridge_script_includes_acl_user_helpers(self) -> None:
-        state = manager._default_state()
-        script = manager._input_bridge_script(state)
-
-        self.assertIn("import grp", script)
-        self.assertIn("def current_user_name():", script)
-        self.assertIn("def current_user_group():", script)
-
-
     def test_restart_display_returns_stop_failure_without_starting(self) -> None:
         state = manager._default_state()
         state["enabled"] = True
@@ -1041,13 +888,13 @@ H: Handlers=sysrq kbd event29
         for _key in (
             "state_path", "sway_config", "sway_start_script", "sunshine_start_script",
             "sunshine_wrapper_script",
-            "input_bridge_script", "kwin_input_isolation_script",
+            "kwin_input_isolation_script",
             "audio_create_script", "audio_cleanup_script",
             "launch_app_script", "resolve_stream_fps_script",
             "apply_exact_refresh_script", "headless_prep_script",
             "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
             "portal_active_file", "portal_lock_file",
-            "input_bridge_status_file", "kwin_input_isolation_status_file",
+            "kwin_input_isolation_status_file",
             "wayland_display_file", "audio_module_file",
             "wireplumber_policy_script", "wireplumber_policy_conf",
         ):

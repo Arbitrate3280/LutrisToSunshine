@@ -36,7 +36,6 @@ AUDIO_MODULE_PATH = PROFILE_ROOT / "audio-module-id"
 PORTAL_LOCK_PATH = PROFILE_ROOT / "flatpak-portal.lock"
 PORTAL_ACTIVE_PATH = PROFILE_ROOT / "flatpak-portal-active"
 LAST_LAUNCH_LOG_PATH = PROFILE_ROOT / "last-launch.log"
-INPUT_BRIDGE_STATUS_PATH = PROFILE_ROOT / "input-bridge-status.json"
 UDEV_RULE_PATH = "/etc/udev/rules.d/85-lutristosunshine-sunshine-input.rules"
 FALLBACK_WIDTH = 1920
 FALLBACK_HEIGHT = 1080
@@ -50,8 +49,6 @@ SUNSHINE_INPUT_NAME_MARKERS = [
     "Touch_passthrough",
     "Pen_passthrough",
 ]
-BRIDGE_DEVICE_PHYS_PREFIX = "lts-inputbridge/"
-HIDRAW_BUFFER_MAX = 4096
 # LutrisToSunshine audio policy lives in WirePlumber (event-driven, host-level)
 # rather than a polling bash guard. WP 0.5+ loads user scripts from XDG_DATA and
 # merges XDG_CONFIG fragments.
@@ -277,11 +274,6 @@ FLATPAK_PORTAL_ENV_KEYS = [
 FLATPAK_PORTAL_SWITCH_TIMEOUT = 20
 FLATPAK_PORTAL_SPAWN_TIMEOUT = 15
 FLATPAK_PORTAL_RESTORE_GRACE = 2
-GAMEPAD_BUTTON_CODES = {
-    304, 305, 307, 308, 310, 311, 312, 313, 314, 315, 316, 317, 318,
-    544, 545, 546, 547,
-}
-GAMEPAD_ABS_CODES = {0, 1, 2, 3, 4, 5, 16, 17}
 
 
 def _config_root_candidates() -> List[Path]:
@@ -303,18 +295,6 @@ def _resolve_sunshine_config_root(unit_name: str) -> Path:
         flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
         return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
     return detect_sunshine_config_root()
-
-
-def _evdev_import_error() -> Optional[str]:
-    try:
-        __import__("evdev")
-    except ImportError:
-        return (
-            "Missing Python module: evdev. "
-            f"Install it in the active interpreter with '{sys.executable} -m pip install evdev' "
-            "or rerun 'pip install -r requirements.txt' inside your virtualenv."
-        )
-    return None
 
 
 def _normalized_refresh_rate_sync_mode(value: Any) -> str:
@@ -360,264 +340,7 @@ def _normalized_custom_display_mode(value: Any) -> Dict[str, Any]:
     }
 
 
-def _preferred_event_symlink(event_path: str, directory: str) -> str:
-    candidates = []
-    for candidate in glob.glob(os.path.join(directory, "*")):
-        try:
-            if os.path.realpath(candidate) != os.path.realpath(event_path):
-                continue
-        except OSError:
-            continue
-        name = os.path.basename(candidate)
-        if "event" not in name:
-            continue
-        candidates.append(candidate)
-    candidates.sort(key=lambda item: (0 if "-event" in os.path.basename(item) else 1, len(item), item))
-    return candidates[0] if candidates else ""
 
-
-def _selection_id_from_fingerprint(fingerprint: Dict[str, Any]) -> str:
-    payload = json.dumps(
-        {
-            "by_id": safe_string(fingerprint.get("by_id")),
-            "uniq": safe_string(fingerprint.get("uniq")),
-            "phys": safe_string(fingerprint.get("phys")),
-            "vendor_id": safe_string(fingerprint.get("vendor_id")).lower(),
-            "product_id": safe_string(fingerprint.get("product_id")).lower(),
-            "name": safe_string(fingerprint.get("name")),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
-
-
-def _normalized_selection_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
-    fingerprint = entry.get("fingerprint", {}) if isinstance(entry, dict) else {}
-    if not isinstance(fingerprint, dict):
-        fingerprint = {}
-    normalized_fingerprint = {
-        "by_id": safe_string(fingerprint.get("by_id")),
-        "uniq": safe_string(fingerprint.get("uniq")),
-        "phys": safe_string(fingerprint.get("phys")),
-        "vendor_id": safe_string(fingerprint.get("vendor_id")).lower(),
-        "product_id": safe_string(fingerprint.get("product_id")).lower(),
-        "name": safe_string(fingerprint.get("name")),
-    }
-    selection_id = safe_string(entry.get("selection_id")) if isinstance(entry, dict) else ""
-    if not selection_id:
-        selection_id = _selection_id_from_fingerprint(normalized_fingerprint)
-    label = safe_string(entry.get("label")) if isinstance(entry, dict) else ""
-    if not label:
-        label = normalized_fingerprint["name"] or selection_id
-    return {
-        "selection_id": selection_id,
-        "label": label,
-        "fingerprint": normalized_fingerprint,
-    }
-
-
-def _empty_exclusive_input_state() -> Dict[str, Any]:
-    return {"devices": []}
-
-
-def _normalized_exclusive_input_state(raw: Any) -> Dict[str, Any]:
-    devices = []
-    if isinstance(raw, dict):
-        raw_devices = raw.get("devices", [])
-        if isinstance(raw_devices, list):
-            devices = [_normalized_selection_entry(item) for item in raw_devices if isinstance(item, dict)]
-    return {"devices": devices}
-
-
-def _has_selected_input_devices(state: Dict[str, Any]) -> bool:
-    return bool(state.get("exclusive_input_devices", {}).get("devices"))
-
-
-def _selection_matches_device(selection: Dict[str, Any], device_info: Dict[str, Any]) -> bool:
-    fingerprint = selection.get("fingerprint", {})
-    device_fingerprint = device_info.get("fingerprint", {})
-    by_id = safe_string(fingerprint.get("by_id"))
-    if by_id and by_id == safe_string(device_fingerprint.get("by_id")):
-        return True
-    uniq = safe_string(fingerprint.get("uniq"))
-    if uniq and uniq == safe_string(device_fingerprint.get("uniq")):
-        return True
-    phys = safe_string(fingerprint.get("phys"))
-    if (
-        phys
-        and phys == safe_string(device_fingerprint.get("phys"))
-        and safe_string(fingerprint.get("vendor_id")) == safe_string(device_fingerprint.get("vendor_id"))
-        and safe_string(fingerprint.get("product_id")) == safe_string(device_fingerprint.get("product_id"))
-        and safe_string(fingerprint.get("name")) == safe_string(device_fingerprint.get("name"))
-    ):
-        return True
-    return False
-
-
-def _device_matches_any_selection(device_info: Dict[str, Any], selections: List[Dict[str, Any]]) -> bool:
-    return any(_selection_matches_device(selection, device_info) for selection in selections)
-
-
-def _selection_runtime_identity_bits(runtime: Dict[str, Any]) -> List[str]:
-    identity_bits = []
-    source_name = safe_string(runtime.get("source_name"))
-    source_vendor = safe_string(runtime.get("source_vendor"))
-    source_product = safe_string(runtime.get("source_product"))
-    bridge_mode = safe_string(runtime.get("bridge_mode"))
-    hidraw_path = safe_string(runtime.get("hidraw_path"))
-    hid_output_forwarding = bool(runtime.get("hid_output_forwarding"))
-    virtual_event_path = safe_string(runtime.get("virtual_event_path"))
-    virtual_hidraw_path = safe_string(runtime.get("virtual_hidraw_path"))
-    if source_name:
-        identity_bits.append(source_name)
-    if source_vendor and source_product:
-        identity_bits.append(f"{source_vendor}:{source_product}")
-    if bridge_mode:
-        identity_bits.append(bridge_mode)
-    if hidraw_path:
-        identity_bits.append(os.path.basename(hidraw_path))
-    if virtual_event_path:
-        identity_bits.append(f"virt:{os.path.basename(virtual_event_path)}")
-    if virtual_hidraw_path:
-        identity_bits.append(f"virt:{os.path.basename(virtual_hidraw_path)}")
-    if hid_output_forwarding:
-        identity_bits.append("hid output")
-    if bridge_mode == "uhid":
-        output_count = int(runtime.get("uhid_output_count", 0) or 0)
-        get_count = int(runtime.get("uhid_get_report_count", 0) or 0)
-        set_count = int(runtime.get("uhid_set_report_count", 0) or 0)
-        open_count = int(runtime.get("uhid_open_count", 0) or 0)
-        close_count = int(runtime.get("uhid_close_count", 0) or 0)
-        identity_bits.append(f"o/g/s {output_count}/{get_count}/{set_count}")
-        identity_bits.append(f"open/close {open_count}/{close_count}")
-        last_uhid_event = safe_string(runtime.get("last_uhid_event"))
-        if last_uhid_event:
-            identity_bits.append(f"last:{last_uhid_event}")
-    elif bridge_mode == "uinput-fallback":
-        upload_count = int(runtime.get("ff_upload_count", 0) or 0)
-        play_count = int(runtime.get("ff_play_count", 0) or 0)
-        erase_count = int(runtime.get("ff_erase_count", 0) or 0)
-        identity_bits.append(f"ff u/p/e {upload_count}/{play_count}/{erase_count}")
-    ff_label = "rumble enabled" if runtime.get("ff_supported") else "no rumble"
-    identity_bits.append(ff_label)
-    return identity_bits
-
-
-def _controller_label(name: str, by_id: str, phys: str) -> str:
-    if by_id:
-        return f"{name} [{os.path.basename(by_id)}]"
-    if phys:
-        return f"{name} [{phys}]"
-    return name
-
-
-def _is_bridge_input_phys(phys: str) -> bool:
-    return safe_string(phys).startswith(BRIDGE_DEVICE_PHYS_PREFIX)
-
-
-def _runtime_bridge_node_paths(state: Optional[Dict[str, Any]] = None) -> Dict[str, set[str]]:
-    if state is None:
-        state = load_state()
-    runtime_status = _input_bridge_status(state)
-    paths = {
-        "virtual_event_paths": set(),
-        "virtual_hidraw_paths": set(),
-    }
-    for item in runtime_status.get("devices", []):
-        if not isinstance(item, dict):
-            continue
-        for key, bucket in (
-            ("virtual_event_path", "virtual_event_paths"),
-            ("virtual_hidraw_path", "virtual_hidraw_paths"),
-        ):
-            path = safe_string(item.get(key))
-            if not path:
-                continue
-            try:
-                paths[bucket].add(os.path.realpath(path))
-            except OSError:
-                continue
-    return paths
-
-
-def _list_controller_devices() -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    error = _evdev_import_error()
-    if error:
-        return [], error
-
-    from evdev import InputDevice, ecodes
-
-    runtime_paths = _runtime_bridge_node_paths()
-    devices: List[Dict[str, Any]] = []
-    for event_path in sorted(glob.glob("/dev/input/event*")):
-        try:
-            device = InputDevice(event_path)
-            capabilities = device.capabilities(absinfo=False)
-        except OSError:
-            continue
-
-        vendor_id = f"{device.info.vendor:04x}"
-        product_id = f"{device.info.product:04x}"
-        if (device.info.vendor, device.info.product) == (
-            SUNSHINE_INPUT_VENDOR_ID,
-            SUNSHINE_INPUT_PRODUCT_ID,
-        ):
-            device.close()
-            continue
-        try:
-            resolved_event_path = os.path.realpath(event_path)
-        except OSError:
-            resolved_event_path = event_path
-        if resolved_event_path in runtime_paths["virtual_event_paths"]:
-            device.close()
-            continue
-        if _is_bridge_input_phys(safe_string(device.phys)):
-            device.close()
-            continue
-
-        keys = set(capabilities.get(ecodes.EV_KEY, []))
-        abs_axes = set(capabilities.get(ecodes.EV_ABS, []))
-        if not (keys & GAMEPAD_BUTTON_CODES) and not (abs_axes & GAMEPAD_ABS_CODES):
-            device.close()
-            continue
-
-        name = safe_string(device.name) or os.path.basename(event_path)
-        by_id = _preferred_event_symlink(event_path, "/dev/input/by-id")
-        phys = safe_string(device.phys)
-        fingerprint = {
-            "by_id": by_id,
-            "uniq": safe_string(device.uniq),
-            "phys": phys,
-            "vendor_id": vendor_id,
-            "product_id": product_id,
-            "name": name,
-        }
-        devices.append(
-            {
-                "event_path": event_path,
-                "label": _controller_label(name, by_id, phys),
-                "fingerprint": fingerprint,
-                "selection_id": _selection_id_from_fingerprint(fingerprint),
-            }
-        )
-        device.close()
-
-    devices.sort(key=lambda item: (item["label"].lower(), item["event_path"]))
-    return devices, None
-
-
-def _input_bridge_status(state: Dict[str, Any]) -> Dict[str, Any]:
-    status_path = Path(state["paths"]["input_bridge_status_file"])
-    if not status_path.exists():
-        return {}
-    try:
-        payload = json.loads(status_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return payload
 
 
 def _active_launch_status(state: Dict[str, Any]) -> Dict[str, str]:
@@ -741,13 +464,11 @@ def _state_paths(unit_name: str) -> Dict[str, str]:
         "portal_lock_file": str(PORTAL_LOCK_PATH),
         "portal_active_file": str(PORTAL_ACTIVE_PATH),
         "last_launch_log_file": str(LAST_LAUNCH_LOG_PATH),
-        "input_bridge_status_file": str(INPUT_BRIDGE_STATUS_PATH),
         "wayland_display_file": str(WAYLAND_DISPLAY_PATH),
         "audio_module_file": str(AUDIO_MODULE_PATH),
         "systemd_user_dir": str(systemd_user_dir),
         "sunshine_override_dir": str(override_dir),
         "sunshine_override": str(override_dir / "override.conf"),
-        "input_bridge_script": str(BIN_ROOT / "lutristosunshine-input-bridge.py"),
         "kwin_input_isolation_script": str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
         "sunshine_conf": str(_resolve_sunshine_config_root(unit_name) / "sunshine.conf"),
         "kwin_input_isolation_status_file": str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
@@ -767,7 +488,6 @@ def _default_state() -> Dict[str, Any]:
         "sway_socket": DISPLAY_SOCKET_PATH,
         "udev_rule_path": UDEV_RULE_PATH,
         "sunshine_audio_sink": None,
-        "exclusive_input_devices": _empty_exclusive_input_state(),
         "gpu_mode": "auto",
         "gpu_card_path": "",
         "gpu_render_path": "",
@@ -795,9 +515,6 @@ def load_state() -> Dict[str, Any]:
     state["custom_display_mode"] = _normalized_custom_display_mode(
         state.get("custom_display_mode")
     )
-    state["exclusive_input_devices"] = _normalized_exclusive_input_state(
-        state.get("exclusive_input_devices")
-    )
     state["gpu_mode"] = safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto"
     state["gpu_card_path"] = safe_string(state.get("gpu_card_path"))
     state["gpu_render_path"] = safe_string(state.get("gpu_render_path"))
@@ -808,9 +525,6 @@ def load_state() -> Dict[str, Any]:
 
 def save_state(state: Dict[str, Any]) -> None:
     DISPLAY_ROOT.mkdir(parents=True, exist_ok=True)
-    state["exclusive_input_devices"] = _normalized_exclusive_input_state(
-        state.get("exclusive_input_devices")
-    )
     state["custom_display_mode"] = _normalized_custom_display_mode(
         state.get("custom_display_mode")
     )
@@ -1860,1174 +1574,6 @@ def _sunshine_virtual_input_devices() -> List[Dict[str, str]]:
     return devices
 
 
-def _input_bridge_script(state: Dict[str, Any]) -> str:
-    paths = state["paths"]
-    python_executable = sys.executable or "/usr/bin/env python3"
-    return f"""#!{python_executable}
-import ctypes
-import errno
-import fcntl
-import glob
-import grp
-import json
-import logging
-import math
-import os
-import pwd
-import select
-import shutil
-import signal
-import subprocess
-import threading
-import time
-from pathlib import Path
-
-from evdev import InputDevice, UInput, ecodes
-
-STATE_PATH = Path({paths["state_path"]!r})
-STATUS_PATH = Path({paths["input_bridge_status_file"]!r})
-SUNSHINE_INPUT_ID = ({SUNSHINE_INPUT_VENDOR_ID}, {SUNSHINE_INPUT_PRODUCT_ID})
-BRIDGE_DEVICE_PHYS_PREFIX = {BRIDGE_DEVICE_PHYS_PREFIX!r}
-GAMEPAD_BUTTON_CODES = {sorted(GAMEPAD_BUTTON_CODES)!r}
-GAMEPAD_ABS_CODES = {sorted(GAMEPAD_ABS_CODES)!r}
-HIDRAW_BUFFER_MAX = {HIDRAW_BUFFER_MAX}
-UHID_DATA_MAX = 4096
-UHID_DESTROY = 1
-UHID_START = 2
-UHID_STOP = 3
-UHID_OPEN = 4
-UHID_CLOSE = 5
-UHID_OUTPUT = 6
-UHID_GET_REPORT = 9
-UHID_GET_REPORT_REPLY = 10
-UHID_CREATE2 = 11
-UHID_INPUT2 = 12
-UHID_SET_REPORT = 13
-UHID_SET_REPORT_REPLY = 14
-UHID_FEATURE_REPORT = 0
-UHID_OUTPUT_REPORT = 1
-UHID_INPUT_REPORT = 2
-STOP_EVENT = threading.Event()
-STATUS_LOCK = threading.Lock()
-CLAIMS_LOCK = threading.Lock()
-CLAIMED_PATHS = set()
-RUNTIME_STATUS = {{}}
-
-logging.basicConfig(level=logging.INFO, format="[LTS Input Bridge] %(message)s")
-LOGGER = logging.getLogger("lutristosunshine-inputbridge")
-
-
-IOC_NRBITS = 8
-IOC_TYPEBITS = 8
-IOC_SIZEBITS = 14
-IOC_DIRBITS = 2
-IOC_NRSHIFT = 0
-IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS
-IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS
-IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
-IOC_NONE = 0
-IOC_WRITE = 1
-IOC_READ = 2
-
-
-def _IOC(direction, ioc_type, number, size):
-    return (
-        (direction << IOC_DIRSHIFT)
-        | (ioc_type << IOC_TYPESHIFT)
-        | (number << IOC_NRSHIFT)
-        | (size << IOC_SIZESHIFT)
-    )
-
-
-def _IOR(ioc_type, number, size):
-    return _IOC(IOC_READ, ioc_type, number, size)
-
-
-def _IOW(ioc_type, number, size):
-    return _IOC(IOC_WRITE, ioc_type, number, size)
-
-
-def _IOWR(ioc_type, number, size):
-    return _IOC(IOC_READ | IOC_WRITE, ioc_type, number, size)
-
-
-def safe_string(value):
-    return str(value or "").strip()
-
-
-def is_bridge_phys(phys):
-    return safe_string(phys).startswith(BRIDGE_DEVICE_PHYS_PREFIX)
-
-
-def current_user_name():
-    try:
-        return pwd.getpwuid(os.getuid()).pw_name
-    except KeyError:
-        return safe_string(os.environ.get("USER"))
-
-
-def current_user_group():
-    try:
-        return grp.getgrgid(os.getgid()).gr_name
-    except KeyError:
-        return safe_string(os.environ.get("USER"))
-
-
-class UHIDCreate2Req(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("name", ctypes.c_uint8 * 128),
-        ("phys", ctypes.c_uint8 * 64),
-        ("uniq", ctypes.c_uint8 * 64),
-        ("rd_size", ctypes.c_uint16),
-        ("bus", ctypes.c_uint16),
-        ("vendor", ctypes.c_uint32),
-        ("product", ctypes.c_uint32),
-        ("version", ctypes.c_uint32),
-        ("country", ctypes.c_uint32),
-        ("rd_data", ctypes.c_uint8 * HIDRAW_BUFFER_MAX),
-    ]
-
-
-class UHIDInput2Req(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("size", ctypes.c_uint16),
-        ("data", ctypes.c_uint8 * UHID_DATA_MAX),
-    ]
-
-
-class UHIDOutputReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("data", ctypes.c_uint8 * UHID_DATA_MAX),
-        ("size", ctypes.c_uint16),
-        ("rtype", ctypes.c_uint8),
-    ]
-
-
-class UHIDGetReportReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("id", ctypes.c_uint32),
-        ("rnum", ctypes.c_uint8),
-        ("rtype", ctypes.c_uint8),
-    ]
-
-
-class UHIDGetReportReplyReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("id", ctypes.c_uint32),
-        ("err", ctypes.c_uint16),
-        ("size", ctypes.c_uint16),
-        ("data", ctypes.c_uint8 * UHID_DATA_MAX),
-    ]
-
-
-class UHIDSetReportReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("id", ctypes.c_uint32),
-        ("rnum", ctypes.c_uint8),
-        ("rtype", ctypes.c_uint8),
-        ("size", ctypes.c_uint16),
-        ("data", ctypes.c_uint8 * UHID_DATA_MAX),
-    ]
-
-
-class UHIDSetReportReplyReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("id", ctypes.c_uint32),
-        ("err", ctypes.c_uint16),
-    ]
-
-
-class UHIDStartReq(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [("dev_flags", ctypes.c_uint64)]
-
-
-class UHIDEventUnion(ctypes.Union):
-    _fields_ = [
-        ("create2", UHIDCreate2Req),
-        ("input2", UHIDInput2Req),
-        ("output", UHIDOutputReq),
-        ("get_report", UHIDGetReportReq),
-        ("get_report_reply", UHIDGetReportReplyReq),
-        ("set_report", UHIDSetReportReq),
-        ("set_report_reply", UHIDSetReportReplyReq),
-        ("start", UHIDStartReq),
-    ]
-
-
-class UHIDEvent(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [
-        ("type", ctypes.c_uint32),
-        ("u", UHIDEventUnion),
-    ]
-
-
-HIDRAW_REPORT_DESCRIPTOR_SIZE = ctypes.c_uint32
-
-
-def hidraw_report_descriptor_size_type():
-    return ctypes.c_uint32
-
-
-def hidraw_report_type_from_uhid(rtype):
-    if rtype == UHID_FEATURE_REPORT:
-        return "feature"
-    if rtype == UHID_OUTPUT_REPORT:
-        return "output"
-    if rtype == UHID_INPUT_REPORT:
-        return "input"
-    return "output"
-
-
-def _copy_bytes(target, data):
-    if isinstance(data, str):
-        data = data.encode("utf-8", "replace")
-    encoded = bytes(data[: max(0, len(target) - 1)])
-    for index, value in enumerate(encoded):
-        target[index] = value
-    if len(target):
-        target[min(len(encoded), len(target) - 1)] = 0
-
-
-def preferred_event_symlink(event_path):
-    candidates = []
-    for candidate in glob.glob("/dev/input/by-id/*"):
-        try:
-            if os.path.realpath(candidate) != os.path.realpath(event_path):
-                continue
-        except OSError:
-            continue
-        if "event" not in os.path.basename(candidate):
-            continue
-        candidates.append(candidate)
-    candidates.sort(key=lambda item: (0 if "-event" in os.path.basename(item) else 1, len(item), item))
-    return candidates[0] if candidates else ""
-
-
-def normalized_selection(entry):
-    fingerprint = entry.get("fingerprint", {{}}) if isinstance(entry, dict) else {{}}
-    if not isinstance(fingerprint, dict):
-        fingerprint = {{}}
-    normalized = {{
-        "selection_id": safe_string(entry.get("selection_id")) or "unknown",
-        "label": safe_string(entry.get("label")) or safe_string(fingerprint.get("name")) or "Unknown controller",
-        "fingerprint": {{
-            "by_id": safe_string(fingerprint.get("by_id")),
-            "uniq": safe_string(fingerprint.get("uniq")),
-            "phys": safe_string(fingerprint.get("phys")),
-            "vendor_id": safe_string(fingerprint.get("vendor_id")).lower(),
-            "product_id": safe_string(fingerprint.get("product_id")).lower(),
-            "name": safe_string(fingerprint.get("name")),
-        }},
-    }}
-    return normalized
-
-
-def load_selections():
-    try:
-        payload = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(payload, dict):
-        return []
-    raw = payload.get("exclusive_input_devices", {{}})
-    if not isinstance(raw, dict):
-        return []
-    raw_devices = raw.get("devices", [])
-    if not isinstance(raw_devices, list):
-        return []
-    return [normalized_selection(item) for item in raw_devices if isinstance(item, dict)]
-
-
-def selection_matches(selection, device_info):
-    fingerprint = selection.get("fingerprint", {{}})
-    device_fingerprint = device_info.get("fingerprint", {{}})
-    by_id = safe_string(fingerprint.get("by_id"))
-    if by_id and by_id == safe_string(device_fingerprint.get("by_id")):
-        return True
-    uniq = safe_string(fingerprint.get("uniq"))
-    if uniq and uniq == safe_string(device_fingerprint.get("uniq")):
-        return True
-    phys = safe_string(fingerprint.get("phys"))
-    if (
-        phys
-        and phys == safe_string(device_fingerprint.get("phys"))
-        and safe_string(fingerprint.get("vendor_id")) == safe_string(device_fingerprint.get("vendor_id"))
-        and safe_string(fingerprint.get("product_id")) == safe_string(device_fingerprint.get("product_id"))
-        and safe_string(fingerprint.get("name")) == safe_string(device_fingerprint.get("name"))
-    ):
-        return True
-    return False
-
-
-def read_int_file(path):
-    try:
-        return int(Path(path).read_text(encoding="utf-8").strip(), 0)
-    except (OSError, ValueError):
-        return 0
-
-
-def parse_report_descriptor(report_descriptor):
-    report_size = 0
-    report_count = 0
-    report_id = 0
-    totals = {{
-        "input": {{}},
-        "output": {{}},
-        "feature": {{}},
-    }}
-    index = 0
-    while index < len(report_descriptor):
-        prefix = report_descriptor[index]
-        index += 1
-        if prefix == 0xFE:
-            if index + 1 >= len(report_descriptor):
-                break
-            data_size = report_descriptor[index]
-            index += 2 + data_size
-            continue
-        size_code = prefix & 0x3
-        data_size = 4 if size_code == 3 else size_code
-        item_type = (prefix >> 2) & 0x3
-        item_tag = (prefix >> 4) & 0xF
-        data = report_descriptor[index : index + data_size]
-        index += data_size
-        value = int.from_bytes(data, "little", signed=False) if data else 0
-
-        if item_type == 1:
-            if item_tag == 7:
-                report_size = value
-            elif item_tag == 8:
-                report_id = value
-            elif item_tag == 9:
-                report_count = value
-            continue
-
-        if item_type != 0:
-            continue
-
-        kind = None
-        if item_tag == 8:
-            kind = "input"
-        elif item_tag == 9:
-            kind = "output"
-        elif item_tag == 11:
-            kind = "feature"
-
-        if not kind:
-            continue
-
-        totals[kind][report_id] = totals[kind].get(report_id, 0) + (report_size * report_count)
-
-    lengths = {{}}
-    for kind, values in totals.items():
-        lengths[kind] = {{}}
-        for report_num, total_bits in values.items():
-            report_len = int(math.ceil(total_bits / 8.0))
-            if report_num:
-                report_len += 1
-            lengths[kind][report_num] = max(1, report_len)
-    return lengths
-
-
-def discover_hid_details(event_path):
-    event_name = os.path.basename(event_path)
-    input_sys = os.path.realpath(os.path.join("/sys/class/input", event_name, "device"))
-    if not input_sys:
-        return None
-    hid_parent_link = os.path.join(input_sys, "device")
-    if not os.path.exists(hid_parent_link):
-        return None
-    hid_parent = os.path.realpath(hid_parent_link)
-    descriptor_path = os.path.join(hid_parent, "report_descriptor")
-    if not os.path.exists(descriptor_path):
-        return None
-    hidraw_candidates = sorted(glob.glob(os.path.join(hid_parent, "hidraw", "hidraw*")))
-    if not hidraw_candidates:
-        return None
-    try:
-        report_descriptor = Path(descriptor_path).read_bytes()
-    except OSError:
-        return None
-    if not report_descriptor:
-        return None
-    return {{
-        "hid_parent": hid_parent,
-        "hidraw_path": os.path.join("/dev", os.path.basename(hidraw_candidates[0])),
-        "report_descriptor": report_descriptor[:HIDRAW_BUFFER_MAX],
-        "report_lengths": parse_report_descriptor(report_descriptor),
-        "country": read_int_file(os.path.join(hid_parent, "country")),
-    }}
-
-
-def list_controllers():
-    devices = []
-    virtual_event_paths = active_virtual_event_paths()
-    for event_path in sorted(glob.glob("/dev/input/event*")):
-        try:
-            device = InputDevice(event_path)
-            capabilities = device.capabilities(absinfo=False)
-        except OSError:
-            continue
-
-        if (device.info.vendor, device.info.product) == SUNSHINE_INPUT_ID:
-            device.close()
-            continue
-        if realpath_safe(event_path) in virtual_event_paths:
-            device.close()
-            continue
-        if is_bridge_phys(device.phys):
-            device.close()
-            continue
-
-        keys = set(capabilities.get(ecodes.EV_KEY, []))
-        abs_axes = set(capabilities.get(ecodes.EV_ABS, []))
-        if not (keys & set(GAMEPAD_BUTTON_CODES)) and not (abs_axes & set(GAMEPAD_ABS_CODES)):
-            device.close()
-            continue
-
-        name = safe_string(device.name) or os.path.basename(event_path)
-        devices.append(
-            {{
-                "event_path": event_path,
-                "fingerprint": {{
-                    "by_id": preferred_event_symlink(event_path),
-                    "uniq": safe_string(device.uniq),
-                    "phys": safe_string(device.phys),
-                    "vendor_id": f"{{device.info.vendor:04x}}",
-                    "product_id": f"{{device.info.product:04x}}",
-                    "name": name,
-                }},
-            }}
-        )
-        device.close()
-    return devices
-
-
-def identity_for_status(device):
-    return {{
-        "source_name": safe_string(device.name),
-        "source_vendor": f"{{device.info.vendor:04x}}",
-        "source_product": f"{{device.info.product:04x}}",
-        "source_version": f"{{device.info.version:04x}}",
-    }}
-
-
-def read_sys_text(path):
-    try:
-        return Path(path).read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
-def parse_uevent(path):
-    data = {{}}
-    for line in read_sys_text(path).splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        data[key] = value
-    return data
-
-
-def realpath_safe(path):
-    path = safe_string(path)
-    if not path:
-        return ""
-    try:
-        return os.path.realpath(path)
-    except OSError:
-        return path
-
-
-def ensure_acl(path):
-    path = safe_string(path)
-    if not path or not os.path.exists(path):
-        return
-    if not shutil.which("setfacl"):
-        return
-    user_name = current_user_name()
-    if not user_name:
-        return
-    result = subprocess.run(
-        ["setfacl", "-m", f"u:{{user_name}}:rw", path],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        stderr = safe_string(result.stderr) or f"exit {{result.returncode}}"
-        LOGGER.info("setfacl failed for %s: %s", path, stderr)
-
-
-def input_identity_matches(event_path, source):
-    event_name = os.path.basename(event_path)
-    sys_input = Path("/sys/class/input") / event_name / "device"
-    return (
-        read_sys_text(sys_input / "name") == safe_string(source.name)
-        and read_sys_text(sys_input / "uniq") == safe_string(source.uniq)
-        and read_sys_text(sys_input / "id" / "vendor").lower().removeprefix("0x") == f"{{source.info.vendor:04x}}"
-        and read_sys_text(sys_input / "id" / "product").lower().removeprefix("0x") == f"{{source.info.product:04x}}"
-    )
-
-
-def hidraw_identity_matches(hidraw_path, source):
-    sys_hidraw = Path("/sys/class/hidraw") / os.path.basename(hidraw_path) / "device"
-    uevent = parse_uevent(sys_hidraw / "uevent")
-    hid_id = safe_string(uevent.get("HID_ID")).upper()
-    expected_hid_id = f"{{source.info.bustype:04X}}:{{source.info.vendor:08X}}:{{source.info.product:08X}}"
-    return (
-        safe_string(uevent.get("HID_NAME")) == safe_string(source.name)
-        and safe_string(uevent.get("HID_UNIQ")) == safe_string(source.uniq)
-        and hid_id == expected_hid_id
-    )
-
-
-def snapshot_device_nodes():
-    return {{
-        "event_paths": {{realpath_safe(path): path for path in sorted(glob.glob("/dev/input/event*"))}},
-        "hidraw_paths": {{realpath_safe(path): path for path in sorted(glob.glob("/dev/hidraw*"))}},
-    }}
-
-
-def active_virtual_event_paths():
-    paths = set()
-    for item in RUNTIME_STATUS.values():
-        path = safe_string(item.get("virtual_event_path"))
-        if path:
-            paths.add(realpath_safe(path))
-    return paths
-
-
-def detect_virtual_nodes(before_nodes, source, source_hidraw_path=""):
-    nodes = {{
-        "virtual_event_path": "",
-        "virtual_hidraw_path": "",
-    }}
-    source_event_realpath = realpath_safe(getattr(source, "path", ""))
-    source_hidraw_realpath = realpath_safe(source_hidraw_path)
-    for _ in range(20):
-        after_nodes = snapshot_device_nodes()
-        if not nodes["virtual_event_path"]:
-            for real_path, event_path in after_nodes["event_paths"].items():
-                if real_path in before_nodes["event_paths"]:
-                    continue
-                if real_path == source_event_realpath:
-                    continue
-                if real_path in active_virtual_event_paths():
-                    continue
-                if input_identity_matches(event_path, source):
-                    nodes["virtual_event_path"] = event_path
-                    break
-        if not nodes["virtual_hidraw_path"]:
-            for real_path, hidraw_path in after_nodes["hidraw_paths"].items():
-                if real_path in before_nodes["hidraw_paths"]:
-                    continue
-                if real_path == source_hidraw_realpath:
-                    continue
-                if hidraw_identity_matches(hidraw_path, source):
-                    nodes["virtual_hidraw_path"] = hidraw_path
-                    break
-        if nodes["virtual_event_path"] or nodes["virtual_hidraw_path"]:
-            break
-        time.sleep(0.1)
-    return nodes
-
-
-def refresh_virtual_nodes(selection, status_details, wait_seconds=0.0):
-    current = RUNTIME_STATUS.get(selection["selection_id"], {{}})
-    if not status_details.get("virtual_event_path"):
-        status_details["virtual_event_path"] = safe_string(current.get("virtual_event_path"))
-    if not status_details.get("virtual_hidraw_path"):
-        status_details["virtual_hidraw_path"] = safe_string(current.get("virtual_hidraw_path"))
-    if wait_seconds > 0:
-        time.sleep(wait_seconds)
-
-
-def write_status():
-    payload = {{
-        "updated_at": int(time.time()),
-        "devices": sorted(RUNTIME_STATUS.values(), key=lambda item: item.get("label", "")),
-    }}
-    STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = STATUS_PATH.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(STATUS_PATH)
-
-
-def set_status(selection, state, message="", matched_path="", virtual_name="", **details):
-    with STATUS_LOCK:
-        RUNTIME_STATUS[selection["selection_id"]] = {{
-            "selection_id": selection["selection_id"],
-            "label": selection["label"],
-            "state": state,
-            "message": message,
-            "matched_path": matched_path,
-            "virtual_name": virtual_name,
-        }}
-        RUNTIME_STATUS[selection["selection_id"]].update(details)
-        write_status()
-
-
-def update_bridge_status(selection, status_details, matched_path, virtual_name, message="Controller grabbed and bridged"):
-    refresh_virtual_nodes(selection, status_details)
-    ensure_acl(status_details.get("virtual_event_path", ""))
-    ensure_acl(status_details.get("virtual_hidraw_path", ""))
-    set_status(
-        selection,
-        "bridged",
-        message,
-        matched_path,
-        virtual_name,
-        **status_details,
-    )
-
-
-def clear_status():
-    with STATUS_LOCK:
-        RUNTIME_STATUS.clear()
-        try:
-            STATUS_PATH.unlink()
-        except OSError:
-            pass
-
-
-def claim_path(event_path):
-    with CLAIMS_LOCK:
-        if event_path in CLAIMED_PATHS:
-            return False
-        CLAIMED_PATHS.add(event_path)
-        return True
-
-
-def release_path(event_path):
-    with CLAIMS_LOCK:
-        CLAIMED_PATHS.discard(event_path)
-
-
-def find_match(selection):
-    for device_info in list_controllers():
-        if not selection_matches(selection, device_info):
-            continue
-        event_path = device_info["event_path"]
-        if claim_path(event_path):
-            return event_path
-    return ""
-
-
-def erase_all_effects(source, effect_map):
-    for physical_id in list(effect_map.values()):
-        try:
-            source.erase_effect(physical_id)
-        except OSError:
-            pass
-    effect_map.clear()
-
-
-def _report_ioctl_request(prefix, report_len):
-    size = max(1, min(report_len, HIDRAW_BUFFER_MAX))
-    if prefix == "get_feature":
-        return _IOWR(ord("H"), 0x07, size)
-    if prefix == "set_feature":
-        return _IOWR(ord("H"), 0x06, size)
-    if prefix == "get_output":
-        return _IOWR(ord("H"), 0x0C, size)
-    if prefix == "set_output":
-        return _IOWR(ord("H"), 0x0B, size)
-    if prefix == "get_input":
-        return _IOWR(ord("H"), 0x0A, size)
-    if prefix == "set_input":
-        return _IOWR(ord("H"), 0x09, size)
-    raise ValueError(prefix)
-
-
-def hid_set_report(hidraw_fd, report_type, payload):
-    payload = bytes(payload[:HIDRAW_BUFFER_MAX])
-    if not payload:
-        payload = b"\\x00"
-    if report_type == UHID_FEATURE_REPORT:
-        request = _report_ioctl_request("set_feature", len(payload))
-    elif report_type == UHID_OUTPUT_REPORT:
-        request = _report_ioctl_request("set_output", len(payload))
-    else:
-        request = _report_ioctl_request("set_input", len(payload))
-    buffer = bytearray(payload)
-    fcntl.ioctl(hidraw_fd, request, buffer, True)
-
-
-def hid_get_report(hidraw_fd, report_lengths, report_type, report_num):
-    kind = hidraw_report_type_from_uhid(report_type)
-    kind_lengths = report_lengths.get(kind, {{}})
-    report_len = kind_lengths.get(report_num) or max(kind_lengths.values(), default=64)
-    report_len = max(1, min(report_len, HIDRAW_BUFFER_MAX))
-    if report_type == UHID_FEATURE_REPORT:
-        request = _report_ioctl_request("get_feature", report_len)
-    elif report_type == UHID_OUTPUT_REPORT:
-        request = _report_ioctl_request("get_output", report_len)
-    else:
-        request = _report_ioctl_request("get_input", report_len)
-    buffer = bytearray(report_len)
-    buffer[0] = report_num & 0xFF
-    fcntl.ioctl(hidraw_fd, request, buffer, True)
-    return bytes(buffer)
-
-
-def build_uhid_create_event(selection, source, hid_details):
-    event = UHIDEvent()
-    event.type = UHID_CREATE2
-    _copy_bytes(event.u.create2.name, safe_string(source.name) or selection["label"])
-    _copy_bytes(event.u.create2.phys, safe_string(source.phys))
-    _copy_bytes(event.u.create2.uniq, safe_string(source.uniq))
-    event.u.create2.rd_size = min(len(hid_details["report_descriptor"]), HIDRAW_BUFFER_MAX)
-    event.u.create2.bus = source.info.bustype
-    event.u.create2.vendor = source.info.vendor
-    event.u.create2.product = source.info.product
-    event.u.create2.version = source.info.version
-    event.u.create2.country = hid_details.get("country", 0)
-    for index, value in enumerate(hid_details["report_descriptor"][: event.u.create2.rd_size]):
-        event.u.create2.rd_data[index] = value
-    return event
-
-
-def build_uhid_input_event(payload):
-    event = UHIDEvent()
-    event.type = UHID_INPUT2
-    payload = bytes(payload[:UHID_DATA_MAX])
-    event.u.input2.size = len(payload)
-    for index, value in enumerate(payload):
-        event.u.input2.data[index] = value
-    return event
-
-
-def build_get_report_reply(request_id, err_value, payload=b""):
-    event = UHIDEvent()
-    event.type = UHID_GET_REPORT_REPLY
-    event.u.get_report_reply.id = request_id
-    event.u.get_report_reply.err = err_value
-    payload = bytes(payload[:UHID_DATA_MAX])
-    event.u.get_report_reply.size = len(payload)
-    for index, value in enumerate(payload):
-        event.u.get_report_reply.data[index] = value
-    return event
-
-
-def build_set_report_reply(request_id, err_value):
-    event = UHIDEvent()
-    event.type = UHID_SET_REPORT_REPLY
-    event.u.set_report_reply.id = request_id
-    event.u.set_report_reply.err = err_value
-    return event
-
-
-def read_uhid_event(uhid_fd):
-    size = ctypes.sizeof(UHIDEvent)
-    try:
-        payload = os.read(uhid_fd, size)
-    except BlockingIOError:
-        return None
-    if not payload:
-        raise OSError(errno.ENODEV, "UHID device closed")
-    if len(payload) < size:
-        payload = payload + (b"\\x00" * (size - len(payload)))
-    return UHIDEvent.from_buffer_copy(payload[:size])
-
-
-def write_uhid_event(uhid_fd, event):
-    os.write(uhid_fd, bytes(event))
-
-
-def destroy_uhid_device(uhid_fd):
-    try:
-        event = UHIDEvent()
-        event.type = UHID_DESTROY
-        write_uhid_event(uhid_fd, event)
-    except OSError:
-        pass
-
-
-def handle_ff_event(selection, source, virtual, effect_map, event, status_details, matched_path):
-    if event.type == ecodes.EV_UINPUT and event.code == ecodes.UI_FF_UPLOAD:
-        upload = virtual.begin_upload(event.value)
-        try:
-            virtual_id = int(upload.effect.id)
-            previous_id = effect_map.get(virtual_id)
-            if previous_id is not None:
-                try:
-                    source.erase_effect(previous_id)
-                except OSError:
-                    pass
-            physical_id = source.upload_effect(upload.effect)
-            effect_map[virtual_id] = physical_id
-            upload.retval = 0
-            status_details["ff_upload_count"] = int(status_details.get("ff_upload_count", 0)) + 1
-            update_bridge_status(selection, status_details, matched_path, safe_string(virtual.name))
-        except OSError as error:
-            upload.retval = -abs(getattr(error, "errno", 1) or 1)
-            LOGGER.info("ff upload failed for %s: %s", selection["label"], error)
-            set_status(
-                selection,
-                "bridged",
-                f"Controller grabbed; rumble upload failed: {{error}}",
-                matched_path,
-                safe_string(virtual.name),
-                **status_details,
-            )
-        finally:
-            virtual.end_upload(upload)
-        return
-
-    if event.type == ecodes.EV_UINPUT and event.code == ecodes.UI_FF_ERASE:
-        erase = virtual.begin_erase(event.value)
-        try:
-            virtual_id = int(erase.effect_id)
-            physical_id = effect_map.pop(virtual_id, None)
-            if physical_id is not None:
-                source.erase_effect(physical_id)
-            erase.retval = 0
-            status_details["ff_erase_count"] = int(status_details.get("ff_erase_count", 0)) + 1
-            update_bridge_status(selection, status_details, matched_path, safe_string(virtual.name))
-        except OSError as error:
-            erase.retval = -abs(getattr(error, "errno", 1) or 1)
-            LOGGER.info("ff erase failed for %s: %s", selection["label"], error)
-        finally:
-            virtual.end_erase(erase)
-        return
-
-    if event.type == ecodes.EV_FF:
-        physical_id = effect_map.get(event.code)
-        if physical_id is None:
-            return
-        try:
-            source.write(ecodes.EV_FF, physical_id, event.value)
-            source.syn()
-            status_details["ff_play_count"] = int(status_details.get("ff_play_count", 0)) + 1
-            update_bridge_status(selection, status_details, matched_path, safe_string(virtual.name))
-        except OSError as error:
-            LOGGER.info("ff playback failed for %s: %s", selection["label"], error)
-            set_status(
-                selection,
-                "bridged",
-                f"Controller grabbed; rumble playback failed: {{error}}",
-                matched_path,
-                safe_string(virtual.name),
-                **status_details,
-            )
-
-
-def bridge_evdev_controller(selection, source, event_path, hid_details=None, fallback_reason=""):
-    virtual = None
-    effect_map = {{}}
-    try:
-        before_nodes = snapshot_device_nodes()
-        source_caps = source.capabilities()
-        supports_ff = ecodes.EV_FF in source_caps
-        filtered_types = (ecodes.EV_SYN,) if supports_ff else (ecodes.EV_SYN, ecodes.EV_FF)
-        virtual = UInput.from_device(
-            source,
-            filtered_types=filtered_types,
-            name=safe_string(source.name) or selection["label"],
-            vendor=source.info.vendor,
-            product=source.info.product,
-            version=source.info.version,
-            bustype=source.info.bustype,
-            phys=safe_string(source.phys) or None,
-            input_props=source.input_props(),
-        )
-        status_details = identity_for_status(source)
-        status_details.update(
-            {{
-                "bridge_mode": "uinput-fallback",
-                "ff_supported": supports_ff,
-                "ff_enabled": supports_ff,
-                "hidraw_path": hid_details.get("hidraw_path", "") if hid_details else "",
-                "hid_output_forwarding": False,
-                "virtual_event_path": "",
-                "virtual_hidraw_path": "",
-                "virtual_vendor": f"{{virtual.vendor:04x}}",
-                "virtual_product": f"{{virtual.product:04x}}",
-                "virtual_version": f"{{virtual.version:04x}}",
-                "ff_upload_count": 0,
-                "ff_play_count": 0,
-                "ff_erase_count": 0,
-            }}
-        )
-        nodes = detect_virtual_nodes(before_nodes, source)
-        status_details["virtual_event_path"] = nodes.get("virtual_event_path", "")
-        status_details["virtual_hidraw_path"] = nodes.get("virtual_hidraw_path", "")
-        message = "Controller grabbed and bridged"
-        if fallback_reason:
-            message += f" (uinput fallback: {{fallback_reason}})"
-        virtual_devnode = safe_string(getattr(virtual, "devnode", ""))
-        if virtual_devnode and not status_details["virtual_event_path"]:
-            status_details["virtual_event_path"] = virtual_devnode
-        update_bridge_status(selection, status_details, event_path, safe_string(virtual.name), message)
-        LOGGER.info(
-            "bridging %s from %s via uinput fallback as %s %04x:%04x ff=%s",
-            selection["label"],
-            event_path,
-            safe_string(virtual.name),
-            virtual.vendor,
-            virtual.product,
-            supports_ff,
-        )
-
-        while not STOP_EVENT.is_set():
-            ready, _, _ = select.select([source, virtual], [], [], 1.0)
-            if not ready:
-                continue
-            if source in ready:
-                for input_event in source.read():
-                    if input_event.type == ecodes.EV_SYN:
-                        virtual.syn()
-                        continue
-                    virtual.write_event(input_event)
-            if virtual in ready and supports_ff:
-                for input_event in virtual.read():
-                    handle_ff_event(selection, source, virtual, effect_map, input_event, status_details, event_path)
-    finally:
-        erase_all_effects(source, effect_map)
-        if virtual is not None:
-            virtual.close()
-
-
-def bridge_hid_controller(selection, source, event_path, hid_details):
-    source_hid_fd = None
-    uhid_fd = None
-    try:
-        before_nodes = snapshot_device_nodes()
-        source_hid_fd = os.open(hid_details["hidraw_path"], os.O_RDWR | os.O_NONBLOCK)
-        uhid_fd = os.open("/dev/uhid", os.O_RDWR | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
-        create_event = build_uhid_create_event(selection, source, hid_details)
-        write_uhid_event(uhid_fd, create_event)
-
-        status_details = identity_for_status(source)
-        status_details.update(
-            {{
-                "bridge_mode": "uhid",
-                "ff_supported": True,
-                "ff_enabled": True,
-                "hidraw_path": hid_details["hidraw_path"],
-                "hid_output_forwarding": True,
-                "virtual_event_path": "",
-                "virtual_hidraw_path": "",
-                "virtual_vendor": f"{{source.info.vendor:04x}}",
-                "virtual_product": f"{{source.info.product:04x}}",
-                "virtual_version": f"{{source.info.version:04x}}",
-                "uhid_output_count": 0,
-                "uhid_get_report_count": 0,
-                "uhid_set_report_count": 0,
-                "uhid_open_count": 0,
-                "uhid_close_count": 0,
-                "last_uhid_event": "",
-                "last_uhid_event_at": 0,
-            }}
-        )
-        nodes = detect_virtual_nodes(before_nodes, source, hid_details["hidraw_path"])
-        status_details["virtual_event_path"] = nodes.get("virtual_event_path", "")
-        status_details["virtual_hidraw_path"] = nodes.get("virtual_hidraw_path", "")
-        update_bridge_status(
-            selection,
-            status_details,
-            event_path,
-            safe_string(source.name) or selection["label"],
-        )
-        LOGGER.info(
-            "bridging %s from %s via uhid hidraw=%s",
-            selection["label"],
-            event_path,
-            hid_details["hidraw_path"],
-        )
-
-        while not STOP_EVENT.is_set():
-            ready, _, _ = select.select([source_hid_fd, uhid_fd], [], [], 1.0)
-            if not ready:
-                continue
-
-            if source_hid_fd in ready:
-                payload = os.read(source_hid_fd, UHID_DATA_MAX)
-                if not payload:
-                    raise OSError(errno.ENODEV, "HID source disconnected")
-                write_uhid_event(uhid_fd, build_uhid_input_event(payload))
-
-            if uhid_fd in ready:
-                while True:
-                    uhid_event = read_uhid_event(uhid_fd)
-                    if uhid_event is None:
-                        break
-                    if uhid_event.type == UHID_OUTPUT:
-                        payload = bytes(uhid_event.u.output.data[: uhid_event.u.output.size])
-                        status_details["uhid_output_count"] = int(status_details.get("uhid_output_count", 0)) + 1
-                        status_details["last_uhid_event"] = f"output rtype={{uhid_event.u.output.rtype}} size={{uhid_event.u.output.size}}"
-                        status_details["last_uhid_event_at"] = int(time.time())
-                        LOGGER.info(
-                            "uhid output for %s: rtype=%s size=%s",
-                            selection["label"],
-                            uhid_event.u.output.rtype,
-                            uhid_event.u.output.size,
-                        )
-                        hid_set_report(source_hid_fd, uhid_event.u.output.rtype, payload)
-                        update_bridge_status(selection, status_details, event_path, safe_string(source.name) or selection["label"])
-                        continue
-                    if uhid_event.type == UHID_GET_REPORT:
-                        status_details["uhid_get_report_count"] = int(status_details.get("uhid_get_report_count", 0)) + 1
-                        status_details["last_uhid_event"] = f"get-report rtype={{uhid_event.u.get_report.rtype}} rnum={{uhid_event.u.get_report.rnum}}"
-                        status_details["last_uhid_event_at"] = int(time.time())
-                        LOGGER.info(
-                            "uhid get-report for %s: rtype=%s rnum=%s",
-                            selection["label"],
-                            uhid_event.u.get_report.rtype,
-                            uhid_event.u.get_report.rnum,
-                        )
-                        try:
-                            payload = hid_get_report(
-                                source_hid_fd,
-                                hid_details["report_lengths"],
-                                uhid_event.u.get_report.rtype,
-                                uhid_event.u.get_report.rnum,
-                            )
-                            reply = build_get_report_reply(uhid_event.u.get_report.id, 0, payload)
-                        except OSError as error:
-                            reply = build_get_report_reply(
-                                uhid_event.u.get_report.id,
-                                abs(getattr(error, "errno", errno.EIO) or errno.EIO),
-                            )
-                        write_uhid_event(uhid_fd, reply)
-                        update_bridge_status(selection, status_details, event_path, safe_string(source.name) or selection["label"])
-                        continue
-                    if uhid_event.type == UHID_SET_REPORT:
-                        status_details["uhid_set_report_count"] = int(status_details.get("uhid_set_report_count", 0)) + 1
-                        status_details["last_uhid_event"] = f"set-report rtype={{uhid_event.u.set_report.rtype}} size={{uhid_event.u.set_report.size}}"
-                        status_details["last_uhid_event_at"] = int(time.time())
-                        LOGGER.info(
-                            "uhid set-report for %s: rtype=%s size=%s",
-                            selection["label"],
-                            uhid_event.u.set_report.rtype,
-                            uhid_event.u.set_report.size,
-                        )
-                        try:
-                            payload = bytes(uhid_event.u.set_report.data[: uhid_event.u.set_report.size])
-                            hid_set_report(source_hid_fd, uhid_event.u.set_report.rtype, payload)
-                            reply = build_set_report_reply(uhid_event.u.set_report.id, 0)
-                        except OSError as error:
-                            reply = build_set_report_reply(
-                                uhid_event.u.set_report.id,
-                                abs(getattr(error, "errno", errno.EIO) or errno.EIO),
-                            )
-                        write_uhid_event(uhid_fd, reply)
-                        update_bridge_status(selection, status_details, event_path, safe_string(source.name) or selection["label"])
-                        continue
-                    if uhid_event.type == UHID_OPEN:
-                        status_details["uhid_open_count"] = int(status_details.get("uhid_open_count", 0)) + 1
-                        status_details["last_uhid_event"] = "open"
-                        status_details["last_uhid_event_at"] = int(time.time())
-                        update_bridge_status(selection, status_details, event_path, safe_string(source.name) or selection["label"])
-                        continue
-                    if uhid_event.type == UHID_CLOSE:
-                        status_details["uhid_close_count"] = int(status_details.get("uhid_close_count", 0)) + 1
-                        status_details["last_uhid_event"] = "close"
-                        status_details["last_uhid_event_at"] = int(time.time())
-                        update_bridge_status(selection, status_details, event_path, safe_string(source.name) or selection["label"])
-                        continue
-                    if uhid_event.type in (UHID_START, UHID_STOP, UHID_OPEN, UHID_CLOSE):
-                        continue
-                    break
-    finally:
-        if uhid_fd is not None:
-            destroy_uhid_device(uhid_fd)
-            os.close(uhid_fd)
-        if source_hid_fd is not None:
-            os.close(source_hid_fd)
-
-
-def bridge_loop(selection):
-    set_status(selection, "waiting", "Waiting for controller")
-    while not STOP_EVENT.is_set():
-        event_path = find_match(selection)
-        if not event_path:
-            set_status(selection, "waiting", "Controller not detected")
-            STOP_EVENT.wait(2.0)
-            continue
-
-        source = None
-        keep_waiting_status = True
-        try:
-            source = InputDevice(event_path)
-            source.grab()
-            hid_details = discover_hid_details(event_path)
-            if hid_details:
-                try:
-                    bridge_hid_controller(selection, source, event_path, hid_details)
-                except OSError as error:
-                    LOGGER.info("uhid bridge failed for %s: %s", selection["label"], error)
-                    bridge_evdev_controller(selection, source, event_path, hid_details, str(error))
-            else:
-                bridge_evdev_controller(selection, source, event_path)
-        except OSError as error:
-            keep_waiting_status = False
-            set_status(selection, "error", str(error), event_path)
-            LOGGER.info("bridge error for %s: %s", selection["label"], error)
-            STOP_EVENT.wait(2.0)
-        except Exception as error:
-            keep_waiting_status = False
-            set_status(selection, "error", str(error), event_path)
-            LOGGER.exception("bridge error for %s", selection["label"])
-            STOP_EVENT.wait(2.0)
-        finally:
-            release_path(event_path)
-            if source is not None:
-                try:
-                    source.ungrab()
-                except OSError:
-                    pass
-                source.close()
-            if keep_waiting_status and not STOP_EVENT.is_set():
-                set_status(selection, "waiting", "Waiting for controller")
-
-
-def handle_signal(signum, _frame):
-    LOGGER.info("received signal %s, stopping", signum)
-    STOP_EVENT.set()
-
-
-def main():
-    selections = load_selections()
-    if not selections:
-        clear_status()
-        LOGGER.info("no exclusive input devices configured")
-        return 0
-
-    for signal_name in ("SIGINT", "SIGTERM", "SIGHUP"):
-        if hasattr(signal, signal_name):
-            signal.signal(getattr(signal, signal_name), handle_signal)
-
-    threads = []
-    for selection in selections:
-        thread = threading.Thread(target=bridge_loop, args=(selection,), daemon=True)
-        thread.start()
-        threads.append(thread)
-
-    while not STOP_EVENT.is_set():
-        time.sleep(1.0)
-
-    for thread in threads:
-        thread.join(timeout=5.0)
-    clear_status()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-"""
-
-
 def _kwin_input_isolation_script(state: Dict[str, Any]) -> str:
     python_executable = sys.executable or "/usr/bin/env python3"
     return f"""#!{python_executable}
@@ -3650,19 +2196,16 @@ sunshine_conf="{paths['sunshine_conf']}"
 audio_sink="{audio_sink}"
 audio_create_script="{paths['audio_create_script']}"
 audio_cleanup_script="{paths['audio_cleanup_script']}"
-input_bridge_script="{paths['input_bridge_script']}"
 kwin_input_isolation_script="{paths['kwin_input_isolation_script']}"
 sway_start_script="{paths['sway_start_script']}"
 sunshine_start_script="{paths['sunshine_start_script']}"
 display_file="{paths['wayland_display_file']}"
-bridge_status_file="{paths['input_bridge_status_file']}"
 kwin_input_isolation_status_file="{paths['kwin_input_isolation_status_file']}"
 sway_socket="{state['sway_socket']}"
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 pulse_server_value="${{PULSE_SERVER:-}}"
 pulse_clientconfig_value="${{PULSE_CLIENTCONFIG:-}}"
-input_bridge_pid=""
 kwin_input_isolation_pid=""
 sway_pid=""
 sunshine_pid=""
@@ -3782,22 +2325,6 @@ state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf
 PY
 }}
 
-input_bridge_enabled() {{
-    python3 - "$state_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-try:
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(1)
-devices = ((state.get("exclusive_input_devices") or {{}}).get("devices") or [])
-raise SystemExit(0 if devices else 1)
-PY
-}}
-
 stop_child() {{
     local pid="${{1:-}}"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -3809,10 +2336,9 @@ stop_child() {{
 cleanup() {{
     local exit_code=$?
     stop_child "$sunshine_pid"
-    stop_child "$input_bridge_pid"
     stop_child "$kwin_input_isolation_pid"
     stop_child "$sway_pid"
-    rm -f "$bridge_status_file" "$kwin_input_isolation_status_file" "$display_file"
+    rm -f "$kwin_input_isolation_status_file" "$display_file"
     "$audio_cleanup_script" >/dev/null 2>&1 || true
     restore_audio_state >/dev/null 2>&1 || true
     exit "$exit_code"
@@ -3841,11 +2367,6 @@ if [ ! -s "$display_file" ] || [ ! -S "$sway_socket" ]; then
 fi
 
 
-if input_bridge_enabled; then
-    setsid python3 "$input_bridge_script" &
-    input_bridge_pid=$!
-fi
-
 setsid python3 "$kwin_input_isolation_script" &
 kwin_input_isolation_pid=$!
 
@@ -3869,8 +2390,6 @@ run_audio_command() {{
     local command=(/usr/bin/env
         "XDG_RUNTIME_DIR=$runtime_dir"
         "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
-        "LANG=C"
-        "LC_ALL=C"
     )
     if [ -n "$pulse_server_value" ]; then
         command+=("PULSE_SERVER=$pulse_server_value")
@@ -3878,16 +2397,18 @@ run_audio_command() {{
     if [ -n "$pulse_clientconfig_value" ]; then
         command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
     fi
-    "${{command[@]}}" "$@"
+    command+=("$@")
+    "${{command[@]}}"
 }}
 
-if run_audio_command pactl list short sinks | awk '{{print $2}}' | grep -Fx "$sink_name" >/dev/null 2>&1; then
-    rm -f "$module_file"
+if run_audio_command pactl list sinks short 2>/dev/null | grep -q "$sink_name"; then
     exit 0
 fi
 
-module_id="$(run_audio_command pactl load-module module-null-sink sink_name="$sink_name" sink_properties=device.description='LutrisToSunshine Virtual Display')"
-printf '%s\\n' "$module_id" > "$module_file"
+module_id="$(run_audio_command pactl load-module module-null-sink "sink_name=$sink_name" "sink_properties=device.description=$sink_name" 2>/dev/null || true)"
+if [ -n "$module_id" ]; then
+    echo "$module_id" > "$module_file"
+fi
 """,
         Path(paths["audio_cleanup_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -3902,8 +2423,6 @@ run_audio_command() {{
     local command=(/usr/bin/env
         "XDG_RUNTIME_DIR=$runtime_dir"
         "DBUS_SESSION_BUS_ADDRESS=$dbus_value"
-        "LANG=C"
-        "LC_ALL=C"
     )
     if [ -n "$pulse_server_value" ]; then
         command+=("PULSE_SERVER=$pulse_server_value")
@@ -3911,7 +2430,8 @@ run_audio_command() {{
     if [ -n "$pulse_clientconfig_value" ]; then
         command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")
     fi
-    "${{command[@]}}" "$@"
+    command+=("$@")
+    "${{command[@]}}"
 }}
 
 if [ ! -f "$module_file" ]; then
@@ -3924,7 +2444,6 @@ if [ -n "$module_id" ]; then
 fi
 rm -f "$module_file"
 """,
-        Path(paths["input_bridge_script"]): _input_bridge_script(state),
         Path(paths["kwin_input_isolation_script"]): _kwin_input_isolation_script(state),
         Path(paths["headless_prep_script"]): f"""#!/bin/bash
 set -euo pipefail
@@ -5167,7 +3686,6 @@ def _udev_rule(isolation_mode: Optional[str] = None) -> str:
     sunshine_input_clause = ", ".join(sunshine_input_permissions)
     return f"""# Managed by LutrisToSunshine display.
 ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{SUNSHINE_INPUT_VENDOR_ID:04x}", ATTRS{{id/product}}=="{SUNSHINE_INPUT_PRODUCT_ID:04x}", {sunshine_input_clause}
-ACTION!="remove", KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uhid"
 """
 
 
@@ -5236,9 +3754,6 @@ def _ensure_dependencies() -> List[str]:
             missing.append(binary)
     if _svc.sunshine_binary() is None and not _current_sunshine_execstart(_svc.sunshine_unit()):
         missing.append("sunshine")
-    evdev_error = _evdev_import_error()
-    if evdev_error:
-        missing.append("python-evdev")
     return missing
 
 
@@ -5333,7 +3848,6 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
         "headless_prep_script",
         "set_resolution_script",
         "reset_resolution_script",
-        "input_bridge_script",
         "kwin_input_isolation_script",
         "get_gpu_addr",
     ]
@@ -5342,156 +3856,6 @@ def _managed_setup_paths(state: Dict[str, Any]) -> List[Path]:
 
 def _daemon_reload() -> None:
     _svc.daemon_reload()
-
-
-def _clear_input_bridge_status_file(state: Dict[str, Any]) -> None:
-    try:
-        Path(state["paths"]["input_bridge_status_file"]).unlink()
-    except OSError:
-        pass
-
-
-def _bridge_runtime_enabled(state: Dict[str, Any]) -> bool:
-    return bool(state.get("enabled") and _has_selected_input_devices(state))
-
-
-def _bridge_service_state() -> str:
-    if Path(load_state()["paths"]["input_bridge_status_file"]).exists():
-        return "active"
-    if _svc.is_sunshine_service_active() and _has_selected_input_devices(load_state()):
-        return "starting"
-    return "inactive"
-
-
-def _apply_input_bridge_runtime_state(state: Dict[str, Any]) -> None:
-    if not _bridge_runtime_enabled(state):
-        _clear_input_bridge_status_file(state)
-        return
-
-    if not _svc.is_sunshine_service_active():
-        return
-
-    # The input bridge now runs as a child of the Sunshine override wrapper.
-    # Restart the service so the wrapper can re-read the saved controller selection.
-    result = _sunshine_verb(state, _svc.restart_sunshine_unit)
-    if result.returncode != 0:
-        return
-
-
-def _parse_selection_numbers(value: str, total_items: int) -> List[int]:
-    value = value.strip()
-    if value in {"", "0", "none"}:
-        return []
-
-    indices = []
-    for part in value.split(","):
-        token = part.strip()
-        if not token:
-            raise ValueError()
-        if "-" in token:
-            start_raw, end_raw = token.split("-", 1)
-            start = int(start_raw)
-            end = int(end_raw)
-            if start > end:
-                raise ValueError()
-            indices.extend(range(start - 1, end))
-            continue
-        indices.append(int(token) - 1)
-
-    unique_indices = sorted(set(indices))
-    if all(0 <= index < total_items for index in unique_indices):
-        return unique_indices
-    raise ValueError()
-
-
-def _parse_selection_toggle_numbers(value: str, total_items: int) -> Optional[List[int]]:
-    value = value.strip()
-    if value == "":
-        return None
-    return _parse_selection_numbers(value, total_items)
-
-
-def _toggle_selection_entries(
-    selections: List[Dict[str, Any]],
-    devices: List[Dict[str, Any]],
-    toggled_indices: List[int],
-) -> List[Dict[str, Any]]:
-    updated = [_normalized_selection_entry(selection) for selection in selections]
-    for index in toggled_indices:
-        device = devices[index]
-        existing_index = next(
-            (position for position, selection in enumerate(updated) if _selection_matches_device(selection, device)),
-            None,
-        )
-        if existing_index is not None:
-            updated.pop(existing_index)
-            continue
-        updated.append(
-            _normalized_selection_entry(
-                {
-                    "selection_id": device["selection_id"],
-                    "label": device["label"],
-                    "fingerprint": device["fingerprint"],
-                }
-            )
-        )
-    return updated
-
-
-def configure_exclusive_input_devices() -> int:
-    state = load_state()
-    selections = state["exclusive_input_devices"]["devices"]
-    devices, error = _list_controller_devices()
-    if error:
-        print(error)
-        return 1
-
-    if not devices:
-        if selections:
-            print("No gamepads detected.")
-            print("Saved gamepads:")
-            for selection in selections:
-                print(f"- {selection['label']}")
-            get_user_input(
-                "Enter 0 to clear saved gamepads, or Ctrl+C to cancel: ",
-                lambda raw: raw.strip() if raw.strip() == "0" else (_ for _ in ()).throw(ValueError()),
-                "Enter 0 to clear.",
-            )
-            state["exclusive_input_devices"] = _empty_exclusive_input_state()
-            save_state(state)
-            _apply_input_bridge_runtime_state(state)
-            print("Gamepad routing cleared.")
-            return 0
-
-        print("No gamepads detected.")
-        return 0
-
-    print("Connected gamepads:")
-    for index, device in enumerate(devices, start=1):
-        selected = " [selected]" if _device_matches_any_selection(device, selections) else ""
-        print(f"{index}. {device['label']}{selected}")
-
-    toggled_indices = get_user_input(
-        "Toggle numbers to route them to the stream (e.g. 1,3-4), Enter to keep, or 0 to clear: ",
-        lambda raw: _parse_selection_toggle_numbers(raw, len(devices)),
-        "Invalid selection. Use comma-separated numbers or ranges such as 1,3-4.",
-    )
-    if toggled_indices is None:
-        print("Gamepad routing unchanged.")
-        return 0
-
-    state["exclusive_input_devices"] = {
-        "devices": _toggle_selection_entries(selections, devices, toggled_indices)
-    }
-    state = refresh_managed_files(state)
-    _apply_input_bridge_runtime_state(state)
-
-    selected_devices = state["exclusive_input_devices"]["devices"]
-    if selected_devices:
-        print(f"Routed {len(selected_devices)} gamepad(s) to the stream.")
-    else:
-        print("Gamepad routing cleared.")
-    return 0
 
 
 def _drain_stale_audio_activation_env() -> None:
@@ -5626,7 +3990,6 @@ def stop_display() -> int:
     result = _sunshine_verb(state, _svc.stop_sunshine_unit)
     if result.returncode != 0:
         return 1
-    _clear_input_bridge_status_file(state)
     try:
         Path(state["paths"]["kwin_input_isolation_status_file"]).unlink()
     except OSError:
@@ -5659,52 +4022,6 @@ def display_snapshot() -> Dict[str, Any]:
     wp_policy_state = "installed" if Path(state["paths"]["wireplumber_policy_conf"]).exists() else "absent"
     kwin_status = _kwin_input_isolation_status(state) if configured else _empty_kwin_input_isolation_status()
     sunshine_input_devices = _sunshine_virtual_input_devices() if configured else []
-    selections = state["exclusive_input_devices"]["devices"]
-    devices, device_error = _list_controller_devices() if configured and selections else ([], None)
-    runtime_status = _input_bridge_status(state) if configured else {}
-    runtime_by_id = {}
-    for item in runtime_status.get("devices", []):
-        if isinstance(item, dict) and item.get("selection_id"):
-            runtime_by_id[item["selection_id"]] = item
-
-    controller_rows: List[Dict[str, str]] = []
-    for selection in selections:
-        runtime = runtime_by_id.get(selection["selection_id"], {})
-        current_match = next(
-            (device for device in devices if _selection_matches_device(selection, device)),
-            None,
-        )
-        if runtime:
-            message = safe_string(runtime.get("message"))
-            identity_bits = _selection_runtime_identity_bits(runtime)
-            detail_parts = []
-            if identity_bits:
-                detail_parts.append(" | ".join(identity_bits))
-            if message:
-                detail_parts.append(message)
-            controller_rows.append(
-                {
-                    "label": selection["label"],
-                    "state": safe_string(runtime.get("state")) or "unknown",
-                    "details": " - ".join(detail_parts),
-                }
-            )
-        elif current_match:
-            controller_rows.append(
-                {
-                    "label": selection["label"],
-                    "state": "detected",
-                    "details": current_match["event_path"],
-                }
-            )
-        else:
-            controller_rows.append(
-                {
-                    "label": selection["label"],
-                    "state": "missing",
-                    "details": "",
-                }
-            )
 
     snapshot = {
         "configured": configured,
@@ -5721,7 +4038,6 @@ def display_snapshot() -> Dict[str, Any]:
         "sunshine_install_audit": _svc.sunshine_installation_audit(_resolve_sunshine_unit(state)),
         "sunshine_active": sunshine_active,
         "sway_active": sway_active,
-        "bridge_state": _bridge_service_state() if configured else "inactive",
         "wireplumber_policy": wp_policy_state,
         "audio_sink": state["audio_sink"],
         "wayland_display": wayland_display,
@@ -5740,9 +4056,6 @@ def display_snapshot() -> Dict[str, Any]:
         "portal_handoff_active": portal_handoff_active,
         "current_mangohud_config": safe_string(active_launch_status.get("mangohud_config")),
         "last_launch_log_file": state["paths"]["last_launch_log_file"],
-        "controllers": controller_rows,
-        "controller_count": len(selections),
-        "controller_detection_error": device_error,
         "dependencies_missing": _ensure_dependencies(),
         "gpu_mode": safe_string(state.get("gpu_mode")).lower() if safe_string(state.get("gpu_mode")).lower() in {"auto", "manual"} else "auto",
         "gpu_card_path": safe_string(state.get("gpu_card_path")),
@@ -5758,10 +4071,8 @@ def display_snapshot() -> Dict[str, Any]:
         snapshot["next_step"] = "Run 'python3 lutristosunshine.py display start' to start the managed stack."
     elif not sway_active:
         snapshot["next_step"] = "Run 'python3 lutristosunshine.py display status' or '... display logs' to inspect why headless Sway is not ready."
-    elif selections and snapshot["bridge_state"] != "active":
-        snapshot["next_step"] = "Run 'python3 lutristosunshine.py display status' or '... display logs' if selected controllers are not being bridged."
     else:
-        snapshot["next_step"] = "Virtual display is ready. Use 'controllers', 'rumble', or 'logs' for follow-up actions."
+        snapshot["next_step"] = "Virtual display is ready. Use 'status' or 'logs' for follow-up actions."
     return snapshot
 
 
@@ -5906,29 +4217,6 @@ def display_doctor_report() -> Dict[str, Any]:
                 ),
             }
         )
-        checks.append(
-            {
-                "label": "Controller bridge",
-                "status": "pass" if snapshot["bridge_state"] == "active" else "info",
-                "message": (
-                    f"{snapshot['controller_count']} host controller(s) configured; bridge is active."
-                    if snapshot["bridge_state"] == "active"
-                    else (
-                        "No host controllers configured."
-                        if snapshot["controller_count"] == 0
-                        else f"{snapshot['controller_count']} host controller(s) configured; bridge state is {snapshot['bridge_state']}."
-                    )
-                ),
-            }
-        )
-    if snapshot["controller_detection_error"]:
-        checks.append(
-            {
-                "label": "Controller detection",
-                "status": "warn",
-                "message": snapshot["controller_detection_error"],
-            }
-        )
 
     summary = "healthy"
     if any(item["status"] == "fail" for item in checks):
@@ -5958,7 +4246,6 @@ def display_status() -> int:
         "Runtime: "
         f"Sunshine={'active' if snapshot['sunshine_active'] else 'inactive'}, "
         f"Sway={'active' if snapshot['sway_active'] else 'inactive'}, "
-        f"Input bridge={snapshot['bridge_state']}, "
         f"WP policy={snapshot['wireplumber_policy']}"
     )
     print(
@@ -5996,16 +4283,6 @@ def display_status() -> int:
         if snapshot["kwin_isolation_failed_devices"]:
             print(f"KWin isolation failures: {len(snapshot['kwin_isolation_failed_devices'])}")
     print(f"Portal handoff: {'active' if snapshot['portal_handoff_active'] else 'idle'}")
-    print(f"Controllers: {snapshot['controller_count']} configured")
-    if snapshot["controller_detection_error"]:
-        print(f"Controller detection: {snapshot['controller_detection_error']}")
-    elif snapshot["controllers"]:
-        for controller in snapshot["controllers"]:
-            suffix = f" - {controller['details']}" if controller["details"] else ""
-            print(f"- {controller['label']} ({controller['state']}){suffix}")
-    else:
-        print("- Client inputs from Moonlight/Sunshine work automatically.")
-        print("- No host controllers are currently reserved for passthrough.")
     print(f"Logs: {snapshot['last_launch_log_file']}")
     print(f"Virtual display GPU: {snapshot['gpu_status_label']}")
     print(f"Display renderer: {snapshot['renderer_status_label']}")
@@ -6043,7 +4320,6 @@ def remove_display() -> int:
     for path_key in [
         "portal_active_file",
         "portal_lock_file",
-        "input_bridge_status_file",
         "kwin_input_isolation_status_file",
         "wayland_display_file",
         "audio_module_file",

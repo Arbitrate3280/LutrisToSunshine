@@ -28,7 +28,6 @@ from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from config.registry import LAUNCHER_REGISTRY
 from launchers.lutris import is_lutris_running
 from display.manager import (
-    configure_exclusive_input_devices,
     configure_gpu,
     configure_renderer_mode,
     custom_display_mode,
@@ -49,7 +48,6 @@ from display.manager import (
     display_snapshot,
     display_logs,
 )
-from display.rumble import test_bridge_rumble
 
 
 def _status_level(value: str) -> str:
@@ -166,7 +164,6 @@ def parse_args(argv=None):
         "doctor",
         help="Legacy detailed checks view. Most users should use 'display status'.",
     )
-    display_subparsers.add_parser("controllers", help="Choose which host controllers are reserved for the virtual display.")
     display_subparsers.add_parser("status", help="Show the current virtual display status.")
     mangohud_parser = display_subparsers.add_parser(
         "mangohud-fps-limit",
@@ -200,51 +197,6 @@ def parse_args(argv=None):
         help="Custom fixed refresh rate in Hz. Used with mode=custom.",
     )
     display_subparsers.add_parser("stop", help="Stop the managed Sunshine service for the virtual display.")
-    rumble_parser = display_subparsers.add_parser(
-        "rumble",
-        help="Send a test rumble signal through the bridged virtual controller path.",
-    )
-    rumble_parser.add_argument(
-        "--controller",
-        default="",
-        help="Controller number from the prompt, selection id, or label substring.",
-    )
-    rumble_parser.add_argument(
-        "--mode",
-        choices=["auto", "evdev", "hidraw-ds4"],
-        default="auto",
-        help="Which virtual-device path to use for the rumble probe.",
-    )
-    rumble_parser.add_argument(
-        "--duration",
-        type=float,
-        default=1.0,
-        help="Length of each rumble pulse in seconds.",
-    )
-    rumble_parser.add_argument(
-        "--repeat",
-        type=int,
-        default=2,
-        help="How many pulses to send.",
-    )
-    rumble_parser.add_argument(
-        "--pause",
-        type=float,
-        default=0.4,
-        help="Pause between pulses in seconds.",
-    )
-    rumble_parser.add_argument(
-        "--strong",
-        type=int,
-        default=0xC000,
-        help="Strong motor magnitude from 0 to 65535.",
-    )
-    rumble_parser.add_argument(
-        "--weak",
-        type=int,
-        default=0x8000,
-        help="Weak motor magnitude from 0 to 65535.",
-    )
     display_subparsers.add_parser(
         "reset",
         help="Remove the virtual-display setup, restore Sunshine app launches to normal mode, and uninstall the managed files and overrides.",
@@ -284,8 +236,6 @@ def handle_display_command(args) -> int:
         if not snapshot["configured"]:
             return f"{badge('NOT SET UP', 'warning')} run \"Set up headless streaming\""
         if snapshot["sunshine_active"] and snapshot["sway_active"]:
-            if snapshot["controller_count"] and snapshot["bridge_state"] != "active":
-                return f"{badge('PARTIAL', 'warning')} running, but gamepad passthrough needs attention"
             return f"{badge('READY', 'success')} running"
         if snapshot["sunshine_active"] or snapshot["sway_active"]:
             return f"{badge('PARTIAL', 'warning')} only part is running"
@@ -298,13 +248,6 @@ def handle_display_command(args) -> int:
         mangohud_state = "MangoHud FPS sync on" if snapshot["dynamic_mangohud_fps_limit"] else "MangoHud FPS sync off"
         return f"{mode_summary}; {mangohud_state}"
 
-    def _hub_controller_summary(snapshot: dict) -> str:
-        if snapshot["controller_detection_error"]:
-            return f"{badge('WARN', 'warning')} {snapshot['controller_detection_error']}"
-        if snapshot["controller_count"]:
-            return f"{badge('ROUTED', 'success')} {snapshot['controller_count']} gamepad(s)"
-        return f"{badge('AUTO', 'info')} gamepads from Moonlight/Sunshine work automatically"
-
     def _hub_attention_items(snapshot: dict, blocked_apps, blocked_error) -> list[str]:
         items = []
         if snapshot["dependencies_missing"]:
@@ -313,8 +256,6 @@ def handle_display_command(args) -> int:
             items.append("Managed Sunshine is not running.")
         if snapshot["configured"] and not snapshot["sway_active"]:
             items.append("Headless Sway is not ready.")
-        if snapshot["controller_count"] and snapshot["bridge_state"] != "active":
-            items.append(f"Reserved host controllers are configured, but the bridge is {snapshot['bridge_state']}.")
         if blocked_error:
             items.append(f"Flatpak launch audit unavailable: {blocked_error}")
         elif blocked_apps:
@@ -331,7 +272,6 @@ def handle_display_command(args) -> int:
         print(_format_kv("Display sync:", _hub_display_sync_summary(snapshot)))
         print(_format_kv("Display GPU:", snapshot['gpu_status_label']))
         print(_format_kv("Display renderer:", snapshot['renderer_status_label']))
-        print(_format_kv("Controllers:", _hub_controller_summary(snapshot)))
         attention_items = _hub_attention_items(snapshot, blocked_apps, blocked_error)
         if attention_items:
             print(_format_kv("Attention:", badge("CHECK", "warning")))
@@ -350,7 +290,6 @@ def handle_display_command(args) -> int:
             f"Sway={_format_status_value('active' if snapshot['sway_active'] else 'inactive')}",
         ]
         runtime_parts = [
-            f"gamepads={_format_status_value(snapshot['bridge_state'])}",
             f"audio={_format_status_value(snapshot['wireplumber_policy'])}",
             f"launch helper={_format_status_value('active' if snapshot['portal_handoff_active'] else 'idle')}",
         ]
@@ -427,30 +366,6 @@ def handle_display_command(args) -> int:
         )
         print(_format_kv("Virtual display GPU:", snapshot['gpu_status_label']))
         print(_format_kv("Display renderer:", snapshot['renderer_status_label']))
-        if snapshot["controller_detection_error"]:
-            print(
-                _format_kv(
-                    "Gamepads:",
-                    f"{badge('UNAVAILABLE', 'error')} {snapshot['controller_detection_error']}",
-                )
-            )
-        elif snapshot["controller_count"]:
-            print(
-                _format_kv(
-                    "Gamepads:",
-                    f"{badge('ROUTED', 'success')} {snapshot['controller_count']} selected",
-                )
-            )
-            for controller in snapshot["controllers"]:
-                suffix = f" {muted('- ' + controller['details'])}" if controller["details"] else ""
-                print(f"- {controller['label']} {badge(controller['state'].upper(), _status_level(controller['state']))}{suffix}")
-        else:
-            print(
-                _format_kv(
-                    "Gamepads:",
-                    f"{badge('AUTO', 'info')} none routed; gamepads from Moonlight/Sunshine work automatically",
-                )
-            )
         if include_blocked_apps:
             blocked_apps, error = get_blocked_apps_report()
             if error:
@@ -522,7 +437,7 @@ def handle_display_command(args) -> int:
             return stop_display()
         return 0
 
-    def run_enable(interactive: bool) -> int:
+    def run_enable() -> int:
         setup_status = setup_display()
         if setup_status != 0:
             return setup_status
@@ -535,11 +450,6 @@ def handle_display_command(args) -> int:
             print("Run 'python3 lutristosunshine.py display status' or '... display logs', then try '... display enable' again if needed.")
             return 0
 
-        if interactive:
-            print("")
-            print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
-            if get_yes_no_input("Route physical gamepads plugged into this PC to the stream instead?", default=False):
-                return configure_exclusive_input_devices()
         return 0
 
     def run_reset() -> int:
@@ -614,13 +524,12 @@ def handle_display_command(args) -> int:
                 print(f"{accent('2.')} Stop Sunshine")
                 print(f"{accent('3.')} Restart Sunshine")
                 print(f"{accent('4.')} Auto FPS limit (MangoHud)")
-                print(f"{accent('5.')} Test controller rumble")
-                print(f"{accent('6.')} Show logs")
-                print(f"{accent('7.')} Remove headless streaming")
+                print(f"{accent('5.')} Show logs")
+                print(f"{accent('6.')} Remove headless streaming")
                 print(f"{muted('0.')} Back")
                 tool_choice = get_menu_choice(
                     f"{accent('Choose a tool: ')}",
-                    ["0", "1", "2", "3", "4", "5", "6", "7"],
+                    ["0", "1", "2", "3", "4", "5", "6"],
                 )
                 if tool_choice == "0":
                     return 0
@@ -648,14 +557,10 @@ def handle_display_command(args) -> int:
                         if result != 0:
                             return result
                 elif tool_choice == "5":
-                    result = test_bridge_rumble(selector="", mode="auto")
-                    if result != 0:
-                        return result
-                elif tool_choice == "6":
                     result = display_logs(80)
                     if result != 0:
                         return result
-                elif tool_choice == "7":
+                elif tool_choice == "6":
                     confirmed = get_yes_no_input(
                         "This removes all headless streaming files and restores Sunshine to normal. Continue?",
                         default=False,
@@ -670,30 +575,22 @@ def handle_display_command(args) -> int:
             print(heading("Actions"))
             print(f"{accent('1.')} Set up headless streaming")
             print(f"{accent('2.')} Show full status")
-            print(f"{accent('3.')} Use host gamepads in the stream")
-            print(f"{accent('4.')} Configure display sync mode")
-            print(f"{accent('5.')} Choose which GPU to use")
-            print(f"{accent('6.')} Choose renderer (GLES2 / Vulkan)")
-            print(f"{accent('7.')} More tools")
+            print(f"{accent('3.')} Configure display sync mode")
+            print(f"{accent('4.')} Choose which GPU to use")
+            print(f"{accent('5.')} Choose renderer (GLES2 / Vulkan)")
+            print(f"{accent('6.')} More tools")
             print(f"{muted('0.')} Exit")
-            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
+            choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6"])
             if choice == "0":
                 return 0
             if choice == "1":
-                result = run_enable(interactive=True)
+                result = run_enable()
                 if result != 0:
                     return result
             elif choice == "2":
                 print("")
                 print_dashboard()
             elif choice == "3":
-                print("")
-                print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
-                print("Use this for physical gamepads plugged into this PC.")
-                result = configure_exclusive_input_devices()
-                if result != 0:
-                    return result
-            elif choice == "4":
                 print("")
                 print("Display sync mode")
                 print("1. Follow Moonlight's requested resolution and FPS")
@@ -713,15 +610,15 @@ def handle_display_command(args) -> int:
                     result = configure_custom_display_mode(interactive=True)
                     if result != 0:
                         return result
-            elif choice == "5":
+            elif choice == "4":
                 result = configure_gpu()
                 if result != 0:
                     return result
-            elif choice == "6":
+            elif choice == "5":
                 result = configure_renderer_mode()
                 if result != 0:
                     return result
-            elif choice == "7":
+            elif choice == "6":
                 result = run_advanced_tools_menu()
                 if result != 0:
                     return result
@@ -730,7 +627,7 @@ def handle_display_command(args) -> int:
     if action is None:
         return run_hub()
     if action == "enable":
-        return run_enable(interactive=True)
+        return run_enable()
     if action == "start":
         return run_start()
     if action == "restart":
@@ -738,10 +635,6 @@ def handle_display_command(args) -> int:
     if action == "doctor":
         print_doctor_report()
         return 0
-    if action == "controllers":
-        print("Gamepads from Moonlight and Sunshine work inside the stream automatically.")
-        print("Use this for physical gamepads plugged into this PC.")
-        return configure_exclusive_input_devices()
     if action == "status":
         print_dashboard()
         return 0 if display_snapshot()["configured"] else 1
@@ -766,16 +659,6 @@ def handle_display_command(args) -> int:
         return update_refresh_rate_mode(args.mode)
     if action == "stop":
         return stop_display()
-    if action == "rumble":
-        return test_bridge_rumble(
-            selector=args.controller,
-            mode=args.mode,
-            duration=args.duration,
-            repeat=args.repeat,
-            pause=args.pause,
-            strong_magnitude=args.strong,
-            weak_magnitude=args.weak,
-        )
     if action == "reset":
         return run_reset()
     if action == "logs":
