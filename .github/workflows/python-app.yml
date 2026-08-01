@@ -39,6 +39,7 @@ jobs:
           --onefile \
           --assume-yes-for-downloads \
           --include-package=evdev \
+          --include-data-dir=display/scripts=display/scripts \
           --jobs=$(nproc) \
           --static-libpython=no \
           --output-filename=lutristosunshine \

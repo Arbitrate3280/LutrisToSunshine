@@ -22,7 +22,7 @@ from launchers.eden import get_eden_command
 
 # Re-exported for compatibility with main CLI launcher
 from sunshine.detection import detect_sunshine_installation  # noqa: F401
-from display.manager import (
+from display.command_wrap import (
     get_app_prep_commands,
     HEADLESS_PREP_PREFIX,
     is_headless_prep_wrapped,
@@ -33,8 +33,8 @@ from display.manager import (
     unwrap_command,
     get_wrapped_command_exit_timeout,
     wrap_command,
-    is_enabled as display_enabled,
 )
+from display.manager import is_enabled as display_enabled
 
 #Remove SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

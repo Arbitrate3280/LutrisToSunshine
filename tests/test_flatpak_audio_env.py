@@ -16,7 +16,9 @@ import sys
 import unittest
 from unittest.mock import patch
 
+from display import audio_policy
 from display import manager
+from display import scripts_render
 
 
 def _rendered_inject_heredoc_py() -> str:
@@ -26,7 +28,7 @@ def _rendered_inject_heredoc_py() -> str:
     Python from each, and asserts they are byte-identical.
     """
     state = manager._default_state()
-    templates = manager._script_templates(state)
+    templates = scripts_render.render_managed_files(state)
     py_codes = {}
     for path, content in templates.items():
         name = str(path)
@@ -49,7 +51,7 @@ def _run_inject(cmd: str, sink: str, py_code: str) -> str:
     """Run the rendered heredoc Python code via subprocess."""
     r = subprocess.run(
         [sys.executable, "-c", py_code, cmd, sink,
-         manager.AUDIO_STREAM_PULSE_PROP, manager.AUDIO_STREAM_PIPEWIRE_PROPS],
+         audio_policy.AUDIO_STREAM_PULSE_PROP, audio_policy.AUDIO_STREAM_PIPEWIRE_PROPS],
         capture_output=True, text=True, timeout=5,
     )
     return r.stdout.strip()
@@ -94,10 +96,10 @@ class InjectFlatpakAudioEnvTests(unittest.TestCase):
         tokens = shlex.split(_run_inject(cmd, self.sink, self._py_code))
         self.assertTrue(self._has(tokens, "PULSE_SINK", self.sink), tokens)
         self.assertTrue(
-            self._has(tokens, "PULSE_PROP", manager.AUDIO_STREAM_PULSE_PROP), tokens
+            self._has(tokens, "PULSE_PROP", audio_policy.AUDIO_STREAM_PULSE_PROP), tokens
         )
         self.assertTrue(
-            self._has(tokens, "PIPEWIRE_PROPS", manager.AUDIO_STREAM_PIPEWIRE_PROPS),
+            self._has(tokens, "PIPEWIRE_PROPS", audio_policy.AUDIO_STREAM_PIPEWIRE_PROPS),
             tokens,
         )
 
@@ -123,8 +125,8 @@ class InjectFlatpakAudioEnvTests(unittest.TestCase):
         cmd = "flatpak run --env=PULSE_SINK=custom com.game"
         tokens = shlex.split(_run_inject(cmd, self.sink, self._py_code))
         self.assertTrue(self._has(tokens, "PULSE_SINK", self.sink))
-        self.assertTrue(self._has(tokens, "PULSE_PROP", manager.AUDIO_STREAM_PULSE_PROP))
-        self.assertTrue(self._has(tokens, "PIPEWIRE_PROPS", manager.AUDIO_STREAM_PIPEWIRE_PROPS))
+        self.assertTrue(self._has(tokens, "PULSE_PROP", audio_policy.AUDIO_STREAM_PULSE_PROP))
+        self.assertTrue(self._has(tokens, "PIPEWIRE_PROPS", audio_policy.AUDIO_STREAM_PIPEWIRE_PROPS))
         # The user's custom value must be gone.
         self.assertNotIn("--env=PULSE_SINK=custom", tokens)
 

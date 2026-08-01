@@ -30,11 +30,8 @@ from launchers.lutris import is_lutris_running
 from display.manager import (
     configure_gpu,
     configure_renderer_mode,
-    custom_display_mode,
-    dynamic_mangohud_fps_limit_enabled,
     is_enabled as display_is_enabled,
     refresh_managed_files,
-    refresh_rate_sync_mode,
     remove_display,
     set_custom_display_mode,
     set_dynamic_mangohud_fps_limit,
@@ -50,43 +47,8 @@ from display.manager import (
 )
 
 
-def _status_level(value: str) -> str:
-    normalized = (value or "").strip().lower()
-    if normalized in {"active", "configured", "ready", "bridged", "detected", "ok"}:
-        return "success"
-    if normalized in {"starting", "idle", "waiting", "not configured", "inactive", "none"}:
-        return "warning"
-    if normalized in {"missing", "failed", "error", "unavailable"}:
-        return "error"
-    return "info"
-
-
-def _format_status_value(value: str) -> str:
-    return state_text(value, _status_level(value))
-
-
 def _format_kv(label: str, value: str) -> str:
     return f"{accent(label)} {value}"
-
-
-def _refresh_rate_sync_mode_summary(mode: str) -> str:
-    if mode == "exact":
-        return "client's refresh rate"
-    if mode == "custom":
-        return "custom fixed display mode"
-    return "follow Moonlight requested FPS"
-
-
-def _custom_display_mode_summary(mode: dict) -> str:
-    width = int(mode.get("width", 0) or 0)
-    height = int(mode.get("height", 0) or 0)
-    refresh = float(mode.get("refresh", 0) or 0)
-    if refresh <= 0:
-        refresh_text = "unknown"
-    else:
-        nearest = round(refresh)
-        refresh_text = str(int(nearest)) if abs(refresh - nearest) < 0.01 else f"{refresh:.2f}"
-    return f"{width}x{height} @ {refresh_text} Hz"
 
 
 def _custom_display_mode_value(mode: dict) -> str:
@@ -231,22 +193,16 @@ def handle_display_command(args) -> int:
         return blocked_apps, error
 
     def _hub_status_summary(snapshot: dict) -> str:
-        if snapshot["dependencies_missing"]:
-            return f"{badge('NEEDS SETUP', 'error')} install required packages first"
-        if not snapshot["configured"]:
-            return f"{badge('NOT SET UP', 'warning')} run \"Set up headless streaming\""
-        if snapshot["sunshine_active"] and snapshot["sway_active"]:
-            return f"{badge('READY', 'success')} running"
-        if snapshot["sunshine_active"] or snapshot["sway_active"]:
-            return f"{badge('PARTIAL', 'warning')} only part is running"
-        return f"{badge('STOPPED', 'info')} installed but not running"
+        level = {
+            "READY": "success",
+            "PARTIAL": "warning",
+            "STOPPED": "info",
+            "NOT SET UP": "warning",
+        }.get(snapshot["status_summary"], "warning")
+        return badge(snapshot["status_summary"], level)
 
     def _hub_display_sync_summary(snapshot: dict) -> str:
-        mode_summary = _refresh_rate_sync_mode_summary(snapshot["refresh_rate_sync_mode"])
-        if snapshot["refresh_rate_sync_mode"] == "custom":
-            mode_summary = f"{mode_summary} ({_custom_display_mode_summary(snapshot['custom_display_mode'])})"
-        mangohud_state = "MangoHud FPS sync on" if snapshot["dynamic_mangohud_fps_limit"] else "MangoHud FPS sync off"
-        return f"{mode_summary}; {mangohud_state}"
+        return snapshot["display_sync_summary"]
 
     def _hub_attention_items(snapshot: dict, blocked_apps, blocked_error) -> list[str]:
         items = []
@@ -285,47 +241,21 @@ def handle_display_command(args) -> int:
         snapshot = display_snapshot()
         print(heading("Virtual display"))
         status_parts = [
-            f"setup={_format_status_value('configured' if snapshot['configured'] else 'not configured')}",
-            f"Sunshine={_format_status_value('active' if snapshot['sunshine_active'] else 'inactive')}",
-            f"Sway={_format_status_value('active' if snapshot['sway_active'] else 'inactive')}",
+            f"setup={state_text('configured' if snapshot['configured'] else 'not configured', 'success' if snapshot['configured'] else 'warning')}",
+            f"Sunshine={state_text('active' if snapshot['sunshine_active'] else 'inactive', 'success' if snapshot['sunshine_active'] else 'warning')}",
+            f"Sway={state_text('active' if snapshot['sway_active'] else 'inactive', 'success' if snapshot['sway_active'] else 'warning')}",
         ]
         runtime_parts = [
-            f"audio={_format_status_value(snapshot['wireplumber_policy'])}",
-            f"launch helper={_format_status_value('active' if snapshot['portal_handoff_active'] else 'idle')}",
+            f"audio={state_text(snapshot['wireplumber_policy'], 'info')}",
+            f"launch helper={state_text('active' if snapshot['portal_handoff_active'] else 'idle', 'success' if snapshot['portal_handoff_active'] else 'warning')}",
         ]
         print(_format_kv("Status:", ", ".join(status_parts)))
         print(_format_kv("Runtime:", ", ".join(runtime_parts)))
-        isolation_level = "success"
-        isolation_detail = "rule ready"
-        if snapshot["input_isolation_mode"] == "kwin-runtime-disable":
-            if snapshot["kwin_isolation_error"]:
-                isolation_level = "error"
-                isolation_detail = snapshot["kwin_isolation_error"]
-            elif snapshot["kwin_isolation_state"] == "inactive":
-                isolation_level = "warning"
-                isolation_detail = "KWin helper is not running"
-            elif snapshot["kwin_isolation_state"] == "starting":
-                isolation_level = "info"
-                isolation_detail = "KWin helper is starting"
-            elif snapshot["kwin_isolation_devices"]:
-                isolation_detail = (
-                    f"disabled {len(snapshot['kwin_isolation_devices'])} of "
-                    f"{snapshot['sunshine_input_device_count']} Sunshine device(s) in KWin"
-                )
-            elif snapshot["sunshine_input_device_count"] > 0:
-                isolation_level = "warning"
-                isolation_detail = (
-                    f"matched {snapshot['kwin_isolation_seen_device_count']} of "
-                    f"{snapshot['sunshine_input_device_count']} Sunshine device(s), but disabled 0"
-                )
-            else:
-                isolation_level = "warning"
-                isolation_detail = "waiting for Sunshine virtual inputs"
         print(_format_kv("Host session:", snapshot["host_session"]))
         print(
             _format_kv(
                 "Input isolation:",
-                f"{state_text(snapshot['input_isolation_mode'], isolation_level)} {muted('- ' + isolation_detail)}",
+                f"{state_text(snapshot['input_isolation_mode'], snapshot['isolation_level'])} {muted('- ' + snapshot['isolation_summary'])}",
             )
         )
         mangohud_status = (
@@ -343,11 +273,11 @@ def handle_display_command(args) -> int:
         print(
             _format_kv(
                 "Refresh rate sync mode:",
-                _refresh_rate_sync_mode_summary(snapshot["refresh_rate_sync_mode"]),
+                snapshot["refresh_rate_sync_mode_summary"],
             )
         )
         if snapshot["refresh_rate_sync_mode"] == "custom":
-            print(_format_kv("Custom display target:", _custom_display_mode_summary(snapshot["custom_display_mode"])))
+            print(_format_kv("Custom display target:", snapshot["custom_display_mode_summary"]))
         if snapshot["dependencies_missing"]:
             print(
                 _format_kv(
@@ -471,8 +401,7 @@ def handle_display_command(args) -> int:
         return restart_display()
 
     def update_mangohud_fps_limit(enabled: bool) -> int:
-        previous = dynamic_mangohud_fps_limit_enabled()
-        set_dynamic_mangohud_fps_limit(enabled)
+        previous, _ = set_dynamic_mangohud_fps_limit(enabled)
         if previous == enabled:
             state = "on" if enabled else "off"
             print(f"Auto FPS limit already {state}.")
@@ -484,20 +413,23 @@ def handle_display_command(args) -> int:
 
     def update_refresh_rate_mode(mode: str) -> int:
         normalized_mode = mode if mode in {"exact", "custom"} else "client"
-        previous = refresh_rate_sync_mode()
-        set_refresh_rate_sync_mode(normalized_mode)
-        summary = _refresh_rate_sync_mode_summary(normalized_mode)
+        previous, _ = set_refresh_rate_sync_mode(normalized_mode)
+        summary = {
+            "exact": "client's refresh rate",
+            "custom": "custom fixed display mode",
+        }.get(normalized_mode, "follow Moonlight requested FPS")
         if previous == normalized_mode:
             print(f"Refresh rate sync mode is already set to {summary} for virtual-display launches.")
         else:
             print(f"Refresh rate sync mode set to {summary} for virtual-display launches.")
         if normalized_mode == "custom":
-            print(f"Custom display target: {_custom_display_mode_summary(custom_display_mode())}")
+            print(f"Custom display target: {display_snapshot()['custom_display_mode_summary']}")
         print("This controls both the virtual-display output mode and the dynamic MangoHud FPS limit source.")
         return 0
 
     def configure_custom_display_mode(interactive: bool) -> int:
-        current_mode = custom_display_mode()
+        snapshot = display_snapshot()
+        current_mode = snapshot["custom_display_mode"]
         width = args.width if getattr(args, "width", None) is not None else current_mode["width"]
         height = args.height if getattr(args, "height", None) is not None else current_mode["height"]
         refresh = args.refresh if getattr(args, "refresh", None) is not None else current_mode["refresh"]
@@ -505,7 +437,7 @@ def handle_display_command(args) -> int:
         if interactive:
             print("")
             print("Custom fixed display mode")
-            print(f"Current target: {_custom_display_mode_summary(current_mode)}")
+            print(f"Current target: {snapshot['custom_display_mode_summary']}")
             width, height, refresh = get_user_input(
                 f"Enter the desired resolution and refresh rate as WidthxHeight@RefreshRate (e.g. {_custom_display_mode_value(current_mode)}): ",
                 lambda value: _parse_custom_display_mode_value(value, current_mode),
@@ -546,7 +478,7 @@ def handle_display_command(args) -> int:
                     if result != 0:
                         return result
                 elif tool_choice == "4":
-                    enabling = not dynamic_mangohud_fps_limit_enabled()
+                    enabling = not display_snapshot()["dynamic_mangohud_fps_limit"]
                     prompt = (
                         "Cap FPS to match the stream?"
                         if enabling

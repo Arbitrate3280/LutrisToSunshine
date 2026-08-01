@@ -186,19 +186,17 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display", "mangohud-fps-limit", "enable"])
         calls = []
 
-        original_dynamic_mangohud_fps_limit_enabled = lutristosunshine.dynamic_mangohud_fps_limit_enabled
         original_set_dynamic_mangohud_fps_limit = lutristosunshine.set_dynamic_mangohud_fps_limit
         try:
-            lutristosunshine.dynamic_mangohud_fps_limit_enabled = lambda: False
-            lutristosunshine.set_dynamic_mangohud_fps_limit = lambda enabled: calls.append(enabled) or {
-                "dynamic_mangohud_fps_limit": enabled
-            }
+            lutristosunshine.set_dynamic_mangohud_fps_limit = lambda enabled: calls.append(enabled) or (
+                False,
+                {"dynamic_mangohud_fps_limit": enabled},
+            )
 
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
-            lutristosunshine.dynamic_mangohud_fps_limit_enabled = original_dynamic_mangohud_fps_limit_enabled
             lutristosunshine.set_dynamic_mangohud_fps_limit = original_set_dynamic_mangohud_fps_limit
 
         rendered = output.getvalue()
@@ -210,19 +208,17 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display", "refresh-rate-mode", "exact"])
         calls = []
 
-        original_refresh_rate_sync_mode = lutristosunshine.refresh_rate_sync_mode
         original_set_refresh_rate_sync_mode = lutristosunshine.set_refresh_rate_sync_mode
         try:
-            lutristosunshine.refresh_rate_sync_mode = lambda: "client"
-            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(mode) or {
-                "refresh_rate_sync_mode": mode
-            }
+            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(mode) or (
+                "client",
+                {"refresh_rate_sync_mode": mode},
+            )
 
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
-            lutristosunshine.refresh_rate_sync_mode = original_refresh_rate_sync_mode
             lutristosunshine.set_refresh_rate_sync_mode = original_set_refresh_rate_sync_mode
 
         rendered = output.getvalue()
@@ -236,28 +232,28 @@ class DisplayCliTests(unittest.TestCase):
         )
         calls = []
 
-        original_refresh_rate_sync_mode = lutristosunshine.refresh_rate_sync_mode
         original_set_refresh_rate_sync_mode = lutristosunshine.set_refresh_rate_sync_mode
         original_set_custom_display_mode = lutristosunshine.set_custom_display_mode
-        original_custom_display_mode = lutristosunshine.custom_display_mode
+        original_display_snapshot = lutristosunshine.display_snapshot
         try:
-            lutristosunshine.refresh_rate_sync_mode = lambda: "client"
             lutristosunshine.set_custom_display_mode = lambda width, height, refresh: calls.append(
                 ("custom", width, height, refresh)
-            ) or {"custom_display_mode": {"width": width, "height": height, "refresh": refresh}}
-            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(("mode", mode)) or {
-                "refresh_rate_sync_mode": mode
+            ) or ({"width": 1920, "height": 1080, "refresh": 60.0}, {"custom_display_mode": {"width": width, "height": height, "refresh": refresh}})
+            lutristosunshine.set_refresh_rate_sync_mode = lambda mode: calls.append(("mode", mode)) or (
+                "client",
+                {"refresh_rate_sync_mode": mode},
+            )
+            lutristosunshine.display_snapshot = lambda: {
+                "custom_display_mode_summary": "3440x1440 @ 59.94 Hz"
             }
-            lutristosunshine.custom_display_mode = lambda: {"width": 3440, "height": 1440, "refresh": 59.94}
 
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
-            lutristosunshine.refresh_rate_sync_mode = original_refresh_rate_sync_mode
             lutristosunshine.set_refresh_rate_sync_mode = original_set_refresh_rate_sync_mode
             lutristosunshine.set_custom_display_mode = original_set_custom_display_mode
-            lutristosunshine.custom_display_mode = original_custom_display_mode
+            lutristosunshine.display_snapshot = original_display_snapshot
 
         rendered = output.getvalue()
         self.assertEqual(result, 0)
@@ -294,6 +290,11 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_mode": "default",
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run enable.",
+                "status_summary": "NOT SET UP",
+                "display_sync_summary": "follow Moonlight requested FPS; MangoHud FPS sync off",
+                "refresh_rate_sync_mode_summary": "follow Moonlight requested FPS",
+                "isolation_summary": "rule ready",
+                "isolation_level": "success",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
             lutristosunshine.get_menu_choice = lambda prompt, valid_choices: "0"
@@ -340,6 +341,11 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_mode": "default",
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run start.",
+                "status_summary": "STOPPED",
+                "display_sync_summary": "follow Moonlight requested FPS; MangoHud FPS sync off",
+                "refresh_rate_sync_mode_summary": "follow Moonlight requested FPS",
+                "isolation_summary": "rule ready",
+                "isolation_level": "success",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
             lutristosunshine.get_menu_choice = lambda prompt, valid_choices: next(choices)
@@ -389,6 +395,11 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_mode": "default",
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run doctor.",
+                "status_summary": "PARTIAL",
+                "display_sync_summary": "client's refresh rate; MangoHud FPS sync on",
+                "refresh_rate_sync_mode_summary": "client's refresh rate",
+                "isolation_summary": "KWin helper is not running",
+                "isolation_level": "warning",
             }
             lutristosunshine.get_display_blocked_apps = lambda: ([], None)
 
