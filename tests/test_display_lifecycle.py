@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from dataclasses import asdict
+
+from display.state import DisplayPaths
 
 from display import audio_policy
 from display import manager
@@ -21,9 +24,9 @@ class DisplayLifecycleTests(unittest.TestCase):
         conf_path.write_text(config_text, encoding="utf-8")
 
         state = manager._default_state()
-        state["enabled"] = True
-        state["paths"] = dict(state["paths"])
-        state["paths"]["sunshine_conf"] = str(conf_path)
+        state.enabled = True
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.sunshine_conf = str(conf_path)
         return state, conf_path
 
     def test_udev_rule_does_not_match_bridge_phys_prefix(self) -> None:
@@ -31,15 +34,16 @@ class DisplayLifecycleTests(unittest.TestCase):
         self.assertNotIn('ATTRS{phys}=="lts-inputbridge/*"', rule)
 
     def test_udev_rule_grants_current_user_access_to_sunshine_inputs(self) -> None:
-        original_user = manager.current_user_name
-        original_group = manager.current_user_group
+        from display import input_isolation
+        original_user = input_isolation.current_user_name
+        original_group = input_isolation.current_user_group
         try:
-            manager.current_user_name = lambda: "alice"
-            manager.current_user_group = lambda: "streaming"
+            input_isolation.current_user_name = lambda: "alice"
+            input_isolation.current_user_group = lambda: "streaming"
             rule = manager._udev_rule("permissions-only")
         finally:
-            manager.current_user_name = original_user
-            manager.current_user_group = original_group
+            input_isolation.current_user_name = original_user
+            input_isolation.current_user_group = original_group
         self.assertIn('OWNER="alice"', rule)
         self.assertIn('GROUP="streaming"', rule)
         self.assertIn('MODE="0660"', rule)
@@ -73,8 +77,8 @@ class DisplayLifecycleTests(unittest.TestCase):
 
     def test_kwin_input_isolation_status_defaults_when_missing(self) -> None:
         state = manager._default_state()
-        state["paths"] = dict(state["paths"])
-        state["paths"]["kwin_input_isolation_status_file"] = str(Path(tempfile.mkdtemp()) / "missing-status.json")
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.kwin_input_isolation_status_file = str(Path(tempfile.mkdtemp()) / "missing-status.json")
         status = manager._kwin_input_isolation_status(state)
         self.assertEqual(status["state"], "inactive")
         self.assertEqual(status["disabled_devices"], [])
@@ -93,7 +97,7 @@ class DisplayLifecycleTests(unittest.TestCase):
             clear=False,
         ):
             rendered = scripts_render.render_managed_files(state)
-        script = rendered[Path(state["paths"]["kwin_input_isolation_script"])]
+        script = rendered[Path(state.paths.kwin_input_isolation_script)]
         self.assertIn("def is_plasma_session():", script)
         self.assertIn("plasma_markers", script)
         self.assertIn('write_status(state="starting")', script)
@@ -144,7 +148,7 @@ H: Handlers=sysrq kbd event29
         original_ensure_dependencies = manager._ensure_dependencies
         original_load_state = manager.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_state_paths = manager._state_paths
+        original_state_paths = manager.build_paths
         original_refresh_managed_files = manager.refresh_managed_files
         original_save_state = manager.save_state
         original_install_udev_rule = manager._install_udev_rule
@@ -154,7 +158,7 @@ H: Handlers=sysrq kbd event29
             manager._ensure_dependencies = lambda: []
             manager.load_state = lambda: state
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager._state_paths = lambda _unit: state["paths"]
+            manager.build_paths = lambda _unit: state.paths
             manager.refresh_managed_files = lambda current=None: current if current is not None else state
             manager.save_state = lambda current: None
             manager._install_udev_rule = lambda current: True
@@ -168,7 +172,7 @@ H: Handlers=sysrq kbd event29
             manager._ensure_dependencies = original_ensure_dependencies
             manager.load_state = original_load_state
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._state_paths = original_state_paths
+            manager.build_paths = original_state_paths
             manager.refresh_managed_files = original_refresh_managed_files
             manager.save_state = original_save_state
             manager._install_udev_rule = original_install_udev_rule
@@ -177,7 +181,7 @@ H: Handlers=sysrq kbd event29
 
         self.assertEqual(result, 0)
         self.assertEqual(
-            state["sunshine_audio_sink"],
+            state.sunshine_audio_sink,
             {"present": True, "value": "host-speakers"},
         )
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
@@ -218,7 +222,7 @@ H: Handlers=sysrq kbd event29
 
     def test_stop_display_restores_original_audio_target(self) -> None:
         state, conf_path = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
-        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
+        state.sunshine_audio_sink = {"present": True, "value": "host-speakers"}
         original_load_state = manager.load_state
         original_save_state = manager.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
@@ -243,40 +247,40 @@ H: Handlers=sysrq kbd event29
 
     def test_remove_display_deletes_override_files(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
-        state["sunshine_unit_name"] = sunshine_service.SUNSHINE_UNIT
+        state.enabled = True
+        state.sunshine_unit_name = sunshine_service.SUNSHINE_UNIT
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
         override_dir = base / f"{sunshine_service.SUNSHINE_UNIT}.d"
         override_dir.mkdir(parents=True)
 
-        state["paths"] = dict(state["paths"])
-        state["paths"]["state_path"] = str(base / "display.json")
-        state["paths"]["systemd_user_dir"] = str(base)
-        state["paths"]["sunshine_override_dir"] = str(override_dir)
-        state["paths"]["sunshine_override"] = str(override_dir / "override.conf")
-        state["paths"]["kwin_input_isolation_script"] = str(base / "lutristosunshine-kwin-input-isolation.py")
-        state["paths"]["sunshine_wrapper_script"] = str(base / "lutristosunshine-run-display-service.sh")
-        state["paths"]["portal_active_file"] = str(base / "portal-active")
-        state["paths"]["portal_lock_file"] = str(base / "portal-lock")
-        state["paths"]["kwin_input_isolation_status_file"] = str(base / "kwin-input-isolation-status.json")
-        state["paths"]["wayland_display_file"] = str(base / "wayland-display")
-        state["paths"]["audio_module_file"] = str(base / "audio-module-id")
-        state["paths"]["sway_config"] = str(base / "sway.conf")
-        state["paths"]["sway_start_script"] = str(base / "lutristosunshine-start-headless-sway.sh")
-        state["paths"]["sunshine_start_script"] = str(base / "lutristosunshine-start-display-sunshine.sh")
-        state["paths"]["audio_create_script"] = str(base / "lutristosunshine-create-audio-sink.sh")
-        state["paths"]["audio_cleanup_script"] = str(base / "lutristosunshine-cleanup-audio-sink.sh")
-        state["paths"]["launch_app_script"] = str(base / "lutristosunshine-launch-app.sh")
-        state["paths"]["resolve_stream_fps_script"] = str(base / "lutristosunshine-resolve-stream-fps.sh")
-        state["paths"]["apply_exact_refresh_script"] = str(base / "lutristosunshine-apply-exact-refresh.sh")
-        state["paths"]["headless_prep_script"] = str(base / "lutristosunshine-run-headless-prep.sh")
-        state["paths"]["set_resolution_script"] = str(base / "lutristosunshine-set-resolution.sh")
-        state["paths"]["reset_resolution_script"] = str(base / "lutristosunshine-reset-resolution.sh")
-        state["paths"]["get_gpu_addr"] = str(base / "lutristosunshine-get-gpu-addr.sh")
-        state["paths"]["wireplumber_policy_script"] = str(base / "lts-audio-policy.lua")
-        state["paths"]["wireplumber_policy_conf"] = str(base / "54-lts-audio-policy.conf")
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.state_path = str(base / "display.json")
+        state.paths.systemd_user_dir = str(base)
+        state.paths.sunshine_override_dir = str(override_dir)
+        state.paths.sunshine_override = str(override_dir / "override.conf")
+        state.paths.kwin_input_isolation_script = str(base / "lutristosunshine-kwin-input-isolation.py")
+        state.paths.sunshine_wrapper_script = str(base / "lutristosunshine-run-display-service.sh")
+        state.paths.portal_active_file = str(base / "portal-active")
+        state.paths.portal_lock_file = str(base / "portal-lock")
+        state.paths.kwin_input_isolation_status_file = str(base / "kwin-input-isolation-status.json")
+        state.paths.wayland_display_file = str(base / "wayland-display")
+        state.paths.audio_module_file = str(base / "audio-module-id")
+        state.paths.sway_config = str(base / "sway.conf")
+        state.paths.sway_start_script = str(base / "lutristosunshine-start-headless-sway.sh")
+        state.paths.sunshine_start_script = str(base / "lutristosunshine-start-display-sunshine.sh")
+        state.paths.audio_create_script = str(base / "lutristosunshine-create-audio-sink.sh")
+        state.paths.audio_cleanup_script = str(base / "lutristosunshine-cleanup-audio-sink.sh")
+        state.paths.launch_app_script = str(base / "lutristosunshine-launch-app.sh")
+        state.paths.resolve_stream_fps_script = str(base / "lutristosunshine-resolve-stream-fps.sh")
+        state.paths.apply_exact_refresh_script = str(base / "lutristosunshine-apply-exact-refresh.sh")
+        state.paths.headless_prep_script = str(base / "lutristosunshine-run-headless-prep.sh")
+        state.paths.set_resolution_script = str(base / "lutristosunshine-set-resolution.sh")
+        state.paths.reset_resolution_script = str(base / "lutristosunshine-reset-resolution.sh")
+        state.paths.get_gpu_addr = str(base / "lutristosunshine-get-gpu-addr.sh")
+        state.paths.wireplumber_policy_script = str(base / "lts-audio-policy.lua")
+        state.paths.wireplumber_policy_conf = str(base / "54-lts-audio-policy.conf")
 
         for key in [
             "sunshine_override",
@@ -293,10 +297,10 @@ H: Handlers=sysrq kbd event29
             "wayland_display_file",
             "audio_module_file",
         ]:
-            Path(state["paths"][key]).write_text("managed\n", encoding="utf-8")
+            Path(getattr(state.paths, key)).write_text("managed\n", encoding="utf-8")
 
-        Path(state["paths"]["sunshine_override"]).write_text(
-            f"[Service]\nExecStart=\nExecStart={state['paths']['sunshine_wrapper_script']}\n",
+        Path(state.paths.sunshine_override).write_text(
+            f"[Service]\nExecStart=\nExecStart={state.paths.sunshine_wrapper_script}\n",
             encoding="utf-8",
         )
 
@@ -324,16 +328,16 @@ H: Handlers=sysrq kbd event29
             audio_policy.remove = original_remove_wireplumber_policy
 
         self.assertEqual(result, 0)
-        self.assertFalse(Path(state["paths"]["sunshine_override"]).exists())
-        self.assertFalse(Path(state["paths"]["sunshine_wrapper_script"]).exists())
+        self.assertFalse(Path(state.paths.sunshine_override).exists())
+        self.assertFalse(Path(state.paths.sunshine_wrapper_script).exists())
         self.assertFalse(override_dir.exists())
 
     def test_display_snapshot_not_configured_has_enable_next_step(self) -> None:
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         state = manager._default_state()
-        state["paths"] = dict(state["paths"])
-        state["paths"]["portal_active_file"] = str(Path(tempdir.name) / "portal-active")
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.portal_active_file = str(Path(tempdir.name) / "portal-active")
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         try:
@@ -374,10 +378,10 @@ H: Handlers=sysrq kbd event29
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         state = manager._default_state()
-        state["paths"] = dict(state["paths"])
-        state["paths"]["portal_active_file"] = str(Path(tempdir.name) / "portal-active")
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.portal_active_file = str(Path(tempdir.name) / "portal-active")
 
-        Path(state["paths"]["portal_active_file"]).write_text(
+        Path(state.paths.portal_active_file).write_text(
             "phase=running\nmangohud_config=read_cfg,fps_limit=59.94\n",
             encoding="utf-8",
         )
@@ -396,8 +400,8 @@ H: Handlers=sysrq kbd event29
 
     def test_current_headless_mode_formats_refresh_in_millihz(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
-        state["sway_socket"] = "/tmp/lts-sway.sock"
+        state.enabled = True
+        state.sway_socket = "/tmp/lts-sway.sock"
 
         original_run = manager.run_command
         original_path_exists = manager.Path.exists
@@ -419,7 +423,7 @@ H: Handlers=sysrq kbd event29
                 ),
                 stderr="",
             )
-            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+            manager.Path.exists = lambda path: str(path) == state.sway_socket
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
@@ -430,8 +434,8 @@ H: Handlers=sysrq kbd event29
 
     def test_current_headless_mode_returns_empty_when_headless_output_missing(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
-        state["sway_socket"] = "/tmp/lts-sway.sock"
+        state.enabled = True
+        state.sway_socket = "/tmp/lts-sway.sock"
 
         original_run = manager.run_command
         original_path_exists = manager.Path.exists
@@ -442,7 +446,7 @@ H: Handlers=sysrq kbd event29
                 stdout=json.dumps([{"name": "HDMI-A-1", "current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}]),
                 stderr="",
             )
-            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+            manager.Path.exists = lambda path: str(path) == state.sway_socket
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
@@ -453,8 +457,8 @@ H: Handlers=sysrq kbd event29
 
     def test_current_headless_mode_returns_empty_when_swaymsg_fails(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
-        state["sway_socket"] = "/tmp/lts-sway.sock"
+        state.enabled = True
+        state.sway_socket = "/tmp/lts-sway.sock"
 
         original_run = manager.run_command
         original_path_exists = manager.Path.exists
@@ -465,7 +469,7 @@ H: Handlers=sysrq kbd event29
                 stdout="",
                 stderr="failed",
             )
-            manager.Path.exists = lambda path: str(path) == state["sway_socket"]
+            manager.Path.exists = lambda path: str(path) == state.sway_socket
 
             mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
         finally:
@@ -498,7 +502,7 @@ H: Handlers=sysrq kbd event29
 
     def test_display_doctor_report_warns_when_install_probe_disagrees_with_managed_unit(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
+        state.enabled = True
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
@@ -530,7 +534,7 @@ H: Handlers=sysrq kbd event29
 
     def test_display_doctor_report_skips_install_warning_when_probe_matches_managed_unit(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
+        state.enabled = True
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
@@ -575,10 +579,10 @@ H: Handlers=sysrq kbd event29
         )
 
         state = manager._default_state()
-        state["enabled"] = True
-        state["udev_rule_path"] = str(rule_path)
-        state["paths"] = dict(state["paths"])
-        state["paths"]["kwin_input_isolation_status_file"] = str(kwin_status_path)
+        state.enabled = True
+        state.udev_rule_path = str(rule_path)
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.kwin_input_isolation_status_file = str(kwin_status_path)
 
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
@@ -633,10 +637,10 @@ H: Handlers=sysrq kbd event29
         )
 
         state = manager._default_state()
-        state["enabled"] = True
-        state["udev_rule_path"] = str(rule_path)
-        state["paths"] = dict(state["paths"])
-        state["paths"]["kwin_input_isolation_status_file"] = str(kwin_status_path)
+        state.enabled = True
+        state.udev_rule_path = str(rule_path)
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.kwin_input_isolation_status_file = str(kwin_status_path)
 
         original_load_state = manager.load_state
         original_ensure_dependencies = manager._ensure_dependencies
@@ -679,14 +683,14 @@ H: Handlers=sysrq kbd event29
         scripts = scripts_render.render_managed_files(state)
         audio_files = audio_policy.managed_files(state)
 
-        sway_start = scripts[Path(state["paths"]["sway_start_script"])]
-        sunshine_start = scripts[Path(state["paths"]["sunshine_start_script"])]
-        sunshine_wrapper = scripts[Path(state["paths"]["sunshine_wrapper_script"])]
-        audio_create = audio_files[Path(state["paths"]["audio_create_script"])]
-        audio_cleanup = audio_files[Path(state["paths"]["audio_cleanup_script"])]
-        launch_script = scripts[Path(state["paths"]["launch_app_script"])]
-        headless_prep_script = scripts[Path(state["paths"]["headless_prep_script"])]
-        sunshine_override = scripts[Path(state["paths"]["sunshine_override"])]
+        sway_start = scripts[Path(state.paths.sway_start_script)]
+        sunshine_start = scripts[Path(state.paths.sunshine_start_script)]
+        sunshine_wrapper = scripts[Path(state.paths.sunshine_wrapper_script)]
+        audio_create = audio_files[Path(state.paths.audio_create_script)]
+        audio_cleanup = audio_files[Path(state.paths.audio_cleanup_script)]
+        launch_script = scripts[Path(state.paths.launch_app_script)]
+        headless_prep_script = scripts[Path(state.paths.headless_prep_script)]
+        sunshine_override = scripts[Path(state.paths.sunshine_override)]
 
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sway_start)
         self.assertIn("sleep 0.1", sway_start)
@@ -739,18 +743,18 @@ H: Handlers=sysrq kbd event29
         self.assertIn('--env=PULSE_SINK=" + sink', headless_prep_script)
         self.assertNotIn("MANGOHUD_CONFIG", launch_script)
         self.assertIn("ExecStart=", sunshine_override)
-        self.assertIn(state["paths"]["sunshine_wrapper_script"], sunshine_override)
+        self.assertIn(state.paths.sunshine_wrapper_script, sunshine_override)
         self.assertNotIn("Environment=PULSE_SINK=", sunshine_override)
 
     def test_rendered_managed_files_have_no_unsubstituted_placeholders(self) -> None:
         state = manager._default_state()
-        state["dynamic_mangohud_fps_limit"] = True
-        state["refresh_rate_sync_mode"] = "exact"
-        state["custom_display_mode"] = {"width": 3440, "height": 1440, "refresh": 59.94}
-        state["gpu_mode"] = "manual"
-        state["gpu_card_path"] = "/dev/dri/card0"
-        state["gpu_render_path"] = "/dev/dri/renderD128"
-        state["renderer_mode"] = "vulkan"
+        state.dynamic_mangohud_fps_limit = True
+        state.refresh_rate_sync_mode = "exact"
+        state.custom_display_mode = {"width": 3440, "height": 1440, "refresh": 59.94}
+        state.gpu_mode = "manual"
+        state.gpu_card_path = "/dev/dri/card0"
+        state.gpu_render_path = "/dev/dri/renderD128"
+        state.renderer_mode = "vulkan"
 
         for path, content in scripts_render.render_managed_files(state).items():
             self.assertNotRegex(
@@ -767,15 +771,15 @@ H: Handlers=sysrq kbd event29
 
     def test_launch_script_can_inject_dynamic_mangohud_fps_limit(self) -> None:
         state = manager._default_state()
-        state["dynamic_mangohud_fps_limit"] = True
+        state.dynamic_mangohud_fps_limit = True
 
         scripts = scripts_render.render_managed_files(state)
-        launch_script = scripts[Path(state["paths"]["launch_app_script"])]
+        launch_script = scripts[Path(state.paths.launch_app_script)]
 
         self.assertIn('mangohud_config_value=""', launch_script)
         self.assertNotIn('local mangohud_config_value=""', launch_script)
         self.assertIn(
-            f'resolved_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" "client" fallback)"',
+            f'resolved_stream_fps="$("{state.paths.resolve_stream_fps_script}" "client" fallback)"',
             launch_script,
         )
         self.assertIn('mangohud_config_value="read_cfg,fps_limit=$resolved_stream_fps"', launch_script)
@@ -785,14 +789,14 @@ H: Handlers=sysrq kbd event29
 
     def test_launch_script_waits_for_exact_stream_fps_before_launch(self) -> None:
         state = manager._default_state()
-        state["dynamic_mangohud_fps_limit"] = True
-        state["refresh_rate_sync_mode"] = "exact"
+        state.dynamic_mangohud_fps_limit = True
+        state.refresh_rate_sync_mode = "exact"
 
         scripts = scripts_render.render_managed_files(state)
-        launch_script = scripts[Path(state["paths"]["launch_app_script"])]
+        launch_script = scripts[Path(state.paths.launch_app_script)]
 
         self.assertIn(
-            f'resolved_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" "exact" fallback)"',
+            f'resolved_stream_fps="$("{state.paths.resolve_stream_fps_script}" "exact" fallback)"',
             launch_script,
         )
         self.assertNotIn('stream_sync_since', launch_script)
@@ -801,10 +805,10 @@ H: Handlers=sysrq kbd event29
 
     def test_set_resolution_script_uses_resolved_stream_fps(self) -> None:
         state = manager._default_state()
-        state["refresh_rate_sync_mode"] = "exact"
+        state.refresh_rate_sync_mode = "exact"
 
         scripts = scripts_render.render_managed_files(state)
-        set_resolution_script = scripts[Path(state["paths"]["set_resolution_script"])]
+        set_resolution_script = scripts[Path(state.paths.set_resolution_script)]
 
         self.assertIn(
             'swaymsg_cmd "output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
@@ -816,22 +820,22 @@ H: Handlers=sysrq kbd event29
         self.assertIn('sync_since="$(python3 - <<\'PY\'', set_resolution_script)
         self.assertIn('print(f"{time.time():.6f}")', set_resolution_script)
         self.assertIn(
-            f'setsid "{state["paths"]["apply_exact_refresh_script"]}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &',
+            f'setsid "{state.paths.apply_exact_refresh_script}" "${{target_width}}" "${{target_height}}" "$sync_since" >/dev/null 2>&1 &',
             set_resolution_script,
         )
 
     def test_custom_mode_set_resolution_script_uses_fixed_target(self) -> None:
         state = manager._default_state()
-        state["refresh_rate_sync_mode"] = "custom"
-        state["custom_display_mode"] = {
+        state.refresh_rate_sync_mode = "custom"
+        state.custom_display_mode = {
             "width": 3440,
             "height": 1440,
             "refresh": 59.94,
         }
 
         scripts = scripts_render.render_managed_files(state)
-        set_resolution_script = scripts[Path(state["paths"]["set_resolution_script"])]
-        resolver_script = scripts[Path(state["paths"]["resolve_stream_fps_script"])]
+        set_resolution_script = scripts[Path(state.paths.set_resolution_script)]
+        resolver_script = scripts[Path(state.paths.resolve_stream_fps_script)]
 
         self.assertIn('target_width="3440"', set_resolution_script)
         self.assertIn('target_height="1440"', set_resolution_script)
@@ -841,10 +845,10 @@ H: Handlers=sysrq kbd event29
 
     def test_resolve_stream_fps_script_uses_exact_mode_when_requested(self) -> None:
         state = manager._default_state()
-        state["refresh_rate_sync_mode"] = "exact"
+        state.refresh_rate_sync_mode = "exact"
 
         scripts = scripts_render.render_managed_files(state)
-        resolver_script = scripts[Path(state["paths"]["resolve_stream_fps_script"])]
+        resolver_script = scripts[Path(state.paths.resolve_stream_fps_script)]
 
         self.assertIn('mode="exact"', resolver_script)
         self.assertIn("Requested frame rate", resolver_script)
@@ -859,11 +863,11 @@ H: Handlers=sysrq kbd event29
         state = manager._default_state()
 
         scripts = scripts_render.render_managed_files(state)
-        apply_exact_refresh_script = scripts[Path(state["paths"]["apply_exact_refresh_script"])]
+        apply_exact_refresh_script = scripts[Path(state.paths.apply_exact_refresh_script)]
 
         self.assertIn('since_time="${3:-}"', apply_exact_refresh_script)
         self.assertIn(
-            f'exact_stream_fps="$("{state["paths"]["resolve_stream_fps_script"]}" exact none "$since_time")"',
+            f'exact_stream_fps="$("{state.paths.resolve_stream_fps_script}" exact none "$since_time")"',
             apply_exact_refresh_script,
         )
         self.assertIn(
@@ -873,7 +877,7 @@ H: Handlers=sysrq kbd event29
 
     def test_restart_display_returns_stop_failure_without_starting(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
+        state.enabled = True
         start_calls = []
         original_load_state = manager.load_state
         original_stop_display = manager.stop_display
@@ -894,7 +898,7 @@ H: Handlers=sysrq kbd event29
 
     def test_restart_display_proceeds_to_start_when_stop_succeeds(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
+        state.enabled = True
         original_load_state = manager.load_state
         original_stop_display = manager.stop_display
         original_start_display = manager.start_display
@@ -914,11 +918,11 @@ H: Handlers=sysrq kbd event29
 
     def test_remove_display_continues_cleanup_when_stop_fails(self) -> None:
         state = manager._default_state()
-        state["enabled"] = True
+        state.enabled = True
         _remove_tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(_remove_tempdir.cleanup)
         _remove_base = Path(_remove_tempdir.name)
-        state["paths"] = dict(state["paths"])
+        state.paths = DisplayPaths(**asdict(state.paths))
         for _key in (
             "state_path", "sway_config", "sway_start_script", "sunshine_start_script",
             "sunshine_wrapper_script",
@@ -932,10 +936,10 @@ H: Handlers=sysrq kbd event29
             "wayland_display_file", "audio_module_file",
             "wireplumber_policy_script", "wireplumber_policy_conf",
         ):
-            if state["paths"].get(_key):
-                _p = _remove_base / Path(state["paths"][_key]).name
+            if getattr(state.paths, _key, ""):
+                _p = _remove_base / Path(getattr(state.paths, _key)).name
                 _p.write_text("managed\n", encoding="utf-8")
-                state["paths"][_key] = str(_p)
+                setattr(state.paths, _key, str(_p))
         cleanup_calls = []
         original_load_state = manager.load_state
         original_stop_display = manager.stop_display
@@ -971,7 +975,7 @@ H: Handlers=sysrq kbd event29
     def test_wireplumber_policy_script_names_managed_sinks(self) -> None:
         state = manager._default_state()
         files = audio_policy.managed_files(state)
-        script = files[Path(state["paths"]["wireplumber_policy_script"])]
+        script = files[Path(state.paths.wireplumber_policy_script)]
 
         self.assertIn('audio_sink = "lts-sunshine-stereo"', script)
         for name in ("sink-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"):
@@ -988,13 +992,13 @@ H: Handlers=sysrq kbd event29
         # defer line must be gone; untagged streams are skipped by the want-guard.
         state = manager._default_state()
         files = audio_policy.managed_files(state)
-        script = files[Path(state["paths"]["wireplumber_policy_script"])]
+        script = files[Path(state.paths.wireplumber_policy_script)]
         self.assertNotIn("if target then return end", script)
 
     def test_wireplumber_policy_conf_registers_component_and_profile(self) -> None:
         state = manager._default_state()
         files = audio_policy.managed_files(state)
-        conf = files[Path(state["paths"]["wireplumber_policy_conf"])]
+        conf = files[Path(state.paths.wireplumber_policy_conf)]
 
         self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, conf)
         self.assertIn("script/lua", conf)
@@ -1016,14 +1020,14 @@ H: Handlers=sysrq kbd event29
         with temp_display_state(manager) as (state, base):
             for key in ("wireplumber_policy_script", "wireplumber_policy_conf"):
                 self.assertTrue(
-                    state["paths"][key].startswith(str(base)),
-                    f"{key} leaked to real path: {state['paths'][key]}",
+                    getattr(state.paths, key).startswith(str(base)),
+                    f"{key} leaked to real path: {getattr(state.paths, key)}",
                 )
 
     def test_write_and_remove_wireplumber_policy_files_round_trip(self) -> None:
         with temp_display_state(manager) as (state, base):
-            script_path = Path(state["paths"]["wireplumber_policy_script"])
-            conf_path = Path(state["paths"]["wireplumber_policy_conf"])
+            script_path = Path(state.paths.wireplumber_policy_script)
+            conf_path = Path(state.paths.wireplumber_policy_conf)
             # remove() also strips legacy prep hooks, so point sunshine_conf at
             # a temp file: the real user config must stay untouched.
             sunshine_conf = base / "sunshine.conf"
@@ -1031,7 +1035,7 @@ H: Handlers=sysrq kbd event29
                 "global_prep_cmd = [{\"do\": \"user-cmd\", \"undo\": \"user-undo\"}]\n",
                 encoding="utf-8",
             )
-            state["paths"]["sunshine_conf"] = str(sunshine_conf)
+            state.paths.sunshine_conf = str(sunshine_conf)
             files = audio_policy.managed_files(state)
             manager._write_file(script_path, files[script_path])
             manager._write_file(conf_path, files[conf_path])
@@ -1055,7 +1059,7 @@ H: Handlers=sysrq kbd event29
         with temp_display_state(manager) as (state, base):
             conf_path = base / "sunshine.conf"
             conf_path.write_text(f"global_prep_cmd = {combined}\n", encoding="utf-8")
-            state["paths"]["sunshine_conf"] = str(conf_path)
+            state.paths.sunshine_conf = str(conf_path)
 
             with patch.object(audio_policy.subprocess, "run") as fake_run, \
                  patch.object(audio_policy.shutil, "which", return_value=None):
@@ -1076,7 +1080,7 @@ H: Handlers=sysrq kbd event29
         with temp_display_state(manager) as (state, base):
             conf_path = base / "sunshine.conf"
             conf_path.write_text(f"global_prep_cmd = {combined}\n", encoding="utf-8")
-            state["paths"]["sunshine_conf"] = str(conf_path)
+            state.paths.sunshine_conf = str(conf_path)
 
             with patch.object(audio_policy.subprocess, "run") as fake_run:
                 audio_policy.remove(state)

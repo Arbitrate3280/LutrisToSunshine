@@ -1,11 +1,7 @@
 """Direct tests for display/command_wrap wrapping/unwrapping logic."""
 
 import base64
-import json
-import tempfile
 import unittest
-from pathlib import Path
-from unittest import mock
 
 from display import command_wrap
 
@@ -71,48 +67,15 @@ class HeadlessPrepWrapTests(unittest.TestCase):
 
 
 class GetAppPrepCommandsTests(unittest.TestCase):
-    def test_disabled_without_state_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(command_wrap, "DISPLAY_STATE_PATH", Path(tmp) / "missing.json"):
-                with mock.patch.object(command_wrap, "LEGACY_STATE_PATH", Path(tmp) / "legacy-missing.json"):
-                    self.assertEqual(command_wrap.get_app_prep_commands(), [])
+    def test_disabled_returns_empty(self):
+        self.assertEqual(command_wrap.get_app_prep_commands(False), [])
 
-    def test_legacy_state_file_enables(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            legacy = Path(tmp) / "virtualdisplay.json"
-            legacy.write_text(json.dumps({"enabled": True}), encoding="utf-8")
-            with mock.patch.object(command_wrap, "DISPLAY_STATE_PATH", Path(tmp) / "missing.json"):
-                with mock.patch.object(command_wrap, "LEGACY_STATE_PATH", legacy):
-                    self.assertNotEqual(command_wrap.get_app_prep_commands(), [])
-
-    def test_corrupt_primary_does_not_fall_through_to_legacy(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            primary = Path(tmp) / "display.json"
-            primary.write_text("not json", encoding="utf-8")
-            legacy = Path(tmp) / "virtualdisplay.json"
-            legacy.write_text(json.dumps({"enabled": True}), encoding="utf-8")
-            with mock.patch.object(command_wrap, "DISPLAY_STATE_PATH", primary):
-                with mock.patch.object(command_wrap, "LEGACY_STATE_PATH", legacy):
-                    self.assertEqual(command_wrap.get_app_prep_commands(), [])
-
-    def test_non_dict_state_file_is_disabled(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            primary = Path(tmp) / "display.json"
-            primary.write_text("[]", encoding="utf-8")
-            with mock.patch.object(command_wrap, "DISPLAY_STATE_PATH", primary):
-                self.assertEqual(command_wrap.get_app_prep_commands(), [])
-
-    def test_enabled_with_state_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / "display.json"
-            state.write_text(json.dumps({"enabled": True}), encoding="utf-8")
-            with mock.patch.object(command_wrap, "DISPLAY_STATE_PATH", state):
-                self.assertEqual(
-                    command_wrap.get_app_prep_commands(),
-                    [{"do": str(command_wrap.BIN_ROOT / "lutristosunshine-set-resolution.sh"),
-                      "undo": str(command_wrap.BIN_ROOT / "lutristosunshine-reset-resolution.sh")}],
-                )
-
+    def test_enabled_returns_resolution_scripts(self):
+        self.assertEqual(
+            command_wrap.get_app_prep_commands(True),
+            [{"do": str(command_wrap.BIN_ROOT / "lutristosunshine-set-resolution.sh"),
+              "undo": str(command_wrap.BIN_ROOT / "lutristosunshine-reset-resolution.sh")}],
+        )
 
 if __name__ == "__main__":
     unittest.main()

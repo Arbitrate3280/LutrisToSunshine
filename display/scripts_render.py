@@ -9,14 +9,38 @@ from __future__ import annotations
 import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
+from dataclasses import asdict
+
+from display.state import DisplayState
 
 from display import audio_policy
-from display import manager
+from display.constants import (
+    FALLBACK_FPS,
+    FALLBACK_HEIGHT,
+    FALLBACK_WIDTH,
+    FLATPAK_FLAG_OPTIONS,
+    FLATPAK_PORTAL_ENV_KEYS,
+    FLATPAK_PORTAL_RESTORE_GRACE,
+    FLATPAK_PORTAL_SPAWN_TIMEOUT,
+    FLATPAK_PORTAL_SWITCH_TIMEOUT,
+    FLATPAK_PORTAL_UNIT,
+    FLATPAK_VALUE_OPTIONS,
+    SUNSHINE_INPUT_NAME_MARKERS,
+    SUNSHINE_INPUT_PRODUCT_ID,
+    SUNSHINE_INPUT_VENDOR_ID,
+)
+from display.modes import (
+    format_refresh_rate_hz,
+    normalized_custom_display_mode,
+    normalized_refresh_rate_sync_mode,
+)
+from display.sunshine_service import sunshine_binary, sunshine_unit
+from display.utils import safe_string
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 
-# state["paths"] key -> template file name
+# DisplayPaths attribute name -> template file name
 _TEMPLATE_FILES = {
     "sway_config": "sway_config",
     "sway_start_script": "sway_start.sh",
@@ -34,9 +58,9 @@ _TEMPLATE_FILES = {
 }
 
 
-def _conditional_blocks(state: Dict[str, Any]) -> Dict[str, str]:
+def _conditional_blocks(state: DisplayState) -> Dict[str, str]:
     """Replicate the old conditional block strings from _script_templates."""
-    paths = state["paths"]
+    paths = state.paths
     blocks: Dict[str, str] = {
         "mangohud_fps_limit_block": "",
         "mangohud_env_append_block": "",
@@ -45,14 +69,14 @@ def _conditional_blocks(state: Dict[str, Any]) -> Dict[str, str]:
         "gpu_launch_env_vars_block": "",
         "renderer_env_vars_block": "",
     }
-    if state.get("dynamic_mangohud_fps_limit"):
-        refresh_mode = manager._normalized_refresh_rate_sync_mode(
-            state.get("refresh_rate_sync_mode")
+    if state.dynamic_mangohud_fps_limit:
+        refresh_mode = normalized_refresh_rate_sync_mode(
+            state.refresh_rate_sync_mode
         )
         blocks["mangohud_fps_limit_block"] = f"""
     mangohud_config_value=""
     local resolved_stream_fps
-    resolved_stream_fps="$("{paths['resolve_stream_fps_script']}" "{refresh_mode}" fallback)"
+    resolved_stream_fps="$("{paths.resolve_stream_fps_script}" "{refresh_mode}" fallback)"
     if [ -n "$resolved_stream_fps" ]; then
         mangohud_config_value="read_cfg,fps_limit=$resolved_stream_fps"
     fi
@@ -76,9 +100,9 @@ PY
         fi
     fi
 """.rstrip()
-    gpu_card_path = manager.safe_string(state.get("gpu_card_path"))
-    gpu_render_path = manager.safe_string(state.get("gpu_render_path"))
-    if state.get("gpu_mode") == "manual" and gpu_card_path:
+    gpu_card_path = safe_string(state.gpu_card_path)
+    gpu_render_path = safe_string(state.gpu_render_path)
+    if state.gpu_mode == "manual" and gpu_card_path:
         blocks["gpu_detection_block"] = f"""
 wlr_drm_devices_value=""
 wlr_render_drm_device_value=""
@@ -105,7 +129,7 @@ fi
         )
     fi
 """
-    if state.get("renderer_mode") == "vulkan":
+    if state.renderer_mode == "vulkan":
         blocks["renderer_env_vars_block"] = """
     sway_cmd+=(
         "WLR_RENDERER=vulkan"
@@ -114,55 +138,55 @@ fi
     return blocks
 
 
-def render_managed_files(state: Dict[str, Any]) -> Dict[Path, str]:
+def render_managed_files(state: DisplayState) -> Dict[Path, str]:
     """Render every managed script/systemd file for the given state."""
-    paths = state["paths"]
+    paths = state.paths
     blocks = _conditional_blocks(state)
 
-    custom_mode = manager._normalized_custom_display_mode(state.get("custom_display_mode"))
-    refresh_mode = manager._normalized_refresh_rate_sync_mode(
-        state.get("refresh_rate_sync_mode")
+    custom_mode = normalized_custom_display_mode(state.custom_display_mode)
+    refresh_mode = normalized_refresh_rate_sync_mode(
+        state.refresh_rate_sync_mode
     )
     custom_refresh = (
-        manager._format_refresh_rate_hz(custom_mode["refresh"]) or str(manager.FALLBACK_FPS)
+        format_refresh_rate_hz(custom_mode["refresh"]) or str(FALLBACK_FPS)
     )
     sunshine_command = (
-        manager.safe_string(state.get("sunshine_execstart"))
-        or manager._svc.sunshine_binary()
+        safe_string(state.sunshine_execstart)
+        or sunshine_binary()
         or "sunshine"
     )
 
     values = {
-        "@SWAY_SOCKET@": state["sway_socket"],
-        "@PROFILE_ROOT@": paths["profile_root"],
+        "@SWAY_SOCKET@": state.sway_socket,
+        "@PROFILE_ROOT@": paths.profile_root,
         "@AUDIO_INJECT_ENV@": audio_policy.render_flatpak_audio_env(
-            state["audio_sink"], manager.FLATPAK_FLAG_OPTIONS, manager.FLATPAK_VALUE_OPTIONS
+            state.audio_sink, FLATPAK_FLAG_OPTIONS, FLATPAK_VALUE_OPTIONS
         ),
         "@CLEAR_ACTIVATION_ENV_SCRIPT@": audio_policy.clear_activation_env_script(),
-        "@AUDIO_SINK@": state["audio_sink"],
+        "@AUDIO_SINK@": state.audio_sink,
         "@AUDIO_STREAM_PULSE_PROP@": audio_policy.AUDIO_STREAM_PULSE_PROP,
         "@AUDIO_STREAM_PIPEWIRE_PROPS@": audio_policy.AUDIO_STREAM_PIPEWIRE_PROPS,
-        "@PORTAL_ENV_KEYS@": " ".join(manager.FLATPAK_PORTAL_ENV_KEYS),
-        "@PORTAL_ENV_KEYS_BLOCK@": "\n".join(manager.FLATPAK_PORTAL_ENV_KEYS),
-        "@FLATPAK_PORTAL_SWITCH_TIMEOUT@": str(manager.FLATPAK_PORTAL_SWITCH_TIMEOUT),
-        "@FLATPAK_PORTAL_SPAWN_TIMEOUT@": str(manager.FLATPAK_PORTAL_SPAWN_TIMEOUT),
-        "@FLATPAK_PORTAL_RESTORE_GRACE@": str(manager.FLATPAK_PORTAL_RESTORE_GRACE),
-        "@FLATPAK_PORTAL_UNIT@": manager.FLATPAK_PORTAL_UNIT,
-        "@FALLBACK_WIDTH@": str(manager.FALLBACK_WIDTH),
-        "@FALLBACK_HEIGHT@": str(manager.FALLBACK_HEIGHT),
-        "@FALLBACK_FPS@": str(manager.FALLBACK_FPS),
-        "@FALLBACK_MODE@": f"{manager.FALLBACK_WIDTH}x{manager.FALLBACK_HEIGHT}@{manager.FALLBACK_FPS}Hz",
+        "@PORTAL_ENV_KEYS@": " ".join(FLATPAK_PORTAL_ENV_KEYS),
+        "@PORTAL_ENV_KEYS_BLOCK@": "\n".join(FLATPAK_PORTAL_ENV_KEYS),
+        "@FLATPAK_PORTAL_SWITCH_TIMEOUT@": str(FLATPAK_PORTAL_SWITCH_TIMEOUT),
+        "@FLATPAK_PORTAL_SPAWN_TIMEOUT@": str(FLATPAK_PORTAL_SPAWN_TIMEOUT),
+        "@FLATPAK_PORTAL_RESTORE_GRACE@": str(FLATPAK_PORTAL_RESTORE_GRACE),
+        "@FLATPAK_PORTAL_UNIT@": FLATPAK_PORTAL_UNIT,
+        "@FALLBACK_WIDTH@": str(FALLBACK_WIDTH),
+        "@FALLBACK_HEIGHT@": str(FALLBACK_HEIGHT),
+        "@FALLBACK_FPS@": str(FALLBACK_FPS),
+        "@FALLBACK_MODE@": f"{FALLBACK_WIDTH}x{FALLBACK_HEIGHT}@{FALLBACK_FPS}Hz",
         "@CUSTOM_WIDTH@": str(custom_mode["width"]),
         "@CUSTOM_HEIGHT@": str(custom_mode["height"]),
         "@CUSTOM_REFRESH@": custom_refresh,
         "@REFRESH_RATE_SYNC_MODE@": refresh_mode,
-        "@SUNSHINE_UNIT@": manager._resolve_sunshine_unit(state),
+        "@SUNSHINE_UNIT@": safe_string(state.sunshine_unit_name) or sunshine_unit(),
         "@SUNSHINE_COMMAND@": shlex.quote(sunshine_command),
         "@PYTHON_EXECUTABLE@": sys.executable or "/usr/bin/env python3",
-        "@KWIN_INPUT_ISOLATION_STATUS_FILE@": paths["kwin_input_isolation_status_file"],
-        "@SUNSHINE_VENDOR_ID@": str(manager.SUNSHINE_INPUT_VENDOR_ID),
-        "@SUNSHINE_PRODUCT_ID@": str(manager.SUNSHINE_INPUT_PRODUCT_ID),
-        "@NAME_MARKERS@": repr(manager.SUNSHINE_INPUT_NAME_MARKERS),
+        "@KWIN_INPUT_ISOLATION_STATUS_FILE@": paths.kwin_input_isolation_status_file,
+        "@SUNSHINE_VENDOR_ID@": str(SUNSHINE_INPUT_VENDOR_ID),
+        "@SUNSHINE_PRODUCT_ID@": str(SUNSHINE_INPUT_PRODUCT_ID),
+        "@NAME_MARKERS@": repr(SUNSHINE_INPUT_NAME_MARKERS),
         "@MANGOHUD_FPS_LIMIT_BLOCK@": blocks["mangohud_fps_limit_block"],
         "@MANGOHUD_ENV_APPEND_BLOCK@": blocks["mangohud_env_append_block"],
         "@GPU_DETECTION_BLOCK@": blocks["gpu_detection_block"],
@@ -171,12 +195,12 @@ def render_managed_files(state: Dict[str, Any]) -> Dict[Path, str]:
         "@RENDERER_BLOCK@": blocks["renderer_env_vars_block"],
     }
     # Path placeholders: @<PATHS_KEY_UPPER>@ -> concrete path.
-    values.update({f"@{key.upper()}@": value for key, value in paths.items()})
+    values.update({f"@{key.upper()}@": value for key, value in asdict(paths).items()})
 
     rendered: Dict[Path, str] = {}
     for path_key, template_name in _TEMPLATE_FILES.items():
         content = (_SCRIPTS_DIR / template_name).read_text(encoding="utf-8")
         for placeholder, value in values.items():
             content = content.replace(placeholder, value)
-        rendered[Path(paths[path_key])] = content
+        rendered[Path(getattr(paths, path_key))] = content
     return rendered

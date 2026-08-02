@@ -5,9 +5,9 @@ host's Sunshine service unit -- which unit name we manage, which
 override file paths are worth visiting, and what counts as "managed
 by us" vs "owned by the user".
 
-The durable ownership key is :data:`state["sunshine_unit_name"]`.
+The durable ownership key is :data:`state.sunshine_unit_name`.
 Override paths are derived from that unit name plus
-``state["paths"]["systemd_user_dir"]`` on every load.  A path being
+``state.paths.systemd_user_dir`` on every load.  A path being
 "associated with" a unit does NOT mean the file at that path was
 written by us: only the managed-wrapper marker in the file content
 proves ownership.  See :func:`is_managed_sunshine_override`.
@@ -18,9 +18,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import List, Optional, TypedDict
 
 from display.utils import run_command, safe_string
+from display.state import DisplayState
 from sunshine.detection import (
     SUNSHINE_UNIT,
     FALLBACK_SUNSHINE_UNIT,
@@ -59,7 +60,7 @@ def is_sunshine_service_active() -> bool:
     return _systemctl_user("is-active", sunshine_unit()).returncode == 0
 
 
-def managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
+def managed_sunshine_units(state: Optional[DisplayState] = None) -> List[str]:
     """Return known Sunshine service unit aliases.
 
     The saved unit from ``state`` (if present) is prepended so reset
@@ -69,7 +70,7 @@ def managed_sunshine_units(state: Optional[Dict[str, Any]] = None) -> List[str]:
     """
     units: List[str] = list(SUNSHINE_UNIT_CANDIDATES)
     if state is not None:
-        saved_unit = safe_string(state.get("sunshine_unit_name"))
+        saved_unit = safe_string(state.sunshine_unit_name)
         if saved_unit and saved_unit not in units:
             units.insert(0, saved_unit)
     return units
@@ -221,12 +222,12 @@ def fetch_sunshine_journal(lines: int) -> subprocess.CompletedProcess:
     )
 
 
-def managed_override_marker(state: Dict[str, Any]) -> str:
+def managed_override_marker(state: DisplayState) -> str:
     """Return the unique substring that proves a Sunshine override
     file was written by this tool.  Empty when the wrapper script
     path is not known.
     """
-    return safe_string(state.get("paths", {}).get("sunshine_wrapper_script"))
+    return safe_string(state.paths.sunshine_wrapper_script)
 
 
 def is_managed_sunshine_override(path: Path, marker: str) -> bool:
@@ -249,43 +250,43 @@ def _unlink_if_empty_dir(path: Path) -> None:
         pass
 
 
-def override_paths_for_unit(unit: str, state: Dict[str, Any]) -> List[Path]:
+def override_paths_for_unit(unit: str, state: DisplayState) -> List[Path]:
     """Return the (override_file, override_dir) pair for ``unit``.
 
     These are paths ASSOCIATED with the unit -- the marker check is
     the only way to determine whether this tool actually wrote the
     file at the override_file location.
     """
-    systemd_user_dir = Path(state["paths"]["systemd_user_dir"])
+    systemd_user_dir = Path(state.paths.systemd_user_dir)
     override_dir = systemd_user_dir / f"{unit}.d"
     return [override_dir / "override.conf", override_dir]
 
 
-def current_unit_override_paths(state: Dict[str, Any]) -> List[Path]:
+def current_unit_override_paths(state: DisplayState) -> List[Path]:
     """Return override paths for the unit recorded in
-    ``state["sunshine_unit_name"]``.
+    ``state.sunshine_unit_name``.
 
     The state path is the durable ownership key.  Override paths are
     derived from it on every load, NOT persisted as the path of a
     file we once wrote -- so the marker check is required to confirm
     this tool still owns whatever is at those paths.
     """
-    unit = safe_string(state.get("sunshine_unit_name"))
+    unit = safe_string(state.sunshine_unit_name)
     if not unit:
         return []
     return override_paths_for_unit(unit, state)
 
 
-def legacy_unit_override_paths(state: Dict[str, Any]) -> List[Path]:
+def legacy_unit_override_paths(state: DisplayState) -> List[Path]:
     """Return override paths for known Sunshine service units other
-    than the one in ``state["sunshine_unit_name"]``.
+    than the one in ``state.sunshine_unit_name``.
 
     These come from previous installs (Flatpak, native, Homebrew
     stable/beta) and may contain either managed overrides from a
     prior version of this tool or user-supplied overrides.  The
     marker check is the only way to tell them apart.
     """
-    saved_unit = safe_string(state.get("sunshine_unit_name"))
+    saved_unit = safe_string(state.sunshine_unit_name)
     paths: List[Path] = []
     for unit in managed_sunshine_units(state):
         if unit == saved_unit:
@@ -294,7 +295,7 @@ def legacy_unit_override_paths(state: Dict[str, Any]) -> List[Path]:
     return paths
 
 
-def cleanup_managed_overrides(state: Dict[str, Any]) -> None:
+def cleanup_managed_overrides(state: DisplayState) -> None:
     """Remove Sunshine service overrides installed by this tool.
 
     Visits every override path associated with known Sunshine

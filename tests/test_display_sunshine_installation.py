@@ -9,10 +9,12 @@ of managed systemd overrides without trampling user-supplied ones.
 import subprocess
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
 from display import manager
+from display.state import DisplayPaths
 from display import sunshine_service
 from sunshine import install as sunshine_install
 from tests._display_test_helpers import (
@@ -124,7 +126,7 @@ class SunshineUnitSelectionTests(unittest.TestCase):
 
     def test_managed_sunshine_units_prepends_saved_homebrew_unit(self) -> None:
         state = manager._default_state()
-        state["sunshine_unit_name"] = "custom-saved-sunshine.service"
+        state.sunshine_unit_name = "custom-saved-sunshine.service"
         units = sunshine_service.managed_sunshine_units(state)
         self.assertEqual(units[0], "custom-saved-sunshine.service")
         self.assertEqual(len(units), len(set(units)))
@@ -176,9 +178,9 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
             "~/.config/sunshine/sunshine.conf"
         )
         state = manager._default_state()
-        state["paths"] = dict(state["paths"])
-        state["paths"]["sunshine_wrapper_script"] = "/run/lutristosunshine-run-display-service.sh"
-        state["sunshine_unit_name"] = "homebrew.sunshine.service"
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.sunshine_wrapper_script = "/run/lutristosunshine-run-display-service.sh"
+        state.sunshine_unit_name = "homebrew.sunshine.service"
 
         def fake_systemctl_user(*args, check=False):
             if args[:3] == ("show", "--property=ExecStart", "--value"):
@@ -193,7 +195,7 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
         ):
             updated = manager._remember_sunshine_execstart(state)
 
-        self.assertEqual(updated["sunshine_execstart"], homebrew_command)
+        self.assertEqual(updated.sunshine_execstart, homebrew_command)
 
 
 class OverridePathHelpersTests(unittest.TestCase):
@@ -204,9 +206,9 @@ class OverridePathHelpersTests(unittest.TestCase):
         systemd_user_dir = base / "systemd" / "user"
 
         state = manager._default_state()
-        state["sunshine_unit_name"] = "homebrew.sunshine.service"
-        state["paths"] = dict(state["paths"])
-        state["paths"]["systemd_user_dir"] = str(systemd_user_dir)
+        state.sunshine_unit_name = "homebrew.sunshine.service"
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.systemd_user_dir = str(systemd_user_dir)
 
         paths = sunshine_service.current_unit_override_paths(state)
         path_strs = [str(p) for p in paths]
@@ -230,9 +232,9 @@ class OverridePathHelpersTests(unittest.TestCase):
         saved_unit = "homebrew.sunshine.service"
 
         state = manager._default_state()
-        state["sunshine_unit_name"] = saved_unit
-        state["paths"] = dict(state["paths"])
-        state["paths"]["systemd_user_dir"] = str(systemd_user_dir)
+        state.sunshine_unit_name = saved_unit
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.systemd_user_dir = str(systemd_user_dir)
 
         paths = sunshine_service.legacy_unit_override_paths(state)
         path_strs = [str(p) for p in paths]
@@ -256,10 +258,10 @@ class OverridePathHelpersTests(unittest.TestCase):
         saved_override = saved_override_dir / "override.conf"
 
         state = manager._default_state()
-        state["paths"] = dict(state["paths"])
-        state["paths"]["systemd_user_dir"] = str(systemd_user_dir)
-        state["paths"]["sunshine_override_dir"] = str(saved_override_dir)
-        state["paths"]["sunshine_override"] = str(saved_override)
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.systemd_user_dir = str(systemd_user_dir)
+        state.paths.sunshine_override_dir = str(saved_override_dir)
+        state.paths.sunshine_override = str(saved_override)
 
         saved = [str(p) for p in sunshine_service.current_unit_override_paths(state)]
         candidates = [str(p) for p in sunshine_service.legacy_unit_override_paths(state)]

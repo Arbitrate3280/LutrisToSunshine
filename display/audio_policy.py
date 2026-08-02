@@ -14,9 +14,10 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping
+from typing import Any, Dict, Iterable, List
 
 from display.utils import safe_string
+from display.state import DisplayState
 
 # WirePlumber loads user scripts from XDG_DATA and merges XDG_CONFIG fragments.
 WIREPLUMBER_SCRIPTS_DIR = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "wireplumber" / "scripts"
@@ -305,16 +306,16 @@ def _reload_wireplumber() -> None:
     )
 
 
-def _audio_create_script(state: Mapping[str, Any], audio_sink: str) -> str:
+def _audio_create_script(state: DisplayState, audio_sink: str) -> str:
     """Render the audio-create script; snapshots Sunshine audio_sink first."""
-    paths = state["paths"]
+    paths = state.paths
     return f"""#!/bin/bash
 set -euo pipefail
 
-state_path="{paths['state_path']}"
-sunshine_conf="{paths['sunshine_conf']}"
+state_path="{paths.state_path}"
+sunshine_conf="{paths.sunshine_conf}"
 sink_name="{audio_sink}"
-module_file="{paths['audio_module_file']}"
+module_file="{paths.audio_module_file}"
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 pulse_server_value="${{PULSE_SERVER:-}}"
@@ -406,15 +407,15 @@ fi
 """
 
 
-def _audio_cleanup_script(state: Mapping[str, Any]) -> str:
+def _audio_cleanup_script(state: DisplayState) -> str:
     """Render the audio-cleanup script; restores the saved Sunshine audio_sink."""
-    paths = state["paths"]
+    paths = state.paths
     return f"""#!/bin/bash
 set -euo pipefail
 
-state_path="{paths['state_path']}"
-sunshine_conf="{paths['sunshine_conf']}"
-module_file="{paths['audio_module_file']}"
+state_path="{paths.state_path}"
+sunshine_conf="{paths.sunshine_conf}"
+module_file="{paths.audio_module_file}"
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
 pulse_server_value="${{PULSE_SERVER:-}}"
@@ -490,15 +491,15 @@ restore_audio_state
 """
 
 
-def managed_files(state: Mapping[str, Any]) -> Dict[Path, str]:
+def managed_files(state: DisplayState) -> Dict[Path, str]:
     """Return all audio-owned generated files without writing or running commands."""
-    paths = state["paths"]
-    audio_sink = safe_string(state.get("audio_sink"))
+    paths = state.paths
+    audio_sink = safe_string(state.audio_sink)
     return {
-        Path(paths["audio_create_script"]): _audio_create_script(state, audio_sink),
-        Path(paths["audio_cleanup_script"]): _audio_cleanup_script(state),
-        Path(paths["wireplumber_policy_script"]): _wireplumber_policy_script(audio_sink),
-        Path(paths["wireplumber_policy_conf"]): _wireplumber_policy_conf(),
+        Path(paths.audio_create_script): _audio_create_script(state, audio_sink),
+        Path(paths.audio_cleanup_script): _audio_cleanup_script(state),
+        Path(paths.wireplumber_policy_script): _wireplumber_policy_script(audio_sink),
+        Path(paths.wireplumber_policy_conf): _wireplumber_policy_conf(),
     }
 
 
@@ -574,13 +575,13 @@ _LEGACY_PREP_CMD_MARKERS = (
 )
 
 
-def _strip_legacy_global_prep_cmd(state: Mapping[str, Any]) -> None:
+def _strip_legacy_global_prep_cmd(state: DisplayState) -> None:
     """Remove the obsolete LTS stream-audio hooks from Sunshine's global_prep_cmd.
 
     The WirePlumber policy replaces the old do/undo scripts; strip any stale
     entries left from a previous install so Sunshine does not run dead commands.
     """
-    sunshine_conf = Path(state["paths"]["sunshine_conf"])
+    sunshine_conf = Path(state.paths.sunshine_conf)
     entries = _read_global_prep_cmd_list(sunshine_conf)
     kept = [
         entry for entry in entries
@@ -597,15 +598,15 @@ def _strip_legacy_global_prep_cmd(state: Mapping[str, Any]) -> None:
         _remove_key(sunshine_conf, "global_prep_cmd")
 
 
-def _remember_sunshine_audio_sink(state: MutableMapping[str, Any]) -> None:
-    if state.get("sunshine_audio_sink") is None:
-        sunshine_conf = Path(state["paths"]["sunshine_conf"])
-        state["sunshine_audio_sink"] = _read_key_value(sunshine_conf, "audio_sink")
+def _remember_sunshine_audio_sink(state: DisplayState) -> None:
+    if state.sunshine_audio_sink is None:
+        sunshine_conf = Path(state.paths.sunshine_conf)
+        state.sunshine_audio_sink = _read_key_value(sunshine_conf, "audio_sink")
 
 
-def _restore_sunshine_audio_sink(state: Mapping[str, Any]) -> None:
-    sunshine_conf = Path(state["paths"]["sunshine_conf"])
-    original = state.get("sunshine_audio_sink", {"present": False, "value": ""})
+def _restore_sunshine_audio_sink(state: DisplayState) -> None:
+    sunshine_conf = Path(state.paths.sunshine_conf)
+    original = state.sunshine_audio_sink or {"present": False, "value": ""}
     if original.get("present"):
         _set_key_value(sunshine_conf, "audio_sink", original.get("value", ""))
     else:
@@ -655,7 +656,7 @@ def _drain_stale_audio_activation_env() -> None:
         pass
 
 
-def setup(state: MutableMapping[str, Any]) -> None:
+def setup(state: DisplayState) -> None:
     """Remove legacy audio prep hooks, reload WirePlumber, drain activation env, remember sink."""
     _strip_legacy_global_prep_cmd(state)
     _reload_wireplumber()
@@ -663,22 +664,22 @@ def setup(state: MutableMapping[str, Any]) -> None:
     _remember_sunshine_audio_sink(state)
 
 
-def start(state: MutableMapping[str, Any]) -> None:
+def start(state: DisplayState) -> None:
     """Drain activation env and remember the original Sunshine audio_sink."""
     _drain_stale_audio_activation_env()
     _remember_sunshine_audio_sink(state)
 
 
-def stop(state: Mapping[str, Any]) -> None:
+def stop(state: DisplayState) -> None:
     """Restore the saved Sunshine audio_sink; tolerate missing config files."""
     _restore_sunshine_audio_sink(state)
 
 
-def remove(state: Mapping[str, Any]) -> None:
+def remove(state: DisplayState) -> None:
     """Remove policy files, reload WirePlumber, and remove legacy audio prep hooks."""
-    for key in ("wireplumber_policy_script", "wireplumber_policy_conf"):
+    for path in (state.paths.wireplumber_policy_script, state.paths.wireplumber_policy_conf):
         try:
-            Path(state["paths"][key]).unlink()
+            Path(path).unlink()
         except OSError:
             pass
     _reload_wireplumber()

@@ -11,22 +11,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
 from display import audio_policy
 from display import manager
+from display.state import DisplayPaths
 from tests._display_test_helpers import temp_display_state
 
 
 def _wp_script(state):
     files = audio_policy.managed_files(state)
-    return files[Path(state["paths"]["wireplumber_policy_script"])]
+    return files[Path(state.paths.wireplumber_policy_script)]
 
 
 def _wp_conf(state):
     files = audio_policy.managed_files(state)
-    return files[Path(state["paths"]["wireplumber_policy_conf"])]
+    return files[Path(state.paths.wireplumber_policy_conf)]
 
 
 class AudioPolicyTests(unittest.TestCase):
@@ -37,9 +39,9 @@ class AudioPolicyTests(unittest.TestCase):
         conf_path.write_text(config_text, encoding="utf-8")
 
         state = manager._default_state()
-        state["enabled"] = True
-        state["paths"] = dict(state["paths"])
-        state["paths"]["sunshine_conf"] = str(conf_path)
+        state.enabled = True
+        state.paths = DisplayPaths(**asdict(state.paths))
+        state.paths.sunshine_conf = str(conf_path)
         return state, conf_path
 
     def _fake_run(self, calls):
@@ -52,21 +54,21 @@ class AudioPolicyTests(unittest.TestCase):
         with temp_display_state(manager) as (state, base):
             conf_path = base / "sunshine.conf"
             conf_path.write_text("audio_sink = host-speakers\n", encoding="utf-8")
-            state["paths"]["sunshine_conf"] = str(conf_path)
+            state.paths.sunshine_conf = str(conf_path)
 
             files = audio_policy.managed_files(state)
             self.assertEqual(
                 set(files),
                 {
-                    Path(state["paths"]["audio_create_script"]),
-                    Path(state["paths"]["audio_cleanup_script"]),
-                    Path(state["paths"]["wireplumber_policy_script"]),
-                    Path(state["paths"]["wireplumber_policy_conf"]),
+                    Path(state.paths.audio_create_script),
+                    Path(state.paths.audio_cleanup_script),
+                    Path(state.paths.wireplumber_policy_script),
+                    Path(state.paths.wireplumber_policy_conf),
                 },
             )
 
-            wp_script = files[Path(state["paths"]["wireplumber_policy_script"])]
-            wp_conf = files[Path(state["paths"]["wireplumber_policy_conf"])]
+            wp_script = files[Path(state.paths.wireplumber_policy_script)]
+            wp_conf = files[Path(state.paths.wireplumber_policy_conf)]
             self.assertIn('name = "lts-audio/guard-default-sink"', wp_script)
             self.assertIn('name = "lts-audio/route-game-and-recorder"', wp_script)
             self.assertIn('audio_sink = "lts-sunshine-stereo"', wp_script)
@@ -75,8 +77,8 @@ class AudioPolicyTests(unittest.TestCase):
             self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, wp_conf)
             self.assertIn("script.lts-audio-policy = required", wp_conf)
 
-            create = files[Path(state["paths"]["audio_create_script"])]
-            cleanup = files[Path(state["paths"]["audio_cleanup_script"])]
+            create = files[Path(state.paths.audio_create_script)]
+            cleanup = files[Path(state.paths.audio_cleanup_script)]
             # Moved Sunshine config snapshot lives in the create script before
             # the pactl operations; restore lives in the cleanup script.
             self.assertIn("prepare_audio_state", create)
@@ -87,9 +89,9 @@ class AudioPolicyTests(unittest.TestCase):
             self.assertIn("run_audio_command pactl unload-module", cleanup)
             # Pure renderer: no files written, no commands run (the fixture
             # placeholders stay untouched).
-            self.assertEqual(Path(state["paths"]["wireplumber_policy_script"]).read_text(), "managed\n")
-            self.assertEqual(Path(state["paths"]["wireplumber_policy_conf"]).read_text(), "managed\n")
-            self.assertEqual(Path(state["paths"]["audio_create_script"]).read_text(), "managed\n")
+            self.assertEqual(Path(state.paths.wireplumber_policy_script).read_text(), "managed\n")
+            self.assertEqual(Path(state.paths.wireplumber_policy_conf).read_text(), "managed\n")
+            self.assertEqual(Path(state.paths.audio_create_script).read_text(), "managed\n")
 
     def test_setup_remembers_sink_drains_activation_env_and_reloads_wireplumber(self) -> None:
         state, conf_path = self._temp_state()
@@ -99,7 +101,7 @@ class AudioPolicyTests(unittest.TestCase):
             audio_policy.setup(state)
 
         self.assertEqual(
-            state["sunshine_audio_sink"],
+            state.sunshine_audio_sink,
             {"present": True, "value": "host-speakers"},
         )
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
@@ -124,14 +126,14 @@ class AudioPolicyTests(unittest.TestCase):
             audio_policy.start(state)
 
         self.assertEqual(
-            state["sunshine_audio_sink"],
+            state.sunshine_audio_sink,
             {"present": True, "value": "host-speakers"},
         )
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
 
     def test_stop_restores_existing_sink(self) -> None:
         state, conf_path = self._temp_state("audio_sink = lts-sunshine-stereo\n")
-        state["sunshine_audio_sink"] = {"present": True, "value": "host-speakers"}
+        state.sunshine_audio_sink = {"present": True, "value": "host-speakers"}
 
         audio_policy.stop(state)
 
@@ -139,7 +141,7 @@ class AudioPolicyTests(unittest.TestCase):
 
     def test_stop_removes_missing_original_sink(self) -> None:
         state, conf_path = self._temp_state("audio_sink = lts-sunshine-stereo\n")
-        state["sunshine_audio_sink"] = {"present": False, "value": ""}
+        state.sunshine_audio_sink = {"present": False, "value": ""}
 
         audio_policy.stop(state)
 
@@ -157,9 +159,9 @@ class AudioPolicyTests(unittest.TestCase):
                 f"audio_sink = lts-sunshine-stereo\nglobal_prep_cmd = {json.dumps([user_entry, lts_entry])}\n",
                 encoding="utf-8",
             )
-            state["paths"]["sunshine_conf"] = str(conf_path)
-            script_path = Path(state["paths"]["wireplumber_policy_script"])
-            conf_path_wp = Path(state["paths"]["wireplumber_policy_conf"])
+            state.paths.sunshine_conf = str(conf_path)
+            script_path = Path(state.paths.wireplumber_policy_script)
+            conf_path_wp = Path(state.paths.wireplumber_policy_conf)
             script_path.write_text("managed\n", encoding="utf-8")
             conf_path_wp.write_text("managed\n", encoding="utf-8")
 

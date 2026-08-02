@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import tempfile
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
+
+from display.state import DisplayPaths, DisplayState, default_state
 
 
 @contextmanager
@@ -45,11 +48,11 @@ def temp_display_state(
     sunshine_wrapper_script: Optional[Path] = None,
     extra_paths: Optional[Dict[str, Path]] = None,
     state_overrides: Optional[Dict[str, Any]] = None,
-) -> Iterator[Tuple[Dict[str, Any], Path]]:
+) -> Iterator[Tuple[DisplayState, Path]]:
     """Yield ``(state, base_dir)`` pointing at a temporary on-disk layout.
 
     Any ``paths`` key that is not provided keeps the value from
-    :func:`manager._default_state` -- with one exception: the standard
+    :func:`default_state` -- with one exception: the standard
     script and status file keys are materialised as placeholder files
     under ``base_dir`` so remove/cleanup tests have something real to
     delete.
@@ -58,23 +61,23 @@ def temp_display_state(
     explicit: set = set()
     with tempfile.TemporaryDirectory() as raw:
         base = Path(raw)
-        state = manager._default_state()
-        state["paths"] = dict(state["paths"])
+        state = default_state()
+        state.paths = DisplayPaths(**asdict(state.paths))
         if state_overrides:
             for key, value in state_overrides.items():
-                state[key] = value
+                setattr(state, key, value)
 
         if systemd_user_dir is not None:
-            state["paths"]["systemd_user_dir"] = str(systemd_user_dir)
+            state.paths.systemd_user_dir = str(systemd_user_dir)
             explicit.add("systemd_user_dir")
         if sunshine_override is not None:
-            state["paths"]["sunshine_override"] = str(sunshine_override)
+            state.paths.sunshine_override = str(sunshine_override)
             explicit.add("sunshine_override")
         if sunshine_override_dir is not None:
-            state["paths"]["sunshine_override_dir"] = str(sunshine_override_dir)
+            state.paths.sunshine_override_dir = str(sunshine_override_dir)
             explicit.add("sunshine_override_dir")
         if sunshine_wrapper_script is not None:
-            state["paths"]["sunshine_wrapper_script"] = str(sunshine_wrapper_script)
+            state.paths.sunshine_wrapper_script = str(sunshine_wrapper_script)
             explicit.add("sunshine_wrapper_script")
 
         for key in (
@@ -104,15 +107,15 @@ def temp_display_state(
             if key in extra_paths:
                 target = extra_paths[key]
                 if target is None:
-                    state["paths"].pop(key, None)
+                    setattr(state.paths, key, "")
                     continue
-                state["paths"][key] = str(target)
+                setattr(state.paths, key, str(target))
                 continue
             if key in explicit:
                 continue
             placeholder = base / f"{key}.placeholder"
             placeholder.write_text("managed\n", encoding="utf-8")
-            state["paths"][key] = str(placeholder)
+            setattr(state.paths, key, str(placeholder))
 
         yield state, base
 
