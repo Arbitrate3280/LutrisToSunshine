@@ -5,19 +5,31 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from dataclasses import asdict
 
+from display import state as display_state
 from display.state import DisplayPaths
 
 from display import audio_policy
 from display import manager
+from display import diagnostics
+from display import input_isolation
 from display import scripts_render
 from display import sunshine_service
 from tests._display_test_helpers import temp_display_state
 
 
 class DisplayLifecycleTests(unittest.TestCase):
+    def _state_with_sway_socket(self):
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        state = manager._default_state()
+        state.enabled = True
+        state.sway_socket = str(Path(tempdir.name) / "sway.sock")
+        Path(state.sway_socket).touch()
+        return state
+
     def _temp_audio_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
@@ -121,7 +133,7 @@ N: Name="Keyboard passthrough"
 H: Handlers=sysrq kbd event29
 """
         with patch("pathlib.Path.read_text", return_value=input_listing):
-            devices = manager._sunshine_virtual_input_devices()
+            devices = input_isolation.sunshine_virtual_input_devices()
         self.assertEqual(
             devices,
             [
@@ -131,12 +143,8 @@ H: Handlers=sysrq kbd event29
         )
 
     def test_ensure_dependencies_requires_setfacl(self) -> None:
-        original = manager.shutil.which
-        try:
-            manager.shutil.which = lambda name: None if name == "setfacl" else "/usr/bin/fake"
-            missing = manager._ensure_dependencies()
-        finally:
-            manager.shutil.which = original
+        which = lambda name: None if name == "setfacl" else "/usr/bin/fake"
+        missing = diagnostics.missing_dependencies(which_fn=which)
         self.assertIn("setfacl", missing)
 
     def test_udev_rule_no_longer_grants_bridged_hidraw_access_by_phys(self) -> None:
@@ -146,55 +154,49 @@ H: Handlers=sysrq kbd event29
 
     def test_setup_leaves_sunshine_audio_config_unchanged(self) -> None:
         state, conf_path = self._temp_audio_state()
-        original_ensure_dependencies = manager._ensure_dependencies
-        original_load_state = manager.load_state
+        original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_state_paths = manager.build_paths
-        original_refresh_managed_files = manager.refresh_managed_files
-        original_save_state = manager.save_state
-        original_install_udev_rule = manager._install_udev_rule
+        original_state_paths = display_state.build_paths
+        original_save_state = display_state.save_state
         original_cleanup_legacy_display_units = sunshine_service.cleanup_managed_overrides
-        original_daemon_reload = manager._daemon_reload
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
+        daemon_reload_patch = patch.object(sunshine_service, "daemon_reload")
         try:
-            manager._ensure_dependencies = lambda: []
-            manager.load_state = lambda: state
+            dependency_patch.start()
+            daemon_reload_patch.start()
+            display_state.load_state = lambda: state
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager.build_paths = lambda _unit: state.paths
-            manager.refresh_managed_files = lambda current=None: current if current is not None else state
-            manager.save_state = lambda current: None
-            manager._install_udev_rule = lambda current: True
+            display_state.build_paths = lambda _unit: state.paths
+            display_state.save_state = lambda current: None
             sunshine_service.cleanup_managed_overrides = lambda current: None
-            manager._daemon_reload = lambda: None
 
-            with patch.object(audio_policy.subprocess, "run") as fake_run, \
-                 patch.object(audio_policy.shutil, "which", return_value=None):
-                result = manager.setup_display()
+            result = manager.setup_display(
+                refresh_managed_files_fn=lambda current: current,
+                install_udev_rule_fn=lambda current: True,
+                audio_setup_fn=lambda current: None,
+            )
         finally:
-            manager._ensure_dependencies = original_ensure_dependencies
-            manager.load_state = original_load_state
+            display_state.load_state = original_load_state
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager.build_paths = original_state_paths
-            manager.refresh_managed_files = original_refresh_managed_files
-            manager.save_state = original_save_state
-            manager._install_udev_rule = original_install_udev_rule
+            display_state.build_paths = original_state_paths
+            display_state.save_state = original_save_state
             sunshine_service.cleanup_managed_overrides = original_cleanup_legacy_display_units
-            manager._daemon_reload = original_daemon_reload
+            dependency_patch.stop()
+            daemon_reload_patch.stop()
 
         self.assertEqual(result, 0)
         self.assertIn("audio_sink = host-speakers\n", conf_path.read_text(encoding="utf-8"))
 
     def test_start_display_leaves_audio_config_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
-        original_load_state = manager.load_state
-        original_refresh_managed_files = manager.refresh_managed_files
-        original_save_state = manager.save_state
+        original_load_state = display_state.load_state
+        original_save_state = display_state.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_start_sunshine_unit = sunshine_service.start_sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
         try:
-            manager.load_state = lambda: state
-            manager.refresh_managed_files = lambda current=None: current if current is not None else state
-            manager.save_state = lambda current: None
+            display_state.load_state = lambda: state
+            display_state.save_state = lambda current: None
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "start", unit], 1, "", "boom"
@@ -203,13 +205,14 @@ H: Handlers=sysrq kbd event29
                 ["systemctl", "--user", "stop", unit], 0, "", ""
             )
 
-            with patch.object(audio_policy.subprocess, "run") as fake_run, \
-                 patch.object(audio_policy.shutil, "which", return_value=None):
-                result = manager.start_display()
+            result = manager.start_display(
+                refresh_managed_files_fn=lambda current: current,
+                audio_start_fn=lambda current: None,
+                audio_stop_fn=lambda current: None,
+            )
         finally:
-            manager.load_state = original_load_state
-            manager.refresh_managed_files = original_refresh_managed_files
-            manager.save_state = original_save_state
+            display_state.load_state = original_load_state
+            display_state.save_state = original_save_state
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.start_sunshine_unit = original_start_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
@@ -219,13 +222,13 @@ H: Handlers=sysrq kbd event29
 
     def test_stop_display_leaves_managed_audio_target(self) -> None:
         state, conf_path = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
-        original_load_state = manager.load_state
-        original_save_state = manager.save_state
+        original_load_state = display_state.load_state
+        original_save_state = display_state.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
         original_stop_sunshine_unit = sunshine_service.stop_sunshine_unit
         try:
-            manager.load_state = lambda: state
-            manager.save_state = lambda current: None
+            display_state.load_state = lambda: state
+            display_state.save_state = lambda current: None
             sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
             sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "stop", unit], 0, "", ""
@@ -233,8 +236,8 @@ H: Handlers=sysrq kbd event29
 
             result = manager.stop_display()
         finally:
-            manager.load_state = original_load_state
-            manager.save_state = original_save_state
+            display_state.load_state = original_load_state
+            display_state.save_state = original_save_state
             sunshine_service.sunshine_unit = original_sunshine_unit
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
@@ -244,13 +247,13 @@ H: Handlers=sysrq kbd event29
     def test_stop_display_cleans_audio_when_failed_stop_left_unit_inactive(self) -> None:
         state, _ = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
         state.sunshine_unit_name = sunshine_service.SUNSHINE_UNIT
-        with patch.object(manager, "load_state", return_value=state), \
-             patch.object(manager, "save_state"), \
-             patch.object(manager._svc, "stop_sunshine_unit", return_value=subprocess.CompletedProcess([], 1, "", "")), \
-             patch.object(manager._svc, "sunshine_unit", return_value=sunshine_service.SUNSHINE_UNIT), \
-             patch.object(manager._svc, "is_sunshine_service_active", return_value=False), \
-             patch.object(manager.audio_policy, "stop") as cleanup:
-            result = manager.stop_display()
+        with patch.object(display_state, "load_state", return_value=state), \
+             patch.object(display_state, "save_state"), \
+             patch.object(sunshine_service, "stop_sunshine_unit", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+             patch.object(sunshine_service, "sunshine_unit", return_value=sunshine_service.SUNSHINE_UNIT), \
+             patch.object(sunshine_service, "is_sunshine_service_active", return_value=False):
+            cleanup = Mock()
+            result = manager.stop_display(audio_stop_fn=cleanup)
 
         self.assertEqual(result, 1)
         cleanup.assert_called_once_with(state)
@@ -314,28 +317,21 @@ H: Handlers=sysrq kbd event29
             encoding="utf-8",
         )
 
-        original_load_state = manager.load_state
-        original_save_state = manager.save_state
-        original_stop_display = manager.stop_display
-        original_remove_udev_rule = manager._remove_udev_rule
-        original_daemon_reload = manager._daemon_reload
-        original_remove_wireplumber_policy = audio_policy.remove
+        original_load_state = display_state.load_state
+        original_save_state = display_state.save_state
         try:
-            manager.load_state = lambda: state
-            manager.save_state = lambda current: None
-            manager.stop_display = lambda: 0
-            manager._remove_udev_rule = lambda current: True
-            manager._daemon_reload = lambda: None
-            audio_policy.remove = lambda current: None
+            display_state.load_state = lambda: state
+            display_state.save_state = lambda current: None
 
-            result = manager.remove_display()
+            result = manager.remove_display(
+                stop_display_fn=lambda: 0,
+                remove_udev_rule_fn=lambda current: True,
+                daemon_reload_fn=lambda: None,
+                audio_remove_fn=lambda current: None,
+            )
         finally:
-            manager.load_state = original_load_state
-            manager.save_state = original_save_state
-            manager.stop_display = original_stop_display
-            manager._remove_udev_rule = original_remove_udev_rule
-            manager._daemon_reload = original_daemon_reload
-            audio_policy.remove = original_remove_wireplumber_policy
+            display_state.load_state = original_load_state
+            display_state.save_state = original_save_state
 
         self.assertEqual(result, 0)
         self.assertFalse(Path(state.paths.sunshine_override).exists())
@@ -348,11 +344,11 @@ H: Handlers=sysrq kbd event29
         state = manager._default_state()
         state.paths = DisplayPaths(**asdict(state.paths))
         state.paths.portal_active_file = str(Path(tempdir.name) / "portal-active")
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            display_state.load_state = lambda: state
+            dependency_patch.start()
             with patch.dict(
                 os.environ,
                 {
@@ -365,8 +361,8 @@ H: Handlers=sysrq kbd event29
             ):
                 snapshot = manager.display_snapshot()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
 
         self.assertFalse(snapshot["configured"])
         self.assertIn("display enable", snapshot["next_step"])
@@ -396,27 +392,23 @@ H: Handlers=sysrq kbd event29
             encoding="utf-8",
         )
 
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            display_state.load_state = lambda: state
+            dependency_patch.start()
             snapshot = manager.display_snapshot()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
 
         self.assertEqual(snapshot["current_mangohud_config"], "read_cfg,fps_limit=59.94")
 
     def test_current_headless_mode_formats_refresh_in_millihz(self) -> None:
-        state = manager._default_state()
-        state.enabled = True
-        state.sway_socket = "/tmp/lts-sway.sock"
+        state = self._state_with_sway_socket()
 
-        original_run = manager.run_command
-        original_path_exists = manager.Path.exists
-        try:
-            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(
                 command,
                 0,
                 stdout=json.dumps(
@@ -433,69 +425,52 @@ H: Handlers=sysrq kbd event29
                 ),
                 stderr="",
             )
-            manager.Path.exists = lambda path: str(path) == state.sway_socket
-
-            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
-        finally:
-            manager.run_command = original_run
-            manager.Path.exists = original_path_exists
+        mode = diagnostics.current_headless_mode(
+            state, sunshine_active=True, sway_active=True, runner=runner
+        )
 
         self.assertEqual(mode, "2560x1440 @ 119.99 Hz")
 
     def test_current_headless_mode_returns_empty_when_headless_output_missing(self) -> None:
-        state = manager._default_state()
-        state.enabled = True
-        state.sway_socket = "/tmp/lts-sway.sock"
+        state = self._state_with_sway_socket()
 
-        original_run = manager.run_command
-        original_path_exists = manager.Path.exists
-        try:
-            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(
                 command,
                 0,
                 stdout=json.dumps([{"name": "HDMI-A-1", "current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}]),
                 stderr="",
             )
-            manager.Path.exists = lambda path: str(path) == state.sway_socket
-
-            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
-        finally:
-            manager.run_command = original_run
-            manager.Path.exists = original_path_exists
+        mode = diagnostics.current_headless_mode(
+            state, sunshine_active=True, sway_active=True, runner=runner
+        )
 
         self.assertEqual(mode, "")
 
     def test_current_headless_mode_returns_empty_when_swaymsg_fails(self) -> None:
-        state = manager._default_state()
-        state.enabled = True
-        state.sway_socket = "/tmp/lts-sway.sock"
+        state = self._state_with_sway_socket()
 
-        original_run = manager.run_command
-        original_path_exists = manager.Path.exists
-        try:
-            manager.run_command = lambda command, **kwargs: subprocess.CompletedProcess(
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(
                 command,
                 1,
                 stdout="",
                 stderr="failed",
             )
-            manager.Path.exists = lambda path: str(path) == state.sway_socket
-
-            mode = manager._current_headless_mode(state, sunshine_active=True, sway_active=True)
-        finally:
-            manager.run_command = original_run
-            manager.Path.exists = original_path_exists
+        mode = diagnostics.current_headless_mode(
+            state, sunshine_active=True, sway_active=True, runner=runner
+        )
 
         self.assertEqual(mode, "")
 
     def test_display_doctor_report_flags_missing_dependencies(self) -> None:
         state = manager._default_state()
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
         original_installation_audit = sunshine_service.sunshine_installation_audit
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=["sway", "setfacl"])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: ["sway", "setfacl"]
+            display_state.load_state = lambda: state
+            dependency_patch.start()
             sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
                 managed_unit=sunshine_service.SUNSHINE_UNIT,
                 managed_type="native",
@@ -503,8 +478,8 @@ H: Handlers=sysrq kbd event29
             )
             report = manager.display_doctor_report()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
             sunshine_service.sunshine_installation_audit = original_installation_audit
 
         self.assertEqual(report["summary"], "needs_attention")
@@ -513,13 +488,13 @@ H: Handlers=sysrq kbd event29
     def test_display_doctor_report_warns_when_install_probe_disagrees_with_managed_unit(self) -> None:
         state = manager._default_state()
         state.enabled = True
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
         original_installation_audit = sunshine_service.sunshine_installation_audit
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            display_state.load_state = lambda: state
+            dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: True
             sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
                 managed_unit=sunshine_service.SUNSHINE_UNIT,
@@ -531,8 +506,8 @@ H: Handlers=sysrq kbd event29
 
             report = manager.display_doctor_report()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
             sunshine_service.sunshine_installation_audit = original_installation_audit
 
@@ -545,13 +520,13 @@ H: Handlers=sysrq kbd event29
     def test_display_doctor_report_skips_install_warning_when_probe_matches_managed_unit(self) -> None:
         state = manager._default_state()
         state.enabled = True
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
         original_installation_audit = sunshine_service.sunshine_installation_audit
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            display_state.load_state = lambda: state
+            dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: True
             sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
                 managed_unit=sunshine_service.SUNSHINE_UNIT,
@@ -561,8 +536,8 @@ H: Handlers=sysrq kbd event29
 
             report = manager.display_doctor_report()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
             sunshine_service.sunshine_installation_audit = original_installation_audit
 
@@ -594,15 +569,15 @@ H: Handlers=sysrq kbd event29
         state.paths = DisplayPaths(**asdict(state.paths))
         state.paths.kwin_input_isolation_status_file = str(kwin_status_path)
 
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
+        original_sunshine_virtual_input_devices = input_isolation.sunshine_virtual_input_devices
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager._sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
+            display_state.load_state = lambda: state
+            input_isolation.sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
             with patch.dict(
                 manager.os.environ,
                 {
@@ -615,10 +590,10 @@ H: Handlers=sysrq kbd event29
             ):
                 report = manager.display_doctor_report()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
+            input_isolation.sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 
         self.assertEqual(report["summary"], "degraded")
         kwin_check = next(check for check in report["checks"] if check["label"] == "KWin isolation")
@@ -652,15 +627,15 @@ H: Handlers=sysrq kbd event29
         state.paths = DisplayPaths(**asdict(state.paths))
         state.paths.kwin_input_isolation_status_file = str(kwin_status_path)
 
-        original_load_state = manager.load_state
-        original_ensure_dependencies = manager._ensure_dependencies
+        original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_sunshine_virtual_input_devices = manager._sunshine_virtual_input_devices
+        original_sunshine_virtual_input_devices = input_isolation.sunshine_virtual_input_devices
+        dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
-            manager.load_state = lambda: state
-            manager._ensure_dependencies = lambda: []
+            dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: False
-            manager._sunshine_virtual_input_devices = lambda: [
+            display_state.load_state = lambda: state
+            input_isolation.sunshine_virtual_input_devices = lambda: [
                 {"name": "Mouse passthrough", "event_path": "/dev/input/event27"},
                 {"name": "Mouse passthrough (absolute)", "event_path": "/dev/input/event28"},
                 {"name": "Keyboard passthrough", "event_path": "/dev/input/event29"},
@@ -679,10 +654,10 @@ H: Handlers=sysrq kbd event29
             ):
                 report = manager.display_doctor_report()
         finally:
-            manager.load_state = original_load_state
-            manager._ensure_dependencies = original_ensure_dependencies
+            display_state.load_state = original_load_state
+            dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            manager._sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
+            input_isolation.sunshine_virtual_input_devices = original_sunshine_virtual_input_devices
 
         kwin_check = next(check for check in report["checks"] if check["label"] == "KWin isolation")
         self.assertEqual(kwin_check["status"], "warn")
@@ -939,19 +914,11 @@ H: Handlers=sysrq kbd event29
         state = manager._default_state()
         state.enabled = True
         start_calls = []
-        original_load_state = manager.load_state
-        original_stop_display = manager.stop_display
-        original_start_display = manager.start_display
-        try:
-            manager.load_state = lambda: state
-            manager.stop_display = lambda: 1
-            manager.start_display = lambda: start_calls.append(True) or 0
-
-            result = manager.restart_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.stop_display = original_stop_display
-            manager.start_display = original_start_display
+        with patch.object(display_state, "load_state", return_value=state):
+            result = manager.restart_display(
+                stop_display_fn=lambda: 1,
+                start_display_fn=lambda: start_calls.append(True) or 0,
+            )
 
         self.assertEqual(result, 1)
         self.assertEqual(start_calls, [])
@@ -959,19 +926,11 @@ H: Handlers=sysrq kbd event29
     def test_restart_display_proceeds_to_start_when_stop_succeeds(self) -> None:
         state = manager._default_state()
         state.enabled = True
-        original_load_state = manager.load_state
-        original_stop_display = manager.stop_display
-        original_start_display = manager.start_display
-        try:
-            manager.load_state = lambda: state
-            manager.stop_display = lambda: 0
-            manager.start_display = lambda: 0
-
-            result = manager.restart_display()
-        finally:
-            manager.load_state = original_load_state
-            manager.stop_display = original_stop_display
-            manager.start_display = original_start_display
+        with patch.object(display_state, "load_state", return_value=state):
+            result = manager.restart_display(
+                stop_display_fn=lambda: 0,
+                start_display_fn=lambda: 0,
+            )
 
         self.assertEqual(result, 0)
 
@@ -1001,31 +960,24 @@ H: Handlers=sysrq kbd event29
                 _p.write_text("managed\n", encoding="utf-8")
                 setattr(state.paths, _key, str(_p))
         cleanup_calls = []
-        original_load_state = manager.load_state
-        original_stop_display = manager.stop_display
-        original_remove_udev_rule = manager._remove_udev_rule
+        original_load_state = display_state.load_state
         original_cleanup_managed_overrides = sunshine_service.cleanup_managed_overrides
-        original_daemon_reload = manager._daemon_reload
-        original_save_state = manager.save_state
-        original_remove_wireplumber_policy = audio_policy.remove
+        original_save_state = display_state.save_state
         try:
-            manager.load_state = lambda: state
-            manager.stop_display = lambda: 1
-            manager._remove_udev_rule = lambda current: cleanup_calls.append("udev") or True
+            display_state.load_state = lambda: state
             sunshine_service.cleanup_managed_overrides = lambda current: cleanup_calls.append("overrides")
-            manager._daemon_reload = lambda: None
-            manager.save_state = lambda current: None
-            audio_policy.remove = lambda current: None
+            display_state.save_state = lambda current: None
 
-            result = manager.remove_display()
+            result = manager.remove_display(
+                stop_display_fn=lambda: 1,
+                remove_udev_rule_fn=lambda current: cleanup_calls.append("udev") or True,
+                daemon_reload_fn=lambda: None,
+                audio_remove_fn=lambda current: None,
+            )
         finally:
-            manager.load_state = original_load_state
-            manager.stop_display = original_stop_display
-            manager._remove_udev_rule = original_remove_udev_rule
+            display_state.load_state = original_load_state
             sunshine_service.cleanup_managed_overrides = original_cleanup_managed_overrides
-            manager._daemon_reload = original_daemon_reload
-            manager.save_state = original_save_state
-            audio_policy.remove = original_remove_wireplumber_policy
+            display_state.save_state = original_save_state
 
         self.assertEqual(result, 0)
         self.assertIn("udev", cleanup_calls)

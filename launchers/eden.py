@@ -1,12 +1,23 @@
 import glob
 import os
 import re
-from typing import List, Tuple
+import shutil
+from typing import List, Optional, Tuple
+import shlex
+
+from config.types import GameSelection, LauncherSource
 
 from utils.utils import run_command
 
 SUPPORTED_EXTENSIONS = (".nsp", ".xci", ".nca", ".nro")
 TITLE_ID_PATTERN = re.compile(r"\[([0-9A-Fa-f]{16})\]")
+
+
+def build_eden_command(game: GameSelection) -> Optional[str]:
+    command = get_eden_command()
+    if not command:
+        return None
+    return shlex.join([*shlex.split(command), "-f", "-g", game.game_id])
 
 
 def _candidate_home_dirs() -> List[str]:
@@ -24,7 +35,7 @@ def _candidate_home_dirs() -> List[str]:
 
 def get_eden_command() -> str:
     """Get the Eden launch command (native binary or AppImage)."""
-    if run_command("which eden").returncode == 0:
+    if shutil.which("eden"):
         return "eden"
 
     patterns = [
@@ -118,3 +129,8 @@ def list_eden_games() -> List[Tuple[str, str]]:
                 games.append((game_path, game_name))
 
     return games
+
+
+def list_eden_selections() -> List[GameSelection]:
+    source = LauncherSource("Eden")
+    return [GameSelection(game_id, name, "Eden", source) for game_id, name in list_eden_games()]

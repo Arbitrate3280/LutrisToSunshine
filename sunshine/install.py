@@ -14,6 +14,8 @@ import shutil
 import subprocess
 from typing import Optional, Tuple
 
+from utils.utils import run_command
+
 HOMEBREW_SUNSHINE_FORMULAE: Tuple[str, ...] = ("sunshine", "sunshine-beta")
 
 
@@ -28,12 +30,7 @@ def homebrew_prefix(formula: str) -> Optional[str]:
     if not brew:
         return None
     try:
-        result = subprocess.run(
-            [brew, "--prefix", formula],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = run_command([brew, "--prefix", formula])
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:

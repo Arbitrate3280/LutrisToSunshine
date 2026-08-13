@@ -167,6 +167,11 @@ class AudioPolicyTests(unittest.TestCase):
 
     def test_stop_cleans_runtime_audio_without_rewriting_sunshine_config(self) -> None:
         state, conf_path = self._temp_state("audio_sink = lts-sunshine-stereo\n")
+        cleanup_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(cleanup_dir.cleanup)
+        cleanup_script = Path(cleanup_dir.name) / "cleanup-audio.sh"
+        cleanup_script.write_text("#!/bin/sh\n", encoding="utf-8")
+        state.paths.audio_cleanup_script = str(cleanup_script)
         calls = []
         with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)):
             audio_policy.stop(state)

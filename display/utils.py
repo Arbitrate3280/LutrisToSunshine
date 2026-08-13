@@ -1,35 +1,17 @@
 """Generic display-package helpers.
 
-These utilities are not specific to any one subsystem in the
-display package: they wrap ``subprocess.run`` with our standard
-options and coerce arbitrary values to stripped strings.  Both
-``display.manager`` and ``display.sunshine_service`` import them so
-the dependencies form a clean tree with no cycles.
+The command runner is re-exported from the shared utility module; this
+package adds only its string coercion helper. Both display subsystems can
+therefore share these helpers without introducing a dependency cycle.
 """
 
 from __future__ import annotations
 
-import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from utils.utils import run_command
 
 
 def safe_string(value: Any) -> str:
     """Return ``value`` coerced to a stripped string, or ``""`` if falsy."""
     return str(value or "").strip()
-
-
-def run_command(
-    command: List[str],
-    *,
-    capture_output: bool = True,
-    check: bool = False,
-    env: Optional[Dict[str, str]] = None,
-) -> subprocess.CompletedProcess:
-    """Run ``command`` with the display package's standard subprocess options."""
-    return subprocess.run(
-        command,
-        text=True,
-        capture_output=capture_output,
-        check=check,
-        env=env,
-    )

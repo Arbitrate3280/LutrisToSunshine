@@ -2,10 +2,10 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from display.constants import _PCI_IDS_PATHS
-from display.state import DisplayState
+from display.state import DisplayState, load_state, save_state
 from display.utils import safe_string
 
 
@@ -122,10 +122,20 @@ def gpu_status_label(state: DisplayState) -> str:
     return f"[MANUAL] {card_path}"
 
 
-def set_gpu_mode(mode: str, card_path: str = "", render_path: str = "") -> DisplayState:
-    from display.manager import load_state, refresh_managed_files
+def _save_state(state: DisplayState) -> DisplayState:
+    save_state(state)
+    return state
 
-    state = load_state()
+
+def set_gpu_mode(
+    mode: str,
+    card_path: str = "",
+    render_path: str = "",
+    *,
+    load_state_fn: Callable[[], DisplayState] = load_state,
+    refresh_managed_files_fn: Callable[[DisplayState], DisplayState] = _save_state,
+) -> DisplayState:
+    state = load_state_fn()
     if mode not in ("auto", "manual"):
         mode = "auto"
     state.gpu_mode = mode
@@ -135,15 +145,19 @@ def set_gpu_mode(mode: str, card_path: str = "", render_path: str = "") -> Displ
     else:
         state.gpu_card_path = ""
         state.gpu_render_path = ""
-    return refresh_managed_files(state)
+    return refresh_managed_files_fn(state)
 
 
-def configure_gpu() -> int:
+def configure_gpu(
+    *,
+    load_state_fn: Callable[[], DisplayState] = load_state,
+    refresh_managed_files_fn: Callable[[DisplayState], DisplayState] = _save_state,
+    restart_fn: Callable[[], int] = lambda: 0,
+) -> int:
     """Interactive GPU selection for the virtual display."""
-    from display.manager import load_state, restart_display
     from utils.input import get_user_input, get_yes_no_input
 
-    state = load_state()
+    state = load_state_fn()
     print("")
     print("Virtual display GPU selection")
     print("Pick which graphics card drives the virtual display.")
@@ -164,7 +178,7 @@ def configure_gpu() -> int:
                 lambda value: value.strip().lower() if value.strip().lower() in {"y", "n"} else (_ for _ in ()).throw(ValueError()),
                 "Enter y or n.",
             ) == "y":
-                set_gpu_mode("auto")
+                set_gpu_mode("auto", load_state_fn=load_state_fn, refresh_managed_files_fn=refresh_managed_files_fn)
                 print("GPU selection reset to Auto.")
         return 0
     valid_choices = ["0"]
@@ -179,15 +193,21 @@ def configure_gpu() -> int:
         f"Enter a number from 0 to {len(gpus)}.",
     )
     if choice == "0":
-        set_gpu_mode("auto")
+        set_gpu_mode("auto", load_state_fn=load_state_fn, refresh_managed_files_fn=refresh_managed_files_fn)
         print("GPU selection set to Auto.")
     else:
         idx = int(choice) - 1
         gpu = gpus[idx]
-        set_gpu_mode("manual", gpu["card_path"], gpu["render_path"])
+        set_gpu_mode(
+            "manual",
+            gpu["card_path"],
+            gpu["render_path"],
+            load_state_fn=load_state_fn,
+            refresh_managed_files_fn=refresh_managed_files_fn,
+        )
         print(f"GPU selection set to {gpu['label']} ({gpu['card_path']}).")
 
     print("")
     if get_yes_no_input("Restart the virtual display for the change to take effect?", default=True):
-        return restart_display()
+        return restart_fn()
     return 0

@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import re
 from pathlib import Path
-from typing import List, Optional, TypedDict
+from typing import TYPE_CHECKING, Callable, List, Optional, TypedDict
 
 from display.utils import run_command, safe_string
-from display.state import DisplayState
 from sunshine.detection import (
     SUNSHINE_UNIT,
     FALLBACK_SUNSHINE_UNIT,
@@ -33,6 +33,9 @@ from sunshine.detection import (
     preferred_launch_binary,
     probe_sunshine_service_unit,
 )
+
+if TYPE_CHECKING:
+    from display.state import DisplayState
 
 
 def _systemctl_user(*args: str, check: bool = False) -> subprocess.CompletedProcess:
@@ -54,6 +57,107 @@ def sunshine_unit() -> str:
     unit; finally to the canonical :data:`SUNSHINE_UNIT`.
     """
     return probe_sunshine_service_unit(systemctl_runner=_systemctl_user).unit_name
+
+
+def resolve_sunshine_unit(state: DisplayState) -> str:
+    return safe_string(state.sunshine_unit_name) or sunshine_unit()
+
+
+def parse_systemd_execstart(value: str) -> str:
+    raw_value = safe_string(value)
+    if not raw_value:
+        return ""
+    for line in raw_value.splitlines():
+        match = re.search(r"argv\[]=(.*?) ;", line)
+        if match:
+            return safe_string(match.group(1))
+    if "argv[]=" in raw_value:
+        match = re.search(r"argv\[]=(.*)", raw_value, re.DOTALL)
+        if match:
+            return safe_string(match.group(1))
+    return raw_value
+
+
+def current_sunshine_execstart(unit: str) -> str:
+    return parse_systemd_execstart(show_unit_property(unit, "ExecStart"))
+
+
+def remember_sunshine_execstart(
+    state: DisplayState,
+    *,
+    resolve_unit_fn: Callable[[DisplayState], str] = resolve_sunshine_unit,
+    current_execstart_fn: Callable[[str], str] = current_sunshine_execstart,
+    fragment_execstart_fn: Optional[Callable[[str], str]] = None,
+    binary_fn: Optional[Callable[[], Optional[str]]] = None,
+) -> DisplayState:
+    fragment_execstart_fn = fragment_execstart_fn or fragment_sunshine_execstart
+    binary_fn = binary_fn or sunshine_binary
+    target_unit = resolve_unit_fn(state)
+    current_execstart = current_execstart_fn(target_unit) or fragment_execstart_fn(target_unit)
+    wrapper_path = state.paths.sunshine_wrapper_script
+    if current_execstart and wrapper_path and current_execstart != wrapper_path:
+        state.sunshine_execstart = current_execstart
+        return state
+    if state.sunshine_execstart:
+        return state
+    state.sunshine_execstart = binary_fn() or "sunshine"
+    return state
+
+
+def config_root_candidates() -> List[Path]:
+    return [
+        Path("~/.config/sunshine").expanduser(),
+        Path("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine").expanduser(),
+    ]
+
+
+def detect_sunshine_config_root() -> Path:
+    candidates = config_root_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def fragment_sunshine_execstart(unit_name: str) -> str:
+    fragment_path = Path(safe_string(show_unit_property(unit_name, "FragmentPath")))
+    if not fragment_path.is_file():
+        return ""
+    in_service_section = False
+    try:
+        for raw_line in fragment_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                in_service_section = line == "[Service]"
+                continue
+            if in_service_section and line.startswith("ExecStart="):
+                return safe_string(line.split("=", 1)[1])
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_sunshine_config_root(
+    unit_name: str,
+    *,
+    fragment_execstart_fn: Optional[Callable[[str], str]] = None,
+    detect_root_fn: Optional[Callable[[], Path]] = None,
+) -> Path:
+    """Resolve the config root from the managed unit's actual executable."""
+    fragment_execstart_fn = fragment_execstart_fn or fragment_sunshine_execstart
+    detect_root_fn = detect_root_fn or detect_sunshine_config_root
+    executable = fragment_execstart_fn(unit_name)
+    if executable and "flatpak" in executable.lower():
+        flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
+        return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
+    if executable:
+        return detect_root_fn()
+    if unit_name and unit_name.startswith("app-"):
+        flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
+        return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
+    return detect_root_fn()
 
 
 def is_sunshine_service_active() -> bool:

@@ -1,17 +1,39 @@
 import json
 import os
-from typing import List, Tuple, Optional, Dict
+import shutil
+import shlex
+from typing import List, Tuple, Optional
+from config.types import GameSelection, RetroArchSource
 from utils.utils import run_command
 
 RETROARCH_FLATPAK_ID = "org.libretro.RetroArch"
 
+
+def build_retroarch_command(game: GameSelection) -> Optional[str]:
+    if not isinstance(game.source, RetroArchSource):
+        return None
+    core_path = os.path.expanduser(game.source.core_path)
+    command = get_retroarch_command()
+    if not command or not core_path:
+        return None
+    return shlex.join([*shlex.split(command), "-L", core_path, game.game_id])
+
+
+def validate_retroarch_selection(game: GameSelection) -> Optional[str]:
+    if not isinstance(game.source, RetroArchSource):
+        return "RetroArch core not set"
+    core_path = game.source.core_path.strip()
+    core_name = game.source.core_name.strip()
+    if core_path.upper() == "DETECT" or core_name.upper() == "DETECT" or not core_path:
+        return "RetroArch core not set"
+    return None
+
 def detect_retroarch_installation() -> bool:
     """Detect if RetroArch is installed via Flatpak or native."""
     # Check for Flatpak installation
-    if run_command(f"flatpak list | grep {RETROARCH_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", RETROARCH_FLATPAK_ID]).returncode == 0:
         return True
-    # Check for native installation
-    elif run_command("which retroarch").returncode == 0:
+    elif shutil.which("retroarch"):
         return True
     else:
         return False
@@ -19,7 +41,7 @@ def detect_retroarch_installation() -> bool:
 def get_retroarch_config_path() -> str:
     """Get the RetroArch config directory based on installation type."""
     # Check for Flatpak first
-    if run_command(f"flatpak list | grep {RETROARCH_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", RETROARCH_FLATPAK_ID]).returncode == 0:
         return os.path.expanduser("~/.var/app/org.libretro.RetroArch/config/retroarch")
     else:
         return os.path.expanduser("~/.config/retroarch")
@@ -72,7 +94,7 @@ def get_retroarch_cores_directory() -> str:
     # Flatpak ships cores under /app directories when launched through flatpak
     # but from the host we do not have direct access; still, passing this path
     # through works for the launched process.
-    if run_command(f"flatpak list | grep {RETROARCH_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", RETROARCH_FLATPAK_ID]).returncode == 0:
         return "/app/libretro"
 
     return default_dir
@@ -126,17 +148,16 @@ def resolve_core_path(core_path: Optional[str], core_name: Optional[str]) -> Opt
 def get_retroarch_command() -> str:
     """Get the RetroArch command based on installation type."""
     # Check for Flatpak installation
-    if run_command(f"flatpak list | grep {RETROARCH_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", RETROARCH_FLATPAK_ID]).returncode == 0:
         return f"flatpak run {RETROARCH_FLATPAK_ID}"
-    # Check for native installation
-    elif run_command("which retroarch").returncode == 0:
+    elif shutil.which("retroarch"):
         return "retroarch"
     else:
         return ""
 
-def list_retroarch_games() -> List[Tuple[str, str, Dict[str, str]]]:
+def list_retroarch_games() -> List[Tuple[str, str, RetroArchSource]]:
     """List all games in RetroArch playlists."""
-    games: List[Tuple[str, str, Dict[str, str]]] = []
+    games: List[Tuple[str, str, RetroArchSource]] = []
     playlists_path = get_retroarch_playlist_directory()
 
     if not os.path.exists(playlists_path):
@@ -155,17 +176,27 @@ def list_retroarch_games() -> List[Tuple[str, str, Dict[str, str]]]:
                                 game_name = item["label"]
                                 core_path = item.get("core_path", "")
                                 core_name = item.get("core_name", "")
-                                if game_path and game_name:
+                                if (
+                                    isinstance(game_path, str)
+                                    and isinstance(game_name, str)
+                                    and isinstance(core_path, str)
+                                    and isinstance(core_name, str)
+                                    and game_path
+                                    and game_name
+                                ):
                                     games.append((
                                         game_path,
                                         game_name,
-                                        {
-                                            "type": "RetroArch",
-                                            "core_path": core_path or "",
-                                            "core_name": core_name or "",
-                                        },
+                                        RetroArchSource(core_path, core_name),
                                     ))
             except (json.JSONDecodeError, KeyError, UnicodeDecodeError):
                 continue
 
     return games
+
+
+def list_retroarch_selections() -> List[GameSelection]:
+    return [
+        GameSelection(path, name, "RetroArch", core)
+        for path, name, core in list_retroarch_games()
+    ]

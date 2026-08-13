@@ -1,17 +1,26 @@
 import os
 import re
+import shutil
+import shlex
 from typing import Tuple, List, Optional
+from config.types import GameSelection, LauncherSource
 from utils.utils import run_command
 
 STEAM_FLATPAK_ID = "com.valvesoftware.Steam"
 
+
+def build_steam_command(game: GameSelection) -> Optional[str]:
+    command = get_steam_command()
+    if not command:
+        return None
+    return shlex.join([*shlex.split(command), f"steam://run/{game.game_id}"])
+
 def detect_steam_installation() -> Tuple[bool, str]:
     """Detect if Steam is installed and how."""
     # Check for Flatpak installation
-    if run_command(f"flatpak list | grep {STEAM_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", STEAM_FLATPAK_ID]).returncode == 0:
         return True, "flatpak"
-    # Check for native installation
-    elif run_command("which steam").returncode == 0:
+    elif shutil.which("steam"):
         return True, "native"
     else:
         return False, ""
@@ -94,6 +103,11 @@ def list_steam_games() -> List[Tuple[str, str]]:
                             games.append((appid, name))
     
     return games
+
+
+def list_steam_selections() -> List[GameSelection]:
+    source = LauncherSource("Steam")
+    return [GameSelection(game_id, name, "Steam", source) for game_id, name in list_steam_games()]
 
 def get_steam_command() -> str:
     """Get the command to run Steam."""

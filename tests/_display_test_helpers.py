@@ -1,12 +1,4 @@
-"""Shared test helpers for the display package.
-
-Centralises the boilerplate that every display test needs: monkey-
-patching manager functions and creating a temporary display state
-pointing at a real on-disk directory tree.  Use the context managers
-from this module instead of repeating ``original = manager.foo`` /
-``manager.foo = ...`` / ``manager.foo = original`` blocks in every
-test case.
-"""
+"""Shared test helpers for the display package."""
 
 from __future__ import annotations
 
@@ -20,22 +12,16 @@ from display.state import DisplayPaths, DisplayState, default_state
 
 
 @contextmanager
-def patched(manager: Any, **overrides: Any) -> Iterator[None]:
-    """Temporarily replace attributes on ``manager`` for the duration of the block.
-
-    Example::
-
-        with patched(manager, load_state=lambda: state, save_state=lambda c: None):
-            manager.remove_display()
-    """
-    originals = {name: getattr(manager, name) for name in overrides}
+def patched(target: Any, **overrides: Any) -> Iterator[None]:
+    """Temporarily replace attributes on a module/object under test."""
+    originals = {name: getattr(target, name) for name in overrides}
     try:
         for name, value in overrides.items():
-            setattr(manager, name, value)
+            setattr(target, name, value)
         yield
     finally:
         for name, original in originals.items():
-            setattr(manager, name, original)
+            setattr(target, name, original)
 
 
 @contextmanager

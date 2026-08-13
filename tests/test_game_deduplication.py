@@ -3,6 +3,7 @@ from typing import List
 
 from config.types import (
     GameSelection,
+    LauncherSource,
 )
 from utils.utils import (
     dedupe_selected_games_by_name,
@@ -11,11 +12,11 @@ from utils.utils import (
 )
 
 
-LUTRIS_CYBERPUNK: GameSelection = ("1", "Cyberpunk 2077", "Lutris", "Lutris")
-STEAM_CYBERPUNK: GameSelection = ("1091500", "Cyberpunk 2077", "Steam", "Steam")
-HEROIC_CONTROL: GameSelection = ("abc", "Control", "Heroic", "legendary")
-LUTRIS_WITCHER: GameSelection = ("42", "The Witcher 3", "Lutris", "Lutris")
-STEAM_WITCHER: GameSelection = ("292030", "The Witcher 3", "Steam", "Steam")
+LUTRIS_CYBERPUNK: GameSelection = GameSelection("1", "Cyberpunk 2077", "Lutris", LauncherSource("Lutris"))
+STEAM_CYBERPUNK: GameSelection = GameSelection("1091500", "Cyberpunk 2077", "Steam", LauncherSource("Steam"))
+HEROIC_CONTROL: GameSelection = GameSelection("abc", "Control", "Heroic", LauncherSource("legendary"))
+LUTRIS_WITCHER: GameSelection = GameSelection("42", "The Witcher 3", "Lutris", LauncherSource("Lutris"))
+STEAM_WITCHER: GameSelection = GameSelection("292030", "The Witcher 3", "Steam", LauncherSource("Steam"))
 
 
 class NormalizeGameNameForDedupTests(unittest.TestCase):
@@ -82,8 +83,8 @@ class DedupeSelectedGamesByNameTests(unittest.TestCase):
         self.assertEqual(skipped, [(LUTRIS_CYBERPUNK, STEAM_CYBERPUNK)])
 
     def test_dedupes_case_and_whitespace_variants(self) -> None:
-        messy_lutris: GameSelection = ("1", "  cyberpunk   2077 ", "Lutris", "Lutris")
-        caps_steam: GameSelection = ("1091500", "CYBERPUNK 2077", "Steam", "Steam")
+        messy_lutris: GameSelection = GameSelection("1", "  cyberpunk   2077 ", "Lutris", LauncherSource("Lutris"))
+        caps_steam: GameSelection = GameSelection("1091500", "CYBERPUNK 2077", "Steam", LauncherSource("Steam"))
 
         deduped, skipped = dedupe_selected_games_by_name([messy_lutris, caps_steam])
 
@@ -91,8 +92,8 @@ class DedupeSelectedGamesByNameTests(unittest.TestCase):
         self.assertEqual(skipped, [(messy_lutris, caps_steam)])
 
     def test_keeps_first_when_source_priority_ties(self) -> None:
-        first = ("1", "Duplicate", "Lutris", "Lutris")
-        second = ("2", "Duplicate", "Lutris", "Lutris")
+        first = GameSelection("1", "Duplicate", "Lutris", LauncherSource("Lutris"))
+        second = GameSelection("2", "Duplicate", "Lutris", LauncherSource("Lutris"))
 
         deduped, skipped = dedupe_selected_games_by_name([first, second])
 

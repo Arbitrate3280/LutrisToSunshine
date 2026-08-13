@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from display import manager
+from display import state as display_state
 from display.state import DisplayPaths
 from display import sunshine_service
 from sunshine import install as sunshine_install
@@ -174,12 +175,12 @@ class SunshineUnitSelectionTests(unittest.TestCase):
 class SunshineConfigRootResolutionTests(unittest.TestCase):
     def test_native_executable_wins_over_flatpak_named_unit(self) -> None:
         with mock.patch.object(
-            manager, "_fragment_sunshine_execstart", return_value="/usr/bin/sunshine"
+            sunshine_service, "fragment_sunshine_execstart", return_value="/usr/bin/sunshine"
         ), mock.patch.object(
-            manager, "detect_sunshine_config_root", return_value=Path("/native/sunshine")
+            sunshine_service, "detect_sunshine_config_root", return_value=Path("/native/sunshine")
         ):
             self.assertEqual(
-                manager._resolve_sunshine_config_root(
+                sunshine_service.resolve_sunshine_config_root(
                     "app-dev.lizardbyte.app.Sunshine.service"
                 ),
                 Path("/native/sunshine"),
@@ -187,12 +188,12 @@ class SunshineConfigRootResolutionTests(unittest.TestCase):
 
     def test_flatpak_executable_uses_flatpak_config_root(self) -> None:
         with mock.patch.object(
-            manager,
-            "_fragment_sunshine_execstart",
+            sunshine_service,
+            "fragment_sunshine_execstart",
             return_value="/usr/bin/flatpak run dev.lizardbyte.app.Sunshine",
         ):
             self.assertEqual(
-                manager._resolve_sunshine_config_root(
+                sunshine_service.resolve_sunshine_config_root(
                     "app-dev.lizardbyte.app.Sunshine.service"
                 ),
                 Path.home()
@@ -226,7 +227,7 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
             sunshine_unit=lambda: "homebrew.sunshine.service",
             sunshine_binary=lambda: "/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
         ):
-            updated = manager._remember_sunshine_execstart(state)
+            updated = sunshine_service.remember_sunshine_execstart(state)
 
         self.assertEqual(updated.sunshine_execstart, homebrew_command)
 
@@ -320,15 +321,13 @@ class OverrideCleanupTests(unittest.TestCase):
             sunshine_wrapper_script=wrapper_path,
             state_overrides={"enabled": True, "sunshine_unit_name": "homebrew.sunshine.service"},
         ) as (state, _):
-            with patched(
-                manager,
-                load_state=lambda: state,
-                save_state=lambda current: None,
-                stop_display=lambda: 0,
-                _remove_udev_rule=lambda current: True,
-                _daemon_reload=lambda: None,
-            ):
-                result = manager.remove_display()
+            with mock.patch.object(display_state, "load_state", return_value=state), \
+                 mock.patch.object(display_state, "save_state"):
+                result = manager.remove_display(
+                    stop_display_fn=lambda: 0,
+                    remove_udev_rule_fn=lambda current: True,
+                    daemon_reload_fn=lambda: None,
+                )
         self.assertEqual(result, 0)
         self.assertFalse((homebrew_override_dir / "override.conf").exists())
         self.assertFalse(homebrew_override_dir.exists())
@@ -390,15 +389,13 @@ class OverrideCleanupTests(unittest.TestCase):
             sunshine_override=homebrew_override_dir / "override.conf",
             state_overrides={"enabled": True, "sunshine_unit_name": "homebrew.sunshine.service"},
         ) as (state, _):
-            with patched(
-                manager,
-                load_state=lambda: state,
-                save_state=lambda current: None,
-                stop_display=lambda: 0,
-                _remove_udev_rule=lambda current: True,
-                _daemon_reload=lambda: None,
-            ):
-                result = manager.remove_display()
+            with mock.patch.object(display_state, "load_state", return_value=state), \
+                 mock.patch.object(display_state, "save_state"):
+                result = manager.remove_display(
+                    stop_display_fn=lambda: 0,
+                    remove_udev_rule_fn=lambda current: True,
+                    daemon_reload_fn=lambda: None,
+                )
 
         self.assertEqual(result, 0)
         self.assertTrue(

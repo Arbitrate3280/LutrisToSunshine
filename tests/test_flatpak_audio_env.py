@@ -19,6 +19,7 @@ from unittest.mock import patch
 from display import audio_policy
 from display import manager
 from display import scripts_render
+from display import sunshine_service
 
 
 def _rendered_inject_heredoc_py() -> str:
@@ -61,8 +62,8 @@ def _run_inject(cmd: str, sink: str, py_code: str) -> str:
 class InjectFlatpakAudioEnvTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with patch.object(manager._svc, "sunshine_unit", return_value="sunshine"), \
-             patch.object(manager._svc, "sunshine_binary", return_value="/usr/bin/sunshine"):
+        with patch.object(sunshine_service, "sunshine_unit", return_value="sunshine"), \
+             patch.object(sunshine_service, "sunshine_binary", return_value="/usr/bin/sunshine"):
             cls._py_code = _rendered_inject_heredoc_py()
 
     def setUp(self):

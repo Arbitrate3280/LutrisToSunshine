@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Tuple, Optional, List, Callable
 
 from sunshine.install import homebrew_sunshine_binary
+from utils.utils import run_command
 
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
 FALLBACK_SUNSHINE_UNIT = "sunshine.service"
@@ -61,12 +62,7 @@ def probe_packages() -> SunshinePackageProbes:
     flatpak = shutil.which("flatpak")
     if flatpak:
         try:
-            result = subprocess.run(
-                [flatpak, "info", "dev.lizardbyte.app.Sunshine"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            result = run_command([flatpak, "info", "dev.lizardbyte.app.Sunshine"])
             flatpak_installed = (result.returncode == 0)
         except (OSError, subprocess.SubprocessError):
             flatpak_installed = False
@@ -147,12 +143,7 @@ def _default_systemctl_runner(*args: str) -> subprocess.CompletedProcess:
     if not systemctl:
         return subprocess.CompletedProcess(list(args), 1, "", "")
     try:
-        return subprocess.run(
-            [systemctl, "--user", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return run_command([systemctl, "--user", *args])
     except (OSError, subprocess.SubprocessError):
         return subprocess.CompletedProcess(list(args), 1, "", "")
 

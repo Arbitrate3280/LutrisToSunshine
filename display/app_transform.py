@@ -5,7 +5,9 @@ lifecycle lives here. sunshine/sunshine.py calls one interface:
 transform_app_for_display.
 """
 import shlex
-from typing import Dict, List, Tuple
+from typing import List, Tuple
+
+from config.types import SunshineApp, SunshinePrepCommand
 
 from display.command_wrap import (
     HEADLESS_PREP_PREFIX,
@@ -56,10 +58,14 @@ def normalize_single_prep_command(command: str, enable_display: bool) -> str:
     return command
 
 
-def normalize_prep_cmd(app: Dict, enable_display: bool, display_enabled: bool) -> List[Dict]:
+def normalize_prep_cmd(
+    app: SunshineApp,
+    enable_display: bool,
+    display_enabled: bool,
+) -> List[SunshinePrepCommand]:
     prep_cmd = app.get("prep-cmd") or []
     managed_scripts = get_display_prep_scripts(display_enabled)
-    filtered = []
+    filtered: List[SunshinePrepCommand] = []
     for command in prep_cmd:
         if not isinstance(command, dict):
             continue
@@ -67,7 +73,7 @@ def normalize_prep_cmd(app: Dict, enable_display: bool, display_enabled: bool) -
         undo_cmd = command.get("undo", "")
         if do_cmd in managed_scripts or undo_cmd in managed_scripts:
             continue
-        normalized = dict(command)
+        normalized: SunshinePrepCommand = dict(command)
         normalized["do"] = normalize_single_prep_command(do_cmd, enable_display)
         normalized["undo"] = normalize_single_prep_command(undo_cmd, enable_display)
         filtered.append(normalized)
@@ -77,8 +83,8 @@ def normalize_prep_cmd(app: Dict, enable_display: bool, display_enabled: bool) -
     return filtered
 
 
-def normalize_app_payload(app: Dict) -> Dict:
-    payload = dict(app)
+def normalize_app_payload(app: SunshineApp) -> SunshineApp:
+    payload: SunshineApp = dict(app)
     payload["cmd"] = payload.get("cmd") or ""
     payload["output"] = payload.get("output") or ""
     payload["detached"] = payload.get("detached") or []
@@ -122,7 +128,7 @@ def unwrap_with_origin(command: str, field_origin: str) -> Tuple[str, str]:
     return unwrapped, origin
 
 
-def select_display_primary_command(app: Dict) -> Tuple[str, str, List[str], int]:
+def select_display_primary_command(app: SunshineApp) -> Tuple[str, str, List[str], int]:
     cmd, cmd_origin = unwrap_with_origin(app.get("cmd") or "", "cmd")
     if cmd:
         timeout = get_wrapped_command_exit_timeout(app.get("cmd") or "", app.get("exit-timeout", 5))
@@ -148,13 +154,13 @@ def select_display_primary_command(app: Dict) -> Tuple[str, str, List[str], int]
     return detached_commands[0], "detached", detached_commands[1:], detached_timeout
 
 
-def enable_display_launch(app: Dict) -> Tuple[str, List[str]]:
+def enable_display_launch(app: SunshineApp) -> Tuple[str, List[str]]:
     primary_command, origin, detached_commands, exit_timeout = select_display_primary_command(app)
     wrapped_primary = wrap_command(primary_command, origin, exit_timeout) or ""
     return wrapped_primary, dedupe_commands(detached_commands)
 
 
-def disable_display_launch(app: Dict) -> Tuple[str, List[str]]:
+def disable_display_launch(app: SunshineApp) -> Tuple[str, List[str]]:
     restored_cmd = ""
     restored_detached: List[str] = []
 
@@ -177,7 +183,11 @@ def disable_display_launch(app: Dict) -> Tuple[str, List[str]]:
     return restored_cmd, dedupe_commands(restored_detached)
 
 
-def transform_app_for_display(app: Dict, enable_display: bool, display_enabled: bool) -> Dict:
+def transform_app_for_display(
+    app: SunshineApp,
+    enable_display: bool,
+    display_enabled: bool,
+) -> SunshineApp:
     updated = normalize_app_payload(app)
     if enable_display:
         updated["cmd"], updated["detached"] = enable_display_launch(updated)
@@ -187,7 +197,7 @@ def transform_app_for_display(app: Dict, enable_display: bool, display_enabled: 
     return updated
 
 
-def iter_unwrapped_app_commands(app: Dict) -> List[str]:
+def iter_unwrapped_app_commands(app: SunshineApp) -> List[str]:
     commands: List[str] = []
     cmd, _ = unwrap_with_origin(app.get("cmd") or "", "cmd")
     if cmd:

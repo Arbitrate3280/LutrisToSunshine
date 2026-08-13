@@ -6,7 +6,7 @@ import pwd
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 from display.constants import (
     SUNSHINE_INPUT_PRODUCT_ID,
@@ -14,6 +14,25 @@ from display.constants import (
 )
 from display.state import DisplayState
 from display.utils import run_command, safe_string
+
+
+class InputDevice(TypedDict):
+    name: str
+    event_path: str
+
+
+class KwinDevice(TypedDict):
+    name: str
+    path: str
+
+
+class KwinInputIsolationStatus(TypedDict):
+    state: str
+    service: str
+    disabled_devices: List[KwinDevice]
+    failed_devices: List[KwinDevice]
+    seen_device_count: int
+    last_error: str
 
 
 def sudo_prefix() -> Optional[List[str]]:
@@ -97,7 +116,7 @@ def input_isolation_mode() -> str:
     return "kwin-runtime-disable" if is_plasma_session() else "permissions-only"
 
 
-def empty_kwin_input_isolation_status() -> Dict[str, Any]:
+def empty_kwin_input_isolation_status() -> KwinInputIsolationStatus:
     return {
         "state": "inactive",
         "service": "",
@@ -108,7 +127,7 @@ def empty_kwin_input_isolation_status() -> Dict[str, Any]:
     }
 
 
-def kwin_input_isolation_status(state: DisplayState) -> Dict[str, Any]:
+def kwin_input_isolation_status(state: DisplayState) -> KwinInputIsolationStatus:
     status = empty_kwin_input_isolation_status()
     path = Path(state.paths.kwin_input_isolation_status_file)
     if not path.exists():
@@ -133,14 +152,14 @@ def kwin_input_isolation_status(state: DisplayState) -> Dict[str, Any]:
     return status
 
 
-def sunshine_virtual_input_devices() -> List[Dict[str, str]]:
+def sunshine_virtual_input_devices() -> List[InputDevice]:
     devices_path = Path("/proc/bus/input/devices")
     try:
         content = devices_path.read_text(encoding="utf-8")
     except OSError:
         return []
 
-    devices: List[Dict[str, str]] = []
+    devices: List[InputDevice] = []
     current: Dict[str, str] = {}
     for raw_line in content.splitlines():
         line = raw_line.strip()

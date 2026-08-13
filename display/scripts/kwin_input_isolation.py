@@ -18,6 +18,18 @@ NAME_MARKERS = @NAME_MARKERS@
 STOP = False
 
 
+def run_command(command):
+    try:
+        return subprocess.run(
+            list(command),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        return subprocess.CompletedProcess(list(command), 127, "", str(error))
+
+
 def safe_string(value):
     return str(value or "").strip()
 
@@ -55,12 +67,7 @@ def handle_signal(_signum, _frame):
 
 
 def run_gdbus(*args):
-    result = subprocess.run(
-        ["gdbus", *args],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_command(["gdbus", *args])
     if result.returncode != 0:
         raise RuntimeError(safe_string(result.stderr) or f"gdbus exit {result.returncode}")
     stdout = result.stdout.strip()

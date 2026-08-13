@@ -1,6 +1,5 @@
 import os
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Tuple
 
 from config.constants import DEFAULT_IMAGE, LAUNCHER_NAMES, SOURCE_COLORS, RESET_COLOR
@@ -17,15 +16,14 @@ from sunshine.sunshine import (
 from utils.utils import (
     handle_interrupt,
     get_games_found_message,
-    dedupe_selected_games_by_name,
     normalize_game_name_for_dedup,
 )
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, heading, muted
-from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, add_game_to_sunshine, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running
+from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, submit_command, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
-from config.registry import LAUNCHER_REGISTRY
 from launchers.lutris import is_lutris_running
+from launchers import intake
 
 def parse_args(argv=None):
     def api_port_arg(value: str) -> int:
@@ -179,7 +177,11 @@ def handle_display_command(args) -> int:
         return display_logs(args.lines)
     if action == "display-gpu":
         from display.gpu import configure_gpu
-        return configure_gpu()
+        from display.manager import refresh_managed_files, restart_display
+        return configure_gpu(
+            refresh_managed_files_fn=refresh_managed_files,
+            restart_fn=restart_display,
+        )
     if action == "renderer-mode":
         from display.manager import set_renderer_mode
         set_renderer_mode(args.mode)
@@ -321,10 +323,7 @@ def main(argv=None):
                 server_name=server_name,
             )
 
-        detected_launchers = {
-            name: entry["detect"]()
-            for name, entry in LAUNCHER_REGISTRY.items()
-        }
+        detected_launchers = intake.detect_launchers()
 
         if not any(detected_launchers.values()):
             names = ", ".join(LAUNCHER_NAMES[:-1]) + " or " + LAUNCHER_NAMES[-1]
@@ -343,17 +342,7 @@ def main(argv=None):
             print("Error: Lutris is currently running. Please close Lutris and try again.")
             return
 
-        with ThreadPoolExecutor() as executor:
-            futures = {
-                name: executor.submit(LAUNCHER_REGISTRY[name]["list"])
-                for name in LAUNCHER_NAMES
-                if detected_launchers[name]
-            }
-
-            all_games = []
-            for source_name, future in futures.items():
-                result = future.result()
-                all_games.extend(LAUNCHER_REGISTRY[source_name]["normalize"](result))
+        all_games = intake.collect_games(detected_launchers)
 
         if not all_games:
             print("No games found in any detected launcher.")
@@ -375,22 +364,23 @@ def main(argv=None):
             normalize_game_name_for_dedup(app["name"]) for app in existing_apps
         }
 
-        all_games.sort(key=lambda x: x[1])
+        all_games.sort(key=lambda game: game.game_name)
 
         _game_name_cache: Dict[str, str] = {
             g.game_name: normalize_game_name_for_dedup(g.game_name)
             for g in all_games
         }
 
-        for idx, (_, game_name, display_source, _) in enumerate(all_games):
+        for idx, game in enumerate(all_games):
+            game_name = game.game_name
             status = (
                 f"(already in {get_server_display_name()})"
                 if _game_name_cache[game_name] in existing_game_names_normalized
                 else ""
             )
-            if len(futures) > 1:
-                source_color = SOURCE_COLORS.get(display_source, "")
-                source_info = f"{source_color}({display_source}){RESET_COLOR}"
+            if sum(detected_launchers.values()) > 1:
+                source_color = SOURCE_COLORS.get(game.display_source, "")
+                source_info = f"{source_color}({game.display_source}){RESET_COLOR}"
                 print(f"{idx + 1}. {game_name} {source_info} {status}")
             else:
                 print(f"{idx + 1}. {game_name} {status}")
@@ -398,73 +388,48 @@ def main(argv=None):
         if args.all:
             selected_indices = list(range(len(all_games)))
         else:
-            selection = get_user_selection([(game_id, game_name) for game_id, game_name, _, _ in all_games])
+            selection = get_user_selection([(game.game_id, game.game_name) for game in all_games])
             if selection == CUSTOM_COMMAND_SELECTION:
                 add_custom_command_flow()
                 return
             selected_indices = selection
 
-        selected_games = [
-            all_games[i]
-            for i in selected_indices
-            if _game_name_cache[all_games[i].game_name] not in existing_game_names_normalized
-        ]
+        selection_result = intake.select_games(
+            all_games,
+            selected_indices,
+            existing_game_names_normalized,
+        )
+        selected_games = selection_result.games
 
-        selected_games, skipped_duplicates = dedupe_selected_games_by_name(selected_games)
-
-        for skipped_game, retained_game in skipped_duplicates:
-            _, skipped_name, skipped_source, _ = skipped_game
-            _, _, retained_source, _ = retained_game
+        for skipped_game, retained_game in selection_result.skipped_duplicates:
+            skipped_name = skipped_game.game_name
+            skipped_source = skipped_game.display_source
+            retained_source = retained_game.display_source
             print(
                 f"Skipping duplicate '{skipped_name}' from {skipped_source}; "
                 f"using {retained_source}."
             )
 
+        for invalid_game, reason in selection_result.invalid_games:
+            print(
+                f"Error: {reason} for '{invalid_game.game_name}'. Please associate the game with a core in RetroArch before adding it to {get_server_display_name()}."
+            )
+
         if not selected_games:
-            print(f"No new games to add to {get_server_display_name()} configuration.")
-            return
-
-        valid_selected_games = []
-        for game_id, game_name, display_source, source in selected_games:
-            if display_source == "RetroArch":
-                core_info = source if isinstance(source, dict) else {}
-                core_path = (core_info.get("core_path", "") or "").strip()
-                core_name = (core_info.get("core_name", "") or "").strip()
-                if core_path.upper() == "DETECT" or core_name.upper() == "DETECT" or not core_path:
-                    print(
-                        f"Error: RetroArch core not set for '{game_name}'. Please associate the game with a core in RetroArch before adding it to {get_server_display_name()}."
-                    )
-                    continue
-            valid_selected_games.append((game_id, game_name, display_source, source))
-
-        if not valid_selected_games:
             print("No games ready to add. Please resolve the reported issues and try again.")
             return
 
         download_images = args.cover or get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
         api_key = manage_api_key() if download_images else None
 
-        games_added = False
-        with ThreadPoolExecutor() as executor:
-            futures = {}
-            for game_id, game_name, display_source, source in valid_selected_games:
-                if download_images and api_key:
-                    future = executor.submit(download_image_from_steamgriddb, game_name, api_key)
-                    futures[future] = (game_id, game_name, source)
-                else:
-                    add_game_to_sunshine(game_id, game_name, DEFAULT_IMAGE, source)
-                    games_added = True
-
-            for future in as_completed(futures):
-                game_id, game_name, source = futures[future]
-                try:
-                    image_path = future.result()
-                except Exception as e:
-                    print(f"Error downloading image for {game_name}: {e}")
-                    image_path = DEFAULT_IMAGE
-
-                add_game_to_sunshine(game_id, game_name, image_path, source)
-                games_added = True
+        games_added = intake.submit_games(
+            selected_games,
+            download_images=download_images,
+            api_key=api_key,
+            default_image=DEFAULT_IMAGE,
+            download_image_fn=download_image_from_steamgriddb,
+            submit_game_fn=submit_command,
+        )
 
         if games_added:
             print(f"Games added to {get_server_display_name()} successfully.")

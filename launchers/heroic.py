@@ -1,7 +1,20 @@
 import os
 import json
+import shutil
+import shlex
 from typing import Optional, List, Tuple
+from config.types import GameSelection, LauncherSource
 from utils.utils import run_command
+
+
+def build_heroic_command(game: GameSelection) -> Optional[str]:
+    command, _ = get_heroic_command()
+    if not command:
+        return None
+    runner = str(game.source)
+    return shlex.join(
+        [*shlex.split(command), f"heroic://launch/{runner}/{game.game_id}", "--no-gui", "--no-sandbox"]
+    )
 
 HEROIC_PATHS = {
     "flatpak": {
@@ -21,10 +34,9 @@ HEROIC_PATHS = {
 def get_heroic_command() -> Tuple[Optional[str], Optional[str]]:
     """Get the appropriate Heroic command based on installation type."""
     # Check for Flatpak installation
-    if run_command("flatpak list | grep com.heroicgameslauncher.hgl").returncode == 0:
+    if run_command(["flatpak", "info", "com.heroicgameslauncher.hgl"]).returncode == 0:
         return "flatpak run com.heroicgameslauncher.hgl", "flatpak"
-    # Check for native installation
-    elif run_command("which heroic").returncode == 0:
+    elif shutil.which("heroic"):
         return "heroic", "native"
     else:
         return None, None
@@ -87,3 +99,10 @@ def list_heroic_games() -> List[Tuple[str, str, str, str]]:
             except json.JSONDecodeError:
                 print(f"Error parsing JSON file at {path}")
     return games
+
+
+def list_heroic_selections() -> List[GameSelection]:
+    return [
+        GameSelection(game_id, name, "Heroic", LauncherSource(runner))
+        for game_id, name, _, runner in list_heroic_games()
+    ]

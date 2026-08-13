@@ -1,7 +1,7 @@
+import json
 import subprocess
 import sys
-import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 from config.constants import LAUNCHER_NAMES, SOURCE_PRIORITY
 from config.types import GameSelection
@@ -12,17 +12,41 @@ def handle_interrupt():
     print("\nScript interrupted by user. Exiting...")
     sys.exit(0)
 
-def run_command(cmd: str) -> subprocess.CompletedProcess:
-    """Run a shell command and return the result."""
-    return subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run_command(
+    command: Sequence[str],
+    *,
+    capture_output: bool = True,
+    check: bool = False,
+    env: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run an argv command with the repository's standard subprocess options."""
+    if isinstance(command, (str, bytes)) or not command:
+        raise TypeError("run_command requires a non-empty argv sequence")
+    argv = list(command)
+    try:
+        return subprocess.run(
+            argv,
+            text=True,
+            capture_output=capture_output,
+            check=check,
+            env=env,
+        )
+    except FileNotFoundError as error:
+        return subprocess.CompletedProcess(argv, 127, "", str(error))
+
+
+def _output_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value or "")
 
 def parse_json_output(result: subprocess.CompletedProcess) -> Any:
     """Parse JSON output from a command, handling errors."""
     if result.returncode != 0:
-        print(f"Error executing command: {result.stderr.decode()}")
+        print(f"Error executing command: {_output_text(result.stderr)}")
         return None
     try:
-        return json.loads(result.stdout.decode())
+        return json.loads(_output_text(result.stdout))
     except json.JSONDecodeError:
         print("Error parsing JSON output.")
         return None
@@ -30,17 +54,17 @@ def parse_json_output(result: subprocess.CompletedProcess) -> Any:
 def parse_bottles_output(result: subprocess.CompletedProcess) -> List[str]:
     """Parse the output of the Bottles list command."""
     if result.returncode != 0:
-        print(f"Error executing Bottles command: {result.stderr.decode()}")
+        print(f"Error executing Bottles command: {_output_text(result.stderr)}")
         return []
-    lines = result.stdout.decode().split('\n')
+    lines = _output_text(result.stdout).split('\n')
     return [line.strip('- ') for line in lines if line.startswith('-')]
 
 def parse_bottles_programs(result: subprocess.CompletedProcess) -> List[str]:
     """Parse the output of the Bottles programs command."""
     if result.returncode != 0:
-        print(f"Error executing Bottles command: {result.stderr.decode()}")
+        print(f"Error executing Bottles command: {_output_text(result.stderr)}")
         return []
-    lines = result.stdout.decode().split('\n')
+    lines = _output_text(result.stdout).split('\n')
     # Skip the "Found X programs:" line, empty lines, and remove leading "- "
     return [line.strip("- ").strip() for line in lines if line.strip() and not line.startswith("Found")]
 

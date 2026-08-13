@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from sunshine import sunshine
+from sunshine.connection import CONNECTION
 
 
 class SunshineDetectionTests(unittest.TestCase):
@@ -14,7 +15,6 @@ class SunshineDetectionTests(unittest.TestCase):
         self,
         *,
         brew=None,
-        run_command=None,
         brew_prefix_results=None,
         isfile_results=None,
         access_results=None,
@@ -55,7 +55,6 @@ class SunshineDetectionTests(unittest.TestCase):
             patch("subprocess.run", side_effect=fake_run),
             patch("os.path.isfile", side_effect=fake_isfile),
             patch("os.access", side_effect=fake_access),
-            patch("sunshine.sunshine.run_command", side_effect=run_command or self._run_command_fail),
         ]
         for ctx in patches:
             ctx.start()
@@ -87,7 +86,6 @@ class SunshineDetectionTests(unittest.TestCase):
 
         result = self._patched_detection(
             brew="/home/linuxbrew/.linuxbrew/bin/brew",
-            run_command=run_cmd,
             brew_prefix_results={
                 "sunshine": {"rc": 1, "stdout": "", "stderr": "No formula"},
                 "sunshine-beta": {
@@ -101,13 +99,10 @@ class SunshineDetectionTests(unittest.TestCase):
         self.assertEqual(result, (True, "homebrew"))
 
     def test_active_service_detection_runs_before_package_probes(self):
-        with patch("sunshine.sunshine.run_command") as run_command, patch(
-            "sunshine.install.homebrew_sunshine_executable"
-        ) as homebrew:
+        with patch("sunshine.install.homebrew_sunshine_executable") as homebrew:
             result = sunshine.detect_sunshine_installation(service_unit_type="native")
 
         self.assertEqual(result, (True, "native"))
-        run_command.assert_not_called()
         homebrew.assert_not_called()
 
     def test_homebrew_detection_runs_before_generic_native_when_no_service_type(self):
@@ -118,7 +113,6 @@ class SunshineDetectionTests(unittest.TestCase):
 
         result = self._patched_detection(
             brew="/home/linuxbrew/.linuxbrew/bin/brew",
-            run_command=run_cmd,
             brew_prefix_results={
                 "sunshine": {
                     "rc": 0,
@@ -154,7 +148,6 @@ class SunshineDetectionTests(unittest.TestCase):
 
         result = self._patched_detection(
             brew=None,
-            run_command=run_cmd,
         )
         self.assertEqual(result, (True, "native"))
 
@@ -231,9 +224,9 @@ class SunshineDetectionTests(unittest.TestCase):
 
 class SunshineConfigRootTests(unittest.TestCase):
     def test_config_root_is_native_sunshine_path_for_homebrew(self):
-        with patch.object(sunshine, "INSTALLATION_TYPE", "homebrew"):
+        with patch.object(CONNECTION, "installation_type", "homebrew"):
             self.assertEqual(
-                sunshine._get_config_root(),
+                CONNECTION.get_config_root(),
                 os.path.expanduser("~/.config/sunshine"),
             )
 

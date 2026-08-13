@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,7 @@ from typing import Optional
 from display.constants import (
     AUDIO_MODULE_PATH,
     BIN_ROOT,
+    DEFAULT_SUNSHINE_UNIT,
     DISPLAY_ROOT,
     DISPLAY_SOCKET_PATH,
     DISPLAY_STATE_PATH,
@@ -20,8 +22,12 @@ from display.constants import (
     PROFILE_ROOT,
     UDEV_RULE_PATH,
     WAYLAND_DISPLAY_PATH,
+    WIREPLUMBER_CONF_DIR,
+    WIREPLUMBER_POLICY_CONF_NAME,
+    WIREPLUMBER_POLICY_SCRIPT_NAME,
+    WIREPLUMBER_SCRIPTS_DIR,
 )
-from display.modes import normalized_custom_display_mode, normalized_refresh_rate_sync_mode
+from display.modes import DisplayMode, normalized_custom_display_mode, normalized_refresh_rate_sync_mode
 from display.utils import safe_string
 
 
@@ -63,7 +69,7 @@ class DisplayState:
     enabled: bool = False
     dynamic_mangohud_fps_limit: bool = False
     refresh_rate_sync_mode: str = "client"
-    custom_display_mode: dict = field(default_factory=lambda: normalized_custom_display_mode(None))
+    custom_display_mode: DisplayMode = field(default_factory=lambda: normalized_custom_display_mode(None))
     sunshine_execstart: str = ""
     sunshine_unit_name: str = ""
     profile: str = PROFILE_NAME
@@ -93,12 +99,14 @@ class DisplayState:
         return cls(paths=paths, **known)
 
 
-def build_paths(unit_name: str) -> DisplayPaths:
-    from display import audio_policy
-    from display.manager import _resolve_sunshine_config_root
-
+def build_paths(
+    unit_name: str,
+    *,
+    config_root_fn: Optional[Callable[[str], Path]] = None,
+) -> DisplayPaths:
     systemd_user_dir = Path("~/.config/systemd/user").expanduser()
-    override_dir = systemd_user_dir / f"{unit_name}.d"
+    effective_unit = unit_name or DEFAULT_SUNSHINE_UNIT
+    override_dir = systemd_user_dir / f"{effective_unit}.d"
     return DisplayPaths(
         profile_root=str(PROFILE_ROOT),
         bin_root=str(BIN_ROOT),
@@ -109,8 +117,8 @@ def build_paths(unit_name: str) -> DisplayPaths:
         sunshine_wrapper_script=str(BIN_ROOT / "lutristosunshine-run-display-service.sh"),
         audio_create_script=str(BIN_ROOT / "lutristosunshine-create-audio-sink.sh"),
         audio_cleanup_script=str(BIN_ROOT / "lutristosunshine-cleanup-audio-sink.sh"),
-        wireplumber_policy_script=str(audio_policy.WIREPLUMBER_SCRIPTS_DIR / audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME),
-        wireplumber_policy_conf=str(audio_policy.WIREPLUMBER_CONF_DIR / audio_policy.WIREPLUMBER_POLICY_CONF_NAME),
+        wireplumber_policy_script=str(WIREPLUMBER_SCRIPTS_DIR / WIREPLUMBER_POLICY_SCRIPT_NAME),
+        wireplumber_policy_conf=str(WIREPLUMBER_CONF_DIR / WIREPLUMBER_POLICY_CONF_NAME),
         launch_app_script=str(BIN_ROOT / "lutristosunshine-launch-app.sh"),
         resolve_stream_fps_script=str(BIN_ROOT / "lutristosunshine-resolve-stream-fps.sh"),
         apply_exact_refresh_script=str(BIN_ROOT / "lutristosunshine-apply-exact-refresh.sh"),
@@ -127,22 +135,18 @@ def build_paths(unit_name: str) -> DisplayPaths:
         sunshine_override_dir=str(override_dir),
         sunshine_override=str(override_dir / "override.conf"),
         kwin_input_isolation_script=str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
-        sunshine_conf=str(_resolve_sunshine_config_root(unit_name) / "sunshine.conf"),
+        sunshine_conf=str((config_root_fn(effective_unit) if config_root_fn else Path("~/.config/sunshine").expanduser()) / "sunshine.conf"),
         kwin_input_isolation_status_file=str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
     )
 
 
 def default_state() -> DisplayState:
-    from display.sunshine_service import sunshine_unit
-
     state = DisplayState()
-    state.paths = build_paths(sunshine_unit())
+    state.paths = build_paths(DEFAULT_SUNSHINE_UNIT)
     return state
 
 
 def load_state() -> DisplayState:
-    from display.sunshine_service import sunshine_unit
-
     state_path = DISPLAY_STATE_PATH if DISPLAY_STATE_PATH.exists() else LEGACY_STATE_PATH
     if not state_path.exists():
         return default_state()
@@ -152,15 +156,22 @@ def load_state() -> DisplayState:
         return default_state()
     state = DisplayState.from_dict(data)
     if not safe_string(state.sunshine_unit_name):
-        state.sunshine_unit_name = sunshine_unit()
+        state.sunshine_unit_name = DEFAULT_SUNSHINE_UNIT
     state.refresh_rate_sync_mode = normalized_refresh_rate_sync_mode(state.refresh_rate_sync_mode)
     state.custom_display_mode = normalized_custom_display_mode(state.custom_display_mode)
     state.gpu_mode = safe_string(state.gpu_mode).lower() if safe_string(state.gpu_mode).lower() in {"auto", "manual"} else "auto"
     state.gpu_card_path = safe_string(state.gpu_card_path)
     state.gpu_render_path = safe_string(state.gpu_render_path)
     state.renderer_mode = safe_string(state.renderer_mode).lower() if safe_string(state.renderer_mode).lower() in {"default", "vulkan"} else "default"
+    persisted_sunshine_conf = state.paths.sunshine_conf
     state.paths = build_paths(state.sunshine_unit_name)
+    if safe_string(persisted_sunshine_conf):
+        state.paths.sunshine_conf = persisted_sunshine_conf
     return state
+
+
+def is_enabled() -> bool:
+    return load_state().enabled
 
 
 def save_state(state: DisplayState) -> None:

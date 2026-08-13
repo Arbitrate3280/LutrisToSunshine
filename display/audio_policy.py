@@ -19,12 +19,15 @@ from typing import Any, Dict, Iterable, List
 
 from display.utils import safe_string
 from display.state import DisplayState
+from display.utils import run_command
+from display.constants import (
+    WIREPLUMBER_CONF_DIR,
+    WIREPLUMBER_POLICY_CONF_NAME,
+    WIREPLUMBER_POLICY_SCRIPT_NAME,
+    WIREPLUMBER_SCRIPTS_DIR,
+)
 
 # WirePlumber loads user scripts from XDG_DATA and merges XDG_CONFIG fragments.
-WIREPLUMBER_SCRIPTS_DIR = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "wireplumber" / "scripts"
-WIREPLUMBER_CONF_DIR = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "wireplumber" / "wireplumber.conf.d"
-WIREPLUMBER_POLICY_SCRIPT_NAME = "lts-audio-policy.lua"
-WIREPLUMBER_POLICY_CONF_NAME = "54-lts-audio-policy.conf"
 AUDIO_STREAM_MARKER_KEY = "lutristosunshine.stream"
 AUDIO_STREAM_MARKER_VALUE = "game"
 AUDIO_STREAM_PULSE_PROP = f"{AUDIO_STREAM_MARKER_KEY}={AUDIO_STREAM_MARKER_VALUE}"
@@ -346,10 +349,7 @@ def _wireplumber_policy_conf() -> str:
 
 
 def _reload_wireplumber() -> None:
-    subprocess.run(
-        ["systemctl", "--user", "reload-or-restart", "wireplumber"],
-        text=True, capture_output=True, check=False,
-    )
+    run_command(["systemctl", "--user", "reload-or-restart", "wireplumber"])
 
 
 def _audio_create_script(state: DisplayState, audio_sink: str) -> str:
@@ -643,22 +643,19 @@ def _drain_stale_audio_activation_env() -> None:
     """
     try:
         if shutil.which("dbus-update-activation-environment"):
-            subprocess.run(
+            run_command(
                 [
                     "dbus-update-activation-environment",
                     "--systemd",
                     "PULSE_SINK=",
                     "PULSE_PROP=",
                     "PIPEWIRE_PROPS=",
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
+                ]
             )
     except OSError:
         pass
     try:
-        subprocess.run(
+        run_command(
             [
                 "systemctl",
                 "--user",
@@ -666,10 +663,7 @@ def _drain_stale_audio_activation_env() -> None:
                 "PULSE_SINK",
                 "PULSE_PROP",
                 "PIPEWIRE_PROPS",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
+            ]
         )
     except OSError:
         pass
@@ -695,12 +689,7 @@ def stop(state: DisplayState) -> None:
     if not cleanup_script.is_file():
         return
     try:
-        subprocess.run(
-            [str(cleanup_script)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        run_command([str(cleanup_script)])
     except OSError:
         pass
 

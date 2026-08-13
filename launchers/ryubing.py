@@ -2,11 +2,17 @@ import json
 import os
 import re
 from typing import List, Tuple
+import shlex
+from config.types import GameSelection, LauncherSource
+
+
+def build_ryubing_command(game: GameSelection) -> str:
+    return shlex.join(["flatpak", "run", "io.github.ryubing.Ryujinx", game.game_id])
 
 def detect_ryubing_installation() -> bool:
     """Detect if Ryubing is installed via Flatpak."""
     from utils.utils import run_command
-    return run_command("flatpak list | grep io.github.ryubing.Ryujinx").returncode == 0
+    return run_command(["flatpak", "info", "io.github.ryubing.Ryujinx"]).returncode == 0
 
 def get_ryubing_config_path() -> str:
     """Get the Ryubing config file path."""
@@ -48,3 +54,8 @@ def list_ryubing_games() -> List[Tuple[str, str]]:
                     games.append((game_path, game_name))
     
     return games
+
+
+def list_ryubing_selections() -> List[GameSelection]:
+    source = LauncherSource("Ryubing")
+    return [GameSelection(game_id, name, "Ryubing", source) for game_id, name in list_ryubing_games()]

@@ -1,80 +1,85 @@
 """Single registry of launcher capabilities derived from LAUNCHER_NAMES.
 
-Every supported launcher has exactly one entry here with detect/list/normalize
+Every supported launcher has exactly one entry here with detect/list/command/validate
 functions.  This eliminates the N+1 copies of the launcher list that were
 previously scattered across ``lutristosunshine.py``, ``config/constants.py``,
 and ``utils/utils.py``.
 """
 
-from typing import Any, Callable, List, TypedDict
+from typing import Callable, List, Optional, TypedDict
 
 from config.constants import LAUNCHER_NAMES
-from config.types import GameSelection
+from config.types import CommandBuilder, GameSelection
 
-from launchers.steam import detect_steam_installation, list_steam_games, get_steam_command
-from launchers.lutris import get_lutris_command, list_lutris_games
-from launchers.heroic import list_heroic_games, get_heroic_command
-from launchers.bottles import detect_bottles_installation, list_bottles_games
-from launchers.faugus import detect_faugus_installation, list_faugus_games
-from launchers.ryubing import detect_ryubing_installation, list_ryubing_games
-from launchers.retroarch import detect_retroarch_installation, list_retroarch_games
-from launchers.eden import detect_eden_installation, list_eden_games
+from launchers.steam import build_steam_command, detect_steam_installation, get_steam_command, list_steam_selections
+from launchers.lutris import build_lutris_command, get_lutris_command, list_lutris_selections
+from launchers.heroic import build_heroic_command, get_heroic_command, list_heroic_selections
+from launchers.bottles import build_bottles_command, detect_bottles_installation, list_bottles_selections
+from launchers.faugus import build_faugus_command, detect_faugus_installation, list_faugus_selections
+from launchers.ryubing import build_ryubing_command, detect_ryubing_installation, list_ryubing_selections
+from launchers.retroarch import build_retroarch_command, detect_retroarch_installation, list_retroarch_selections, validate_retroarch_selection
+from launchers.eden import build_eden_command, detect_eden_installation, list_eden_selections
 
 
 class LauncherEntry(TypedDict):
     detect: Callable[[], bool]
-    list: Callable[[], Any]
-    normalize: Callable[[Any], List[GameSelection]]
+    list: Callable[[], List[GameSelection]]
+    command: CommandBuilder
+    validate: Callable[[GameSelection], Optional[str]]
 
 
-def _normalize_pair(source: str, games) -> List[GameSelection]:
-    return [GameSelection(gid, name, source, source) for gid, name in games]
-
-
-def _normalize_retroarch(games) -> List[GameSelection]:
-    return [GameSelection(path, name, "RetroArch", core) for path, name, core in games]
+def _valid_selection(_game: GameSelection) -> Optional[str]:
+    return None
 
 
 LAUNCHER_REGISTRY: dict[str, LauncherEntry] = {
     "Steam": {
         "detect": lambda: bool(get_steam_command() if detect_steam_installation()[0] else ""),
-        "list": list_steam_games,
-        "normalize": lambda g: _normalize_pair("Steam", g),
+        "list": list_steam_selections,
+        "command": build_steam_command,
+        "validate": _valid_selection,
     },
     "Lutris": {
         "detect": lambda: get_lutris_command() is not None,
-        "list": list_lutris_games,
-        "normalize": lambda g: _normalize_pair("Lutris", g),
+        "list": list_lutris_selections,
+        "command": build_lutris_command,
+        "validate": _valid_selection,
     },
     "Heroic": {
         "detect": lambda: bool(get_heroic_command()[0]),
-        "list": list_heroic_games,
-        "normalize": lambda g: [GameSelection(gid, name, "Heroic", runner) for gid, name, _, runner in g],
+        "list": list_heroic_selections,
+        "command": build_heroic_command,
+        "validate": _valid_selection,
     },
     "Bottles": {
         "detect": detect_bottles_installation,
-        "list": list_bottles_games,
-        "normalize": lambda g: [GameSelection(gid, name, "Bottles", bottle) for gid, name, _, bottle in g],
+        "list": list_bottles_selections,
+        "command": build_bottles_command,
+        "validate": _valid_selection,
     },
     "Faugus": {
         "detect": detect_faugus_installation,
-        "list": list_faugus_games,
-        "normalize": lambda g: [GameSelection(gid, name, "Faugus", runner) for gid, name, _, runner in g],
+        "list": list_faugus_selections,
+        "command": build_faugus_command,
+        "validate": _valid_selection,
     },
     "Ryubing": {
         "detect": detect_ryubing_installation,
-        "list": list_ryubing_games,
-        "normalize": lambda g: _normalize_pair("Ryubing", g),
+        "list": list_ryubing_selections,
+        "command": build_ryubing_command,
+        "validate": _valid_selection,
     },
     "RetroArch": {
         "detect": detect_retroarch_installation,
-        "list": list_retroarch_games,
-        "normalize": _normalize_retroarch,
+        "list": list_retroarch_selections,
+        "command": build_retroarch_command,
+        "validate": validate_retroarch_selection,
     },
     "Eden": {
         "detect": detect_eden_installation,
-        "list": list_eden_games,
-        "normalize": lambda g: _normalize_pair("Eden", g),
+        "list": list_eden_selections,
+        "command": build_eden_command,
+        "validate": _valid_selection,
     },
 }
 

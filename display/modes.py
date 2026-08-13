@@ -1,8 +1,14 @@
 """Pure display-mode normalization functions (no side effects)."""
-from typing import Any, Dict
+from typing import Any, Dict, TypedDict
 
 from display.constants import FALLBACK_FPS, FALLBACK_HEIGHT, FALLBACK_WIDTH, REFRESH_RATE_SYNC_MODES
 from display.utils import safe_string
+
+
+class DisplayMode(TypedDict):
+    width: int
+    height: int
+    refresh: float
 
 
 def normalized_refresh_rate_sync_mode(value: Any) -> str:
@@ -20,7 +26,7 @@ def refresh_rate_sync_mode_summary(mode: str) -> str:
     return "follow Moonlight requested FPS"
 
 
-def normalized_custom_display_mode(value: Any) -> Dict[str, Any]:
+def normalized_custom_display_mode(value: Any) -> DisplayMode:
     default_mode = {
         "width": FALLBACK_WIDTH,
         "height": FALLBACK_HEIGHT,

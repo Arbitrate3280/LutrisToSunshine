@@ -2,16 +2,26 @@ import json
 import os
 import shutil
 from typing import Dict, List, Tuple, Optional
+import shlex
+
+from config.types import FaugusSource, GameSelection
 
 from utils.utils import run_command
 
 FAUGUS_FLATPAK_ID = "io.github.Faugus.faugus-launcher"
 
 
+def build_faugus_command(game: GameSelection) -> Optional[str]:
+    command = get_faugus_command()
+    if not command:
+        return None
+    return shlex.join([*shlex.split(command), "--game", game.game_id])
+
+
 def get_faugus_installation_type() -> Optional[str]:
     """Detect how Faugus is installed."""
     # Check for Flatpak
-    if run_command(f"flatpak list | grep {FAUGUS_FLATPAK_ID}").returncode == 0:
+    if run_command(["flatpak", "info", FAUGUS_FLATPAK_ID]).returncode == 0:
         return "flatpak"
 
     # Check for Native
@@ -110,9 +120,9 @@ def _load_faugus_defaults() -> Dict[str, bool]:
     return defaults
 
 
-def list_faugus_games() -> List[Tuple[str, str, str, Dict[str, object]]]:
+def list_faugus_games() -> List[Tuple[str, str, str, FaugusSource]]:
     """List games registered in the Faugus installation."""
-    games: List[Tuple[str, str, str, Dict[str, object]]] = []
+    games: List[Tuple[str, str, str, FaugusSource]] = []
     defaults = _load_faugus_defaults()
     paths = get_faugus_paths()
     games_json_path = paths["games_json"]
@@ -148,21 +158,44 @@ def list_faugus_games() -> List[Tuple[str, str, str, Dict[str, object]]]:
         ):
             continue
 
-        runner = {
-            "type": "Faugus",
-            "game_path": path.strip(),
-            "prefix": prefix.strip(),
-            "mangohud": defaults["mangohud"],
-            "gamemode": defaults["gamemode"],
-            "no_sleep": False,
-            "sdl_enabled": False,
-        }
+        mangohud = defaults["mangohud"]
+        gamemode = defaults["gamemode"]
+        no_sleep = False
+        sdl_enabled = False
 
         for key in ("mangohud", "gamemode", "no_sleep", "sdl_enabled"):
             parsed = _parse_bool(entry.get(key))
             if parsed is not None:
-                runner[key] = parsed
+                if key == "mangohud":
+                    mangohud = parsed
+                elif key == "gamemode":
+                    gamemode = parsed
+                elif key == "no_sleep":
+                    no_sleep = parsed
+                else:
+                    sdl_enabled = parsed
 
-        games.append((game_id.strip(), title.strip(), "Faugus", runner))
+        games.append(
+            (
+                game_id.strip(),
+                title.strip(),
+                "Faugus",
+                FaugusSource(
+                    game_path=path.strip(),
+                    prefix=prefix.strip(),
+                    mangohud=mangohud,
+                    gamemode=gamemode,
+                    no_sleep=no_sleep,
+                    sdl_enabled=sdl_enabled,
+                ),
+            )
+        )
 
     return games
+
+
+def list_faugus_selections() -> List[GameSelection]:
+    return [
+        GameSelection(game_id, name, "Faugus", runner)
+        for game_id, name, _, runner in list_faugus_games()
+    ]
