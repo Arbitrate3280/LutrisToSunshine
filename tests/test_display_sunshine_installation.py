@@ -171,6 +171,39 @@ class SunshineUnitSelectionTests(unittest.TestCase):
             )
 
 
+class SunshineConfigRootResolutionTests(unittest.TestCase):
+    def test_native_executable_wins_over_flatpak_named_unit(self) -> None:
+        with mock.patch.object(
+            manager, "_fragment_sunshine_execstart", return_value="/usr/bin/sunshine"
+        ), mock.patch.object(
+            manager, "detect_sunshine_config_root", return_value=Path("/native/sunshine")
+        ):
+            self.assertEqual(
+                manager._resolve_sunshine_config_root(
+                    "app-dev.lizardbyte.app.Sunshine.service"
+                ),
+                Path("/native/sunshine"),
+            )
+
+    def test_flatpak_executable_uses_flatpak_config_root(self) -> None:
+        with mock.patch.object(
+            manager,
+            "_fragment_sunshine_execstart",
+            return_value="/usr/bin/flatpak run dev.lizardbyte.app.Sunshine",
+        ):
+            self.assertEqual(
+                manager._resolve_sunshine_config_root(
+                    "app-dev.lizardbyte.app.Sunshine.service"
+                ),
+                Path.home()
+                / ".var"
+                / "app"
+                / "dev.lizardbyte.app.Sunshine"
+                / "config"
+                / "sunshine",
+            )
+
+
 class SunshineExecStartSnapshotTests(unittest.TestCase):
     def test_remember_sunshine_execstart_preserves_homebrew_command(self) -> None:
         homebrew_command = (

@@ -90,17 +90,31 @@ for index, line in enumerate(lines):
     if "CLIENT CONNECTED" in line:
         connect_index = index
 
-pattern = re.compile(r"Requested frame rate \[(\d+)/(\d+)(?:, approx\. [^\]]+)?\]")
-search_lines = lines[connect_index + 1 :] if connect_index >= 0 else lines
+pattern = re.compile(
+    r"Requested frame rate \[(?P<value>\d+(?:\.\d+)?)(?:"
+    r"/(?P<denominator>\d+)(?:, approx\. [^\]]+)?|fps)\]"
+)
+# A prep command starts before Sunshine emits CLIENT CONNECTED. When the
+# caller supplies since_time, the timestamp filter already isolates this
+# stream, so do not discard the requested-rate line that precedes that event.
+search_lines = (
+    lines[connect_index + 1 :]
+    if since_epoch is None and connect_index >= 0
+    else lines
+)
 for line in reversed(search_lines):
     match = pattern.search(line)
     if not match:
         continue
-    numerator = int(match.group(1))
-    denominator = int(match.group(2))
-    if denominator <= 0:
-        break
-    fps = numerator / denominator
+    value = float(match.group("value"))
+    denominator_text = match.group("denominator")
+    if denominator_text:
+        denominator = int(denominator_text)
+        if denominator <= 0:
+            break
+        fps = value / denominator
+    else:
+        fps = value
     nearest = round(fps)
     if abs(fps - nearest) < 0.005:
         print(str(int(nearest)))

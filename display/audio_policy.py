@@ -2,7 +2,7 @@
 
 Owns the audio rules end to end: the WirePlumber Lua policy and its
 component registration, the generated audio create/cleanup scripts
-(including the Sunshine ``audio_sink`` snapshot/restore), the Flatpak
+(including the persistent Sunshine ``audio_sink`` configuration), the Flatpak
 per-launch audio-env injection function, and the activation-environment
 drain that keeps the game marker out of host apps.  Lifecycle ordering
 and state persistence stay in ``display.manager``; this module only
@@ -11,6 +11,7 @@ exposes the audio-policy interface.
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -177,6 +178,17 @@ local log = Log.open_topic("s-lts-audio")
 local audio_sink = "__AUDIO_SINK__"
 local managed_sinks = {
 __MANAGED_SINKS_TABLE__}
+local last_host_default = nil
+
+local function is_restorable_sink (props)
+  local name = props ["node.name"]
+  return name and not managed_sinks [name]
+     and (props ["media.class"] or ""):match ("Audio/Sink")
+end
+
+local function is_fallback_sink (props)
+  return is_restorable_sink (props) and props ["node.virtual"] ~= "true"
+end
 
 SimpleEventHook {
   name = "lts-audio/guard-default-sink",
@@ -199,21 +211,55 @@ SimpleEventHook {
       if ok then selected = v end
     end
 
-    if selected and managed_sinks [selected] then
-      local om = event:get_source ():call ("get-object-manager", "node")
-      local best_name, best_prio = nil, -1
+    local om = event:get_source ():call ("get-object-manager", "node")
+    if not om then return end
+
+    -- Remember the actual configured host sink whenever WirePlumber selects
+    -- one. Sunshine may replace it with the managed sink before the next
+    -- selection event, so choosing by priority alone could restore the wrong
+    -- hardware device on machines with multiple outputs.
+    if selected and not managed_sinks [selected] then
       for node in om:iterate () do
         local p = node.properties
-        local name = p ["node.name"]
-        if name and not managed_sinks [name] and p ["node.virtual"] ~= "true"
-           and (p ["media.class"] or ""):match ("Audio/Sink") then
-          local prio = tonumber (p ["priority.session"] or "0") or 0
-          if prio > best_prio then best_name, best_prio = name, prio end
+        if p ["node.name"] == selected and is_restorable_sink (p) then
+          last_host_default = selected
+          break
         end
       end
-      if best_name then
-        log:info ("override default sink " .. selected .. " -> " .. best_name)
-        event:set_data ("selected-node", best_name)
+      return
+    end
+    if not selected or not managed_sinks [selected] then return end
+
+    local best_name, best_prio = nil, -1
+    for node in om:iterate () do
+      local p = node.properties
+      local name = p ["node.name"]
+      if name == last_host_default and is_restorable_sink (p) then
+        best_name = name
+        break
+      end
+      if is_fallback_sink (p) then
+        local prio = tonumber (p ["priority.session"] or "0") or 0
+        if prio > best_prio then best_name, best_prio = name, prio end
+      end
+    end
+    if best_name then
+      last_host_default = best_name
+      log:info ("override default sink " .. selected .. " -> " .. best_name)
+      event:set_data ("selected-node", best_name)
+
+      -- Keep the configured default-node stack aligned with the runtime
+      -- override. Without this, default-nodes stores the managed sink and
+      -- reintroduces it on the next graph change or login.
+      local metadata_om = event:get_source ():call ("get-object-manager", "metadata")
+      if metadata_om then
+        local metadata = metadata_om:lookup {
+          Constraint { "metadata.name", "=", "default" },
+        }
+        if metadata then
+          metadata:set (0, "default.configured.audio.sink", "Spa:String:JSON",
+                        Json.Object { ["name"] = best_name }:to_string ())
+        end
       end
     end
   end,
@@ -307,12 +353,11 @@ def _reload_wireplumber() -> None:
 
 
 def _audio_create_script(state: DisplayState, audio_sink: str) -> str:
-    """Render the audio-create script; snapshots Sunshine audio_sink first."""
+    """Render the audio-create script; keep Sunshine pointed at the managed sink."""
     paths = state.paths
     return f"""#!/bin/bash
 set -euo pipefail
 
-state_path="{paths.state_path}"
 sunshine_conf="{paths.sunshine_conf}"
 sink_name="{audio_sink}"
 module_file="{paths.audio_module_file}"
@@ -336,40 +381,14 @@ run_audio_command() {{
     "${{command[@]}}"
 }}
 
-prepare_audio_state() {{
-    python3 - "$state_path" "$sunshine_conf" "$sink_name" <<'PY'
-import json
+ensure_sunshine_audio_sink() {{
+    python3 - "$sunshine_conf" "$sink_name" <<'PY'
 import sys
 from pathlib import Path
 
-state_path = Path(sys.argv[1])
-conf_path = Path(sys.argv[2])
-managed_sink = sys.argv[3]
-
-try:
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    sys.exit(1)
-if not isinstance(state, dict):
-    state = {{}}
-
+conf_path = Path(sys.argv[1])
+managed_sink = sys.argv[2]
 lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
-current_value = ""
-present = False
-for line in lines:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        continue
-    key, value = stripped.split("=", 1)
-    if key.strip() == "audio_sink":
-        present = True
-        current_value = value.strip()
-        break
-
-original = state.get("sunshine_audio_sink")
-if not isinstance(original, dict) or "present" not in original:
-    state["sunshine_audio_sink"] = {{"present": present, "value": current_value}}
-
 updated_lines = []
 replaced = False
 for line in lines:
@@ -387,34 +406,34 @@ if not replaced:
     updated_lines.append(f"audio_sink = {{managed_sink}}")
 conf_path.parent.mkdir(parents=True, exist_ok=True)
 conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
-
-
-state_path.parent.mkdir(parents=True, exist_ok=True)
-state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 PY
 }}
 
-prepare_audio_state
+ensure_sunshine_audio_sink
 
 if run_audio_command pactl list sinks short 2>/dev/null | grep -q "$sink_name"; then
     exit 0
 fi
 
-module_id="$(run_audio_command pactl load-module module-null-sink "sink_name=$sink_name" "sink_properties=device.description=$sink_name" 2>/dev/null || true)"
-if [ -n "$module_id" ]; then
-    echo "$module_id" > "$module_file"
+if ! module_id="$(run_audio_command pactl load-module module-null-sink "sink_name=$sink_name" "sink_properties=device.description=$sink_name" 2>/dev/null)"; then
+    echo "Audio sink creation failed: $sink_name" >&2
+    exit 1
 fi
+if [ -z "$module_id" ]; then
+    echo "Audio sink creation returned no module id: $sink_name" >&2
+    exit 1
+fi
+echo "$module_id" > "$module_file"
 """
 
 
 def _audio_cleanup_script(state: DisplayState) -> str:
-    """Render the audio-cleanup script; restores the saved Sunshine audio_sink."""
+    """Render the audio-cleanup script; remove only the runtime sink module."""
     paths = state.paths
     return f"""#!/bin/bash
 set -euo pipefail
 
-state_path="{paths.state_path}"
-sunshine_conf="{paths.sunshine_conf}"
+sink_name="{safe_string(state.audio_sink)}"
 module_file="{paths.audio_module_file}"
 runtime_dir="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 dbus_value="${{DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}}"
@@ -436,58 +455,30 @@ run_audio_command() {{
     "${{command[@]}}"
 }}
 
-restore_audio_state() {{
-    python3 - "$state_path" "$sunshine_conf" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-state_path = Path(sys.argv[1])
-conf_path = Path(sys.argv[2])
-try:
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(0)
-if not isinstance(state, dict):
-    raise SystemExit(0)
-
-original = state.get("sunshine_audio_sink") or {{}}
-if not isinstance(original, dict):
-    original = {{}}
-
-lines = conf_path.read_text(encoding="utf-8").splitlines() if conf_path.exists() else []
-updated_lines = []
-found = False
-for line in lines:
-    stripped = line.strip()
-    if stripped and not stripped.startswith("#") and "=" in stripped:
-        key = stripped.split("=", 1)[0].strip()
-        if key == "audio_sink":
-            found = True
-            if original.get("present"):
-                updated_lines.append(f"audio_sink = {{str(original.get('value') or '').strip()}}")
-            continue
-    updated_lines.append(line)
-if not found and original.get("present"):
-    if updated_lines and updated_lines[-1] != "":
-        updated_lines.append("")
-    updated_lines.append(f"audio_sink = {{str(original.get('value') or '').strip()}}")
-conf_path.parent.mkdir(parents=True, exist_ok=True)
-conf_path.write_text("\\n".join(updated_lines) + "\\n", encoding="utf-8")
-
-state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-PY
-}}
-
+module_ids=()
 if [ -f "$module_file" ]; then
     module_id="$(cat "$module_file")"
     if [ -n "$module_id" ]; then
+        module_ids+=("$module_id")
+    fi
+fi
+while read -r module_id; do
+    if [ -n "$module_id" ]; then
+        module_ids+=("$module_id")
+    fi
+done < <(
+    run_audio_command pactl list modules short 2>/dev/null \
+        | awk -v sink_name="$sink_name" \
+            '$2 == "module-null-sink" && index($0, "sink_name=" sink_name) {{ print $1 }}' \
+        || true
+)
+
+printf '%s\\n' "${{module_ids[@]}}" | sort -u | while read -r module_id; do
+    if [ -n "$module_id" ]; then
         run_audio_command pactl unload-module "$module_id" >/dev/null 2>&1 || true
     fi
-    rm -f "$module_file"
-fi
-
-restore_audio_state
+done
+rm -f "$module_file"
 """
 
 
@@ -573,6 +564,7 @@ _LEGACY_PREP_CMD_MARKERS = (
     "lutristosunshine-stream-audio-start",
     "lutristosunshine-stream-audio-stop",
 )
+_AUDIO_PREP_CMD_MARKER = "lutristosunshine-create-audio-sink.sh"
 
 
 def _strip_legacy_global_prep_cmd(state: DisplayState) -> None:
@@ -598,19 +590,46 @@ def _strip_legacy_global_prep_cmd(state: DisplayState) -> None:
         _remove_key(sunshine_conf, "global_prep_cmd")
 
 
-def _remember_sunshine_audio_sink(state: DisplayState) -> None:
-    if state.sunshine_audio_sink is None:
-        sunshine_conf = Path(state.paths.sunshine_conf)
-        state.sunshine_audio_sink = _read_key_value(sunshine_conf, "audio_sink")
+def _sunshine_uses_flatpak(state: DisplayState) -> bool:
+    """Use the recorded executable, not the ambiguous systemd alias, as the signal."""
+    executable = state.sunshine_execstart.lower()
+    if executable:
+        return "flatpak" in executable or "dev.lizardbyte.app.sunshine" in executable
+    return state.sunshine_unit_name.startswith("app-")
 
 
-def _restore_sunshine_audio_sink(state: DisplayState) -> None:
+def _audio_prep_command(state: DisplayState) -> str:
+    command = shlex.quote(state.paths.audio_create_script)
+    if _sunshine_uses_flatpak(state):
+        return f"flatpak-spawn --host {command}"
+    return command
+
+
+def _audio_cleanup_command(state: DisplayState) -> str:
+    command = shlex.quote(state.paths.audio_cleanup_script)
+    if _sunshine_uses_flatpak(state):
+        return f"flatpak-spawn --host {command}"
+    return command
+
+
+def _sync_audio_prep_cmd(state: DisplayState, enabled: bool) -> None:
+    """Create the sink before each stream and remove it after that stream."""
     sunshine_conf = Path(state.paths.sunshine_conf)
-    original = state.sunshine_audio_sink or {"present": False, "value": ""}
-    if original.get("present"):
-        _set_key_value(sunshine_conf, "audio_sink", original.get("value", ""))
+    entries = _read_global_prep_cmd_list(sunshine_conf)
+    kept = [
+        entry for entry in entries
+        if _AUDIO_PREP_CMD_MARKER not in str(entry.get("do", ""))
+        and _AUDIO_PREP_CMD_MARKER not in str(entry.get("undo", ""))
+    ]
+    if enabled:
+        kept.append({
+            "do": _audio_prep_command(state),
+            "undo": _audio_cleanup_command(state),
+        })
+    if kept:
+        _set_key_value(sunshine_conf, "global_prep_cmd", json.dumps(kept))
     else:
-        _remove_key(sunshine_conf, "audio_sink")
+        _remove_key(sunshine_conf, "global_prep_cmd")
 
 
 def _drain_stale_audio_activation_env() -> None:
@@ -657,22 +676,33 @@ def _drain_stale_audio_activation_env() -> None:
 
 
 def setup(state: DisplayState) -> None:
-    """Remove legacy audio prep hooks, reload WirePlumber, drain activation env, remember sink."""
+    """Install the policy and clear legacy global audio environment state."""
     _strip_legacy_global_prep_cmd(state)
+    _sync_audio_prep_cmd(state, enabled=True)
     _reload_wireplumber()
     _drain_stale_audio_activation_env()
-    _remember_sunshine_audio_sink(state)
 
 
 def start(state: DisplayState) -> None:
-    """Drain activation env and remember the original Sunshine audio_sink."""
+    """Ensure stream-scoped audio prep is installed before Sunshine starts."""
+    _sync_audio_prep_cmd(state, enabled=True)
     _drain_stale_audio_activation_env()
-    _remember_sunshine_audio_sink(state)
 
 
 def stop(state: DisplayState) -> None:
-    """Restore the saved Sunshine audio_sink; tolerate missing config files."""
-    _restore_sunshine_audio_sink(state)
+    """Remove the runtime sink while leaving Sunshine configured for it."""
+    cleanup_script = Path(state.paths.audio_cleanup_script)
+    if not cleanup_script.is_file():
+        return
+    try:
+        subprocess.run(
+            [str(cleanup_script)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        pass
 
 
 def remove(state: DisplayState) -> None:
@@ -684,3 +714,4 @@ def remove(state: DisplayState) -> None:
             pass
     _reload_wireplumber()
     _strip_legacy_global_prep_cmd(state)
+    _sync_audio_prep_cmd(state, enabled=False)

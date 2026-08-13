@@ -70,6 +70,8 @@ class DisplayState:
     audio_sink: str = "lts-sunshine-stereo"
     sway_socket: str = DISPLAY_SOCKET_PATH
     udev_rule_path: str = UDEV_RULE_PATH
+    # Legacy field retained so older generated cleanup scripts can still
+    # preserve the managed Sunshine setting during an upgrade.
     sunshine_audio_sink: Optional[dict] = None
     gpu_mode: str = "auto"
     gpu_card_path: str = ""

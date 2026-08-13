@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-audio_create_script="@AUDIO_CREATE_SCRIPT@"
 audio_cleanup_script="@AUDIO_CLEANUP_SCRIPT@"
 kwin_input_isolation_script="@KWIN_INPUT_ISOLATION_SCRIPT@"
 sway_start_script="@SWAY_START_SCRIPT@"
@@ -31,8 +30,6 @@ else
     unset PULSE_CLIENTCONFIG
 fi
 
-
-
 stop_child() {
     local pid="${1:-}"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -53,7 +50,6 @@ cleanup() {
 
 trap cleanup EXIT INT TERM HUP
 
-"$audio_create_script"
 setsid "$sway_start_script" &
 sway_pid=$!
 
@@ -71,7 +67,6 @@ if [ ! -s "$display_file" ] || [ ! -S "$sway_socket" ]; then
     echo "Headless sway did not become ready." >&2
     exit 1
 fi
-
 
 setsid python3 "$kwin_input_isolation_script" &
 kwin_input_isolation_pid=$!

@@ -1,9 +1,9 @@
 """Tests for the concentrated audio-policy module.
 
 Covers the pure renderer (managed_files), the Flatpak audio-env
-renderer, the Sunshine ``audio_sink`` snapshot/restore lifecycle, and
-the WirePlumber/legacy-hook cleanup.  Every test runs against temporary
-paths; nothing touches the real user configuration.
+renderer, the persistent Sunshine ``audio_sink`` lifecycle, and the
+WirePlumber/legacy-hook cleanup.  Every test runs against temporary paths;
+nothing touches the real user configuration.
 """
 
 import json
@@ -70,6 +70,10 @@ class AudioPolicyTests(unittest.TestCase):
             wp_script = files[Path(state.paths.wireplumber_policy_script)]
             wp_conf = files[Path(state.paths.wireplumber_policy_conf)]
             self.assertIn('name = "lts-audio/guard-default-sink"', wp_script)
+            self.assertIn('default.configured.audio.sink', wp_script)
+            self.assertIn('last_host_default', wp_script)
+            self.assertIn('name == last_host_default', wp_script)
+            self.assertIn('metadata:set (0, "default.configured.audio.sink"', wp_script)
             self.assertIn('name = "lts-audio/route-game-and-recorder"', wp_script)
             self.assertIn('audio_sink = "lts-sunshine-stereo"', wp_script)
             for name in ("sink-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"):
@@ -79,32 +83,66 @@ class AudioPolicyTests(unittest.TestCase):
 
             create = files[Path(state.paths.audio_create_script)]
             cleanup = files[Path(state.paths.audio_cleanup_script)]
-            # Moved Sunshine config snapshot lives in the create script before
-            # the pactl operations; restore lives in the cleanup script.
-            self.assertIn("prepare_audio_state", create)
+            # Sunshine stays configured for the managed sink; cleanup only
+            # removes the runtime module and never rewrites sunshine.conf.
+            self.assertNotIn("state.get(\"sunshine_audio_sink\")", create)
             self.assertIn('audio_sink = {managed_sink}', create)
             self.assertIn("run_audio_command pactl list sinks short", create)
             self.assertIn("run_audio_command pactl load-module", create)
-            self.assertIn("restore_audio_state", cleanup)
+            self.assertIn("Audio sink creation failed", create)
+            self.assertNotIn("|| true)", create)
+            self.assertNotIn("restore_audio_state", cleanup)
+            self.assertIn('sink_name="lts-sunshine-stereo"', cleanup)
             self.assertIn("run_audio_command pactl unload-module", cleanup)
+            self.assertIn("pactl list modules short", cleanup)
             # Pure renderer: no files written, no commands run (the fixture
             # placeholders stay untouched).
             self.assertEqual(Path(state.paths.wireplumber_policy_script).read_text(), "managed\n")
             self.assertEqual(Path(state.paths.wireplumber_policy_conf).read_text(), "managed\n")
             self.assertEqual(Path(state.paths.audio_create_script).read_text(), "managed\n")
 
-    def test_setup_remembers_sink_drains_activation_env_and_reloads_wireplumber(self) -> None:
+    def test_setup_adds_stream_scoped_audio_prep(self) -> None:
+        state, conf_path = self._temp_state(
+            "global_prep_cmd = " + json.dumps([
+                {"do": "user-cmd", "undo": "user-undo"},
+            ]) + "\n"
+        )
+        state.sunshine_unit_name = "app-dev.lizardbyte.app.Sunshine.service"
+        calls = []
+        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+             patch.object(audio_policy.shutil, "which", return_value=None):
+            audio_policy.setup(state)
+            audio_policy.setup(state)
+
+        config = json.loads(audio_policy._read_key_value(Path(conf_path), "global_prep_cmd")["value"])
+        self.assertEqual(config[0], {"do": "user-cmd", "undo": "user-undo"})
+        managed = [entry for entry in config if "create-audio-sink.sh" in entry.get("do", "")]
+        self.assertEqual(len(managed), 1)
+        self.assertIn("flatpak-spawn --host", managed[0]["do"])
+        self.assertIn("flatpak-spawn --host", managed[0]["undo"])
+        self.assertIn("cleanup-audio-sink.sh", managed[0]["undo"])
+
+    def test_native_sunshine_alias_does_not_get_flatpak_audio_prep(self) -> None:
+        state, conf_path = self._temp_state()
+        state.sunshine_unit_name = "app-dev.lizardbyte.app.Sunshine.service"
+        state.sunshine_execstart = "/usr/bin/sunshine"
+        calls = []
+        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+             patch.object(audio_policy.shutil, "which", return_value=None):
+            audio_policy.setup(state)
+
+        config = json.loads(audio_policy._read_key_value(conf_path, "global_prep_cmd")["value"])
+        self.assertEqual(config[-1]["do"], state.paths.audio_create_script)
+        self.assertEqual(config[-1]["undo"], state.paths.audio_cleanup_script)
+
+    def test_setup_drains_activation_env_and_reloads_wireplumber(self) -> None:
         state, conf_path = self._temp_state()
         calls = []
         with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value="/usr/bin/dbus-update-activation-environment"):
             audio_policy.setup(state)
 
-        self.assertEqual(
-            state.sunshine_audio_sink,
-            {"present": True, "value": "host-speakers"},
-        )
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
+        self.assertIn("audio_sink = host-speakers\n", conf_path.read_text(encoding="utf-8"))
         self.assertIn(
             ["dbus-update-activation-environment", "--systemd", "PULSE_SINK=", "PULSE_PROP=", "PIPEWIRE_PROPS="],
             calls,
@@ -118,34 +156,23 @@ class AudioPolicyTests(unittest.TestCase):
             calls,
         )
 
-    def test_start_remembers_sink_without_overwriting_config(self) -> None:
+    def test_start_drains_activation_env_without_rewriting_config(self) -> None:
         state, conf_path = self._temp_state()
         calls = []
         with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value="/usr/bin/dbus-update-activation-environment"):
             audio_policy.start(state)
 
-        self.assertEqual(
-            state.sunshine_audio_sink,
-            {"present": True, "value": "host-speakers"},
-        )
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
+        self.assertIn("audio_sink = host-speakers\n", conf_path.read_text(encoding="utf-8"))
 
-    def test_stop_restores_existing_sink(self) -> None:
+    def test_stop_cleans_runtime_audio_without_rewriting_sunshine_config(self) -> None:
         state, conf_path = self._temp_state("audio_sink = lts-sunshine-stereo\n")
-        state.sunshine_audio_sink = {"present": True, "value": "host-speakers"}
+        calls = []
+        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)):
+            audio_policy.stop(state)
 
-        audio_policy.stop(state)
-
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
-
-    def test_stop_removes_missing_original_sink(self) -> None:
-        state, conf_path = self._temp_state("audio_sink = lts-sunshine-stereo\n")
-        state.sunshine_audio_sink = {"present": False, "value": ""}
-
-        audio_policy.stop(state)
-
-        self.assertNotIn("audio_sink", conf_path.read_text(encoding="utf-8"))
+        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = lts-sunshine-stereo\n")
+        self.assertIn([state.paths.audio_cleanup_script], calls)
 
     def test_remove_deletes_policy_files_and_legacy_audio_entries(self) -> None:
         with temp_display_state(manager) as (state, base):

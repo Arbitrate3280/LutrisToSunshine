@@ -1,6 +1,6 @@
 # Managed by LutrisToSunshine display.
 output HEADLESS-1 resolution @FALLBACK_MODE@
-output HEADLESS-1 bg #111827 solid_color
+swaybg_command /usr/bin/true
 
 input * events disabled
 input "48879:57005:Keyboard_passthrough" events enabled

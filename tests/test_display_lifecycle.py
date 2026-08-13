@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -143,7 +144,7 @@ H: Handlers=sysrq kbd event29
         self.assertNotIn('KERNEL=="hidraw*"', rule)
         self.assertNotIn('SUBSYSTEM=="hidraw"', rule)
 
-    def test_setup_tracks_original_sunshine_audio_sink_without_overwriting_it(self) -> None:
+    def test_setup_leaves_sunshine_audio_config_unchanged(self) -> None:
         state, conf_path = self._temp_audio_state()
         original_ensure_dependencies = manager._ensure_dependencies
         original_load_state = manager.load_state
@@ -180,13 +181,9 @@ H: Handlers=sysrq kbd event29
             manager._daemon_reload = original_daemon_reload
 
         self.assertEqual(result, 0)
-        self.assertEqual(
-            state.sunshine_audio_sink,
-            {"present": True, "value": "host-speakers"},
-        )
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
+        self.assertIn("audio_sink = host-speakers\n", conf_path.read_text(encoding="utf-8"))
 
-    def test_start_display_restores_audio_on_sunshine_start_failure(self) -> None:
+    def test_start_display_leaves_audio_config_on_sunshine_start_failure(self) -> None:
         state, conf_path = self._temp_audio_state()
         original_load_state = manager.load_state
         original_refresh_managed_files = manager.refresh_managed_files
@@ -218,11 +215,10 @@ H: Handlers=sysrq kbd event29
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
         self.assertEqual(result, 1)
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
+        self.assertIn("audio_sink = host-speakers\n", conf_path.read_text(encoding="utf-8"))
 
-    def test_stop_display_restores_original_audio_target(self) -> None:
+    def test_stop_display_leaves_managed_audio_target(self) -> None:
         state, conf_path = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
-        state.sunshine_audio_sink = {"present": True, "value": "host-speakers"}
         original_load_state = manager.load_state
         original_save_state = manager.save_state
         original_sunshine_unit = sunshine_service.sunshine_unit
@@ -243,7 +239,21 @@ H: Handlers=sysrq kbd event29
             sunshine_service.stop_sunshine_unit = original_stop_sunshine_unit
 
         self.assertEqual(result, 0)
-        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = host-speakers\n")
+        self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = lts-sunshine-stereo\n")
+
+    def test_stop_display_cleans_audio_when_failed_stop_left_unit_inactive(self) -> None:
+        state, _ = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
+        state.sunshine_unit_name = sunshine_service.SUNSHINE_UNIT
+        with patch.object(manager, "load_state", return_value=state), \
+             patch.object(manager, "save_state"), \
+             patch.object(manager._svc, "stop_sunshine_unit", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+             patch.object(manager._svc, "sunshine_unit", return_value=sunshine_service.SUNSHINE_UNIT), \
+             patch.object(manager._svc, "is_sunshine_service_active", return_value=False), \
+             patch.object(manager.audio_policy, "stop") as cleanup:
+            result = manager.stop_display()
+
+        self.assertEqual(result, 1)
+        cleanup.assert_called_once_with(state)
 
     def test_remove_display_deletes_override_files(self) -> None:
         state = manager._default_state()
@@ -683,6 +693,7 @@ H: Handlers=sysrq kbd event29
         scripts = scripts_render.render_managed_files(state)
         audio_files = audio_policy.managed_files(state)
 
+        sway_config = scripts[Path(state.paths.sway_config)]
         sway_start = scripts[Path(state.paths.sway_start_script)]
         sunshine_start = scripts[Path(state.paths.sunshine_start_script)]
         sunshine_wrapper = scripts[Path(state.paths.sunshine_wrapper_script)]
@@ -692,13 +703,16 @@ H: Handlers=sysrq kbd event29
         headless_prep_script = scripts[Path(state.paths.headless_prep_script)]
         sunshine_override = scripts[Path(state.paths.sunshine_override)]
 
+        self.assertIn("swaybg_command /usr/bin/true", sway_config)
+        self.assertNotIn(" bg ", sway_config)
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sway_start)
         self.assertIn("sleep 0.1", sway_start)
         self.assertNotIn('PULSE_SINK="lts-sunshine-stereo"', sunshine_start)
         self.assertNotIn("PIPEWIRE_PROPS", sunshine_start)
-        # The Sunshine-config snapshot now lives in the audio create script,
-        # not the service wrapper.
-        self.assertNotIn('audio_sink = {managed_sink}', sunshine_wrapper)
+        # Sunshine's persistent managed audio setting is refreshed by the
+        # audio create script, not by the service wrapper or teardown.
+        self.assertNotIn('audio_create_script=', sunshine_wrapper)
+        self.assertNotIn('"$audio_create_script"', sunshine_wrapper)
         self.assertIn('audio_sink = {managed_sink}', audio_create)
         self.assertIn('export XDG_RUNTIME_DIR="$runtime_dir"', sunshine_wrapper)
         self.assertIn('export DBUS_SESSION_BUS_ADDRESS="$dbus_value"', sunshine_wrapper)
@@ -708,6 +722,9 @@ H: Handlers=sysrq kbd event29
         self.assertIn('command+=("PULSE_CLIENTCONFIG=$pulse_clientconfig_value")', audio_create)
         self.assertIn('run_audio_command pactl list sinks short', audio_create)
         self.assertIn('run_audio_command pactl load-module', audio_create)
+        # The service stays alive between streams; the global prep command
+        # owns creation/cleanup around each stream instead.
+        self.assertNotIn('"$audio_create_script"', sunshine_wrapper)
         self.assertIn('run_audio_command() {', audio_cleanup)
         self.assertIn('local command=(/usr/bin/env', audio_cleanup)
         self.assertIn('run_audio_command pactl unload-module', audio_cleanup)
@@ -744,6 +761,8 @@ H: Handlers=sysrq kbd event29
         self.assertNotIn("MANGOHUD_CONFIG", launch_script)
         self.assertIn("ExecStart=", sunshine_override)
         self.assertIn(state.paths.sunshine_wrapper_script, sunshine_override)
+        self.assertIn("KillMode=control-group", sunshine_override)
+        self.assertIn(f"ExecStopPost={state.paths.audio_cleanup_script}", sunshine_override)
         self.assertNotIn("Environment=PULSE_SINK=", sunshine_override)
 
     def test_rendered_managed_files_have_no_unsubstituted_placeholders(self) -> None:
@@ -858,6 +877,47 @@ H: Handlers=sysrq kbd event29
         self.assertIn('since_time="${3:-}"', resolver_script)
         self.assertIn('journalctl --user -u "', resolver_script)
         self.assertIn('line_epoch is not None and line_epoch >= since_epoch', resolver_script)
+
+    def test_resolve_stream_fps_accepts_sunshine_fps_log_format(self) -> None:
+        state = manager._default_state()
+        state.refresh_rate_sync_mode = "exact"
+        scripts = scripts_render.render_managed_files(state)
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            base = Path(tempdir)
+            fake_bin = base / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "journalctl").write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"[$(date '+%Y-%m-%d %H:%M:%S.%3N')]: Info: [wlgrab] Requested frame rate [59fps]\"\n"
+                "printf '%s\\n' \"[$(date '+%Y-%m-%d %H:%M:%S.%3N')]: Info: CLIENT CONNECTED\"\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            for executable in (fake_bin / "journalctl", fake_bin / "sleep"):
+                executable.chmod(0o755)
+
+            resolver_path = base / "resolve-stream-fps.sh"
+            resolver_path.write_text(
+                scripts[Path(state.paths.resolve_stream_fps_script)],
+                encoding="utf-8",
+            )
+            resolver_path.chmod(0o755)
+            result = subprocess.run(
+                [str(resolver_path), "exact", "none", str(time.time() - 1)],
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                    "SUNSHINE_CLIENT_FPS": "60",
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "59")
 
     def test_apply_exact_refresh_script_waits_for_exact_fps(self) -> None:
         state = manager._default_state()

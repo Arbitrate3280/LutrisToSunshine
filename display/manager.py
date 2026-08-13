@@ -96,6 +96,20 @@ def detect_sunshine_config_root() -> Path:
 
 
 def _resolve_sunshine_config_root(unit_name: str) -> Path:
+    """Resolve Sunshine's config from the unit's real executable.
+
+    Native Sunshine commonly uses the ``app-dev.lizardbyte.app.Sunshine``
+    unit as the ``sunshine.service`` alias, so the unit name alone is not a
+    reliable Flatpak signal.  Prefer the base unit's ExecStart (which remains
+    visible even when LTS has installed a systemd drop-in) and only fall back
+    to the historical unit-name convention when no executable is available.
+    """
+    executable = _fragment_sunshine_execstart(unit_name)
+    if executable and "flatpak" in executable.lower():
+        flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
+        return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
+    if executable:
+        return detect_sunshine_config_root()
     if unit_name and unit_name.startswith("app-"):
         flatpak_id = unit_name.removeprefix("app-").removesuffix(".service")
         return Path.home() / ".var" / "app" / flatpak_id / "config" / "sunshine"
@@ -335,7 +349,7 @@ def _write_file(path: Path, content: str, executable: bool = False) -> None:
 
 def _ensure_dependencies() -> List[str]:
     missing = []
-    for binary in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaybg", "swaymsg", "systemctl"]:
+    for binary in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaymsg", "systemctl"]:
         if shutil.which(binary) is None:
             missing.append(binary)
     if _svc.sunshine_binary() is None and not _current_sunshine_execstart(_svc.sunshine_unit()):
@@ -412,8 +426,6 @@ def setup_display() -> int:
     save_state(state)
 
     if not _install_udev_rule(state):
-        audio_policy.stop(state)
-        state.sunshine_audio_sink = None
         audio_policy.remove(state)
         save_state(state)
         print("Error: unable to install the Sunshine input isolation udev rule.")
@@ -439,6 +451,10 @@ def start_display() -> int:
         print("Virtual display is not set up. Run 'python3 lutristosunshine.py display enable' first.")
         return 1
     state = refresh_managed_files(state)
+    if not _svc.is_sunshine_service_active():
+        # Recover a sink left behind by a crash before Sunshine starts and
+        # before the create script decides the sink is already present.
+        audio_policy.stop(state)
     audio_policy.start(state)
     save_state(state)
     sunshine_unit = _resolve_sunshine_unit(state)
@@ -474,12 +490,16 @@ def stop_display() -> int:
         return 1
     result = _sunshine_verb(state, _svc.stop_sunshine_unit)
     if result.returncode != 0:
+        # A unit can already be inactive while its wrapper children or sink
+        # survived. Cleanup is safe once systemd confirms Sunshine is gone.
+        if not _svc.is_sunshine_service_active():
+            audio_policy.stop(state)
         return 1
+    audio_policy.stop(state)
     try:
         Path(state.paths.kwin_input_isolation_status_file).unlink()
     except OSError:
         pass
-    audio_policy.stop(state)
     save_state(state)
     print("Virtual display stopped.")
     return 0
