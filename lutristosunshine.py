@@ -4,16 +4,8 @@ import sys
 from typing import Dict, Optional, Tuple
 
 from config.constants import DEFAULT_IMAGE, LAUNCHER_NAMES, SOURCE_COLORS, RESET_COLOR
-from sunshine.sunshine import (
-    get_api_connection,
-    get_api_url,
-    get_covers_path,
-    get_server_display_name,
-    save_api_connection,
-    set_api_connection,
-    set_installation_type,
-    set_server_name,
-)
+from sunshine import catalog
+from sunshine.connection import CONNECTION
 from utils.utils import (
     handle_interrupt,
     get_games_found_message,
@@ -22,7 +14,6 @@ from utils.utils import (
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, heading, muted
 from sunshine.installation import resolve_installation, save_install_choice
-from sunshine.sunshine import detect_apollo_installation, submit_command, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.lutris import is_lutris_running
 from launchers import intake
@@ -200,9 +191,9 @@ def add_custom_command_flow() -> None:
     name = get_required_input("Entry name: ", "Name cannot be empty.")
     command = get_required_input("Command to run: ", "Command cannot be empty.")
 
-    existing = {normalize_game_name_for_dedup(app["name"]) for app in get_existing_apps()}
+    existing = {normalize_game_name_for_dedup(app["name"]) for app in catalog.get_existing_apps()}
     if normalize_game_name_for_dedup(name) in existing:
-        print(f"Warning: an entry named '{name}' already exists in {get_server_display_name()}.")
+        print(f"Warning: an entry named '{name}' already exists in {CONNECTION.get_server_display_name()}.")
 
     image_path = DEFAULT_IMAGE
     if get_yes_no_input(f"Download a cover from SteamGridDB for '{name}'? (y/n): "):
@@ -214,7 +205,7 @@ def add_custom_command_flow() -> None:
                 print(f"Error downloading image for {name}: {e}")
                 image_path = DEFAULT_IMAGE
 
-    add_custom_command_to_sunshine(name, command, image_path)
+    catalog.submit_command(name, command, image_path)
 
 
 def prompt_install_choice(detected_types) -> Optional[str]:
@@ -231,8 +222,8 @@ def prompt_install_choice(detected_types) -> Optional[str]:
 
 def main(argv=None):
     def prompt_server_connection() -> Tuple[str, int]:
-        current_host, current_port = get_api_connection()
-        print(f"{get_server_display_name()} web UI address: {get_api_url()}")
+        current_host, current_port = CONNECTION.get_api_connection()
+        print(f"{CONNECTION.get_server_display_name()} web UI address: {CONNECTION.get_api_url()}")
         print("Use the HTTPS web UI port here. The default is 47990, not the game streaming port.")
 
         host = input(f"Host [{current_host}]: ").strip() or current_host
@@ -254,20 +245,20 @@ def main(argv=None):
             return False
 
         while True:
-            current_url = get_api_url()
+            current_url = CONNECTION.get_api_url()
             prompt = (
-                f"Authentication failed using {get_server_display_name()} at {current_url}. "
+                f"Authentication failed using {CONNECTION.get_server_display_name()} at {current_url}. "
                 "Configure a different web UI host or port and try again?"
             )
             if not get_yes_no_input(prompt, default=True):
                 return False
 
             host, port = prompt_server_connection()
-            set_api_connection(host=host, port=port)
+            CONNECTION.set_api_connection(host=host, port=port)
 
-            if ensure_authenticated(allow_prompt=True):
-                save_api_connection(host, port, server_name=server_name)
-                print(f"Saved {get_server_display_name()} web UI address: {get_api_url()}")
+            if CONNECTION.ensure_authenticated(allow_prompt=True):
+                CONNECTION.save_api_connection(host, port, server_name=server_name)
+                print(f"Saved {CONNECTION.get_server_display_name()} web UI address: {CONNECTION.get_api_url()}")
                 return True
 
     args = parse_args(argv)
@@ -288,12 +279,12 @@ def main(argv=None):
                 )
                 return 1
 
-        apollo_installed = detect_apollo_installation()
+        apollo_installed = CONNECTION.detect_apollo_installation()
         if not facts.installed and not apollo_installed:
             print("Error: No Sunshine or Apollo installation detected.")
             return
 
-        running_servers = get_running_servers()
+        running_servers = CONNECTION.get_running_servers()
         if not running_servers:
             print("Error: Sunshine or Apollo is not running. Please start it and try again.")
             return
@@ -315,27 +306,27 @@ def main(argv=None):
             if not facts.installed or sunshine_install_type is None:
                 print("Error: Sunshine is not installed.")
                 return
-            set_installation_type(sunshine_install_type)
+            CONNECTION.set_installation_type(sunshine_install_type)
         else:
             if not apollo_installed:
                 print("Error: Apollo is not installed.")
                 return
-            set_installation_type("native")
+            CONNECTION.set_installation_type("native")
 
-        set_server_name(server_name)
+        CONNECTION.set_server_name(server_name)
         if args.sunshine_host or args.sunshine_port is not None:
-            set_api_connection(
+            CONNECTION.set_api_connection(
                 host=args.sunshine_host or None,
                 port=args.sunshine_port,
             )
-        if not is_server_running(server_name):
+        if not CONNECTION.is_server_running(server_name):
             print(f"Error: {server_name.title()} is not running. Please start it and try again.")
             return
 
-        COVERS_PATH = get_covers_path()
+        COVERS_PATH = CONNECTION.get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
 
-        authenticated = ensure_authenticated(allow_prompt=True)
+        authenticated = CONNECTION.ensure_authenticated(allow_prompt=True)
         if not authenticated:
             authenticated = configure_connection_and_retry_auth(server_name)
 
@@ -344,7 +335,7 @@ def main(argv=None):
             return
 
         if args.sunshine_host or args.sunshine_port is not None:
-            save_api_connection(
+            CONNECTION.save_api_connection(
                 args.sunshine_host or None,
                 args.sunshine_port,
                 server_name=server_name,
@@ -386,7 +377,7 @@ def main(argv=None):
         games_found_message = get_games_found_message(detected_launchers)
         print(games_found_message)
 
-        existing_apps = get_existing_apps()
+        existing_apps = catalog.get_existing_apps()
         existing_game_names_normalized = {
             normalize_game_name_for_dedup(app["name"]) for app in existing_apps
         }
@@ -401,7 +392,7 @@ def main(argv=None):
         for idx, game in enumerate(all_games):
             game_name = game.game_name
             status = (
-                f"(already in {get_server_display_name()})"
+                f"(already in {CONNECTION.get_server_display_name()})"
                 if _game_name_cache[game_name] in existing_game_names_normalized
                 else ""
             )
@@ -439,7 +430,7 @@ def main(argv=None):
 
         for invalid_game, reason in selection_result.invalid_games:
             print(
-                f"Error: {reason} for '{invalid_game.game_name}'. Please associate the game with a core in RetroArch before adding it to {get_server_display_name()}."
+                f"Error: {reason} for '{invalid_game.game_name}'. Please associate the game with a core in RetroArch before adding it to {CONNECTION.get_server_display_name()}."
             )
 
         if not selected_games:
@@ -455,13 +446,13 @@ def main(argv=None):
             api_key=api_key,
             default_image=DEFAULT_IMAGE,
             download_image_fn=download_image_from_steamgriddb,
-            submit_game_fn=submit_command,
+            submit_game_fn=catalog.submit_command,
         )
 
         if games_added:
-            print(f"Games added to {get_server_display_name()} successfully.")
+            print(f"Games added to {CONNECTION.get_server_display_name()} successfully.")
         else:
-            print(f"No new games were added to {get_server_display_name()}.")
+            print(f"No new games were added to {CONNECTION.get_server_display_name()}.")
 
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()

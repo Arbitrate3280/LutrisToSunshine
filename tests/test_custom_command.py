@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from utils.input import get_user_selection, CUSTOM_COMMAND_SELECTION, get_required_input
-from sunshine.sunshine import add_custom_command_to_sunshine, submit_command
+from sunshine.catalog import submit_command
 from sunshine.connection import CONNECTION
 
 
@@ -56,18 +56,48 @@ class GetRequiredInputTests(unittest.TestCase):
         self.assertEqual(mock_input.call_count, 3)
 
 
-class AddCustomCommandToSunshineTests(unittest.TestCase):
-    """Test add_custom_command_to_sunshine delegates to submit_command."""
+class SubmitCustomCommandTests(unittest.TestCase):
+    """Test submit_command passes custom commands through to the API."""
 
-    @patch("sunshine.sunshine.submit_command")
-    def test_calls_submit_with_correct_args(self, mock_submit):
-        add_custom_command_to_sunshine("My Game", "flatpak run com.example.game", "/path/to/image.png")
-        mock_submit.assert_called_once_with("My Game", "flatpak run com.example.game", "/path/to/image.png")
+    @patch.object(CONNECTION, "installation_type", "native")
+    @patch.object(CONNECTION, "server_name", "sunshine")
+    @patch("sunshine.catalog.display_enabled", return_value=False)
+    @patch("sunshine.catalog.add_game_to_sunshine_api")
+    def test_calls_api_add_with_correct_args(self, mock_api, mock_display):
+        submit_command(
+            "My Game",
+            "flatpak run com.example.game",
+            "/path/to/image.png",
+            display_enabled_fn=mock_display,
+            api_add_fn=mock_api,
+        )
+        mock_api.assert_called_once_with(
+            "My Game",
+            "flatpak run com.example.game",
+            "/path/to/image.png",
+            prep_cmd=[],
+            detached=[],
+        )
 
-    @patch("sunshine.sunshine.submit_command")
-    def test_calls_submit_with_empty_command(self, mock_submit):
-        add_custom_command_to_sunshine("Test", "", "/path/to/image.png")
-        mock_submit.assert_called_once_with("Test", "", "/path/to/image.png")
+    @patch.object(CONNECTION, "installation_type", "native")
+    @patch.object(CONNECTION, "server_name", "sunshine")
+    @patch("sunshine.catalog.display_enabled", return_value=False)
+    @patch("sunshine.catalog.add_game_to_sunshine_api")
+    def test_calls_api_add_with_empty_command(self, mock_api, mock_display):
+        submit_command(
+            "Test",
+            "",
+            "/path/to/image.png",
+            display_enabled_fn=mock_display,
+            api_add_fn=mock_api,
+        )
+        mock_api.assert_called_once_with(
+            "Test",
+            "",
+            "/path/to/image.png",
+            prep_cmd=[],
+            detached=[],
+        )
 
 
 class SubmitCommandToSunshineTests(unittest.TestCase):
@@ -75,10 +105,16 @@ class SubmitCommandToSunshineTests(unittest.TestCase):
 
     @patch.object(CONNECTION, "installation_type", "flatpak")
     @patch.object(CONNECTION, "server_name", "sunshine")
-    @patch("sunshine.sunshine.display_enabled", return_value=False)
-    @patch("sunshine.sunshine.add_game_to_sunshine_api")
+    @patch("sunshine.catalog.display_enabled", return_value=False)
+    @patch("sunshine.catalog.add_game_to_sunshine_api")
     def test_flatpak_prefix_applied(self, mock_api, mock_display):
-        submit_command("Test Game", "mycommand", "/img.png")
+        submit_command(
+            "Test Game",
+            "mycommand",
+            "/img.png",
+            display_enabled_fn=mock_display,
+            api_add_fn=mock_api,
+        )
         mock_api.assert_called_once()
         call_args = mock_api.call_args
         self.assertEqual(call_args[0][0], "Test Game")
@@ -86,12 +122,20 @@ class SubmitCommandToSunshineTests(unittest.TestCase):
 
     @patch.object(CONNECTION, "installation_type", "native")
     @patch.object(CONNECTION, "server_name", "sunshine")
-    @patch("sunshine.sunshine.display_enabled", return_value=True)
-    @patch("sunshine.sunshine.get_app_prep_commands", return_value=[{"do": "/usr/bin/prep.sh", "undo": "/usr/bin/cleanup.sh"}])
-    @patch("sunshine.sunshine.wrap_command", return_value="/usr/bin/wrapped mycommand")
-    @patch("sunshine.sunshine.add_game_to_sunshine_api")
+    @patch("sunshine.catalog.display_enabled", return_value=True)
+    @patch("sunshine.catalog.get_app_prep_commands", return_value=[{"do": "/usr/bin/prep.sh", "undo": "/usr/bin/cleanup.sh"}])
+    @patch("sunshine.catalog.wrap_command", return_value="/usr/bin/wrapped mycommand")
+    @patch("sunshine.catalog.add_game_to_sunshine_api")
     def test_display_enabled_applies_wrap_and_prep(self, mock_api, mock_wrap, mock_prep, mock_display):
-        submit_command("Test Game", "mycommand", "/img.png")
+        submit_command(
+            "Test Game",
+            "mycommand",
+            "/img.png",
+            display_enabled_fn=mock_display,
+            wrap_fn=mock_wrap,
+            prep_fn=mock_prep,
+            api_add_fn=mock_api,
+        )
         mock_wrap.assert_called_once_with("mycommand", "cmd")
         mock_prep.assert_called_once()
         mock_api.assert_called_once_with(

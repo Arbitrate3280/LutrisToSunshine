@@ -163,16 +163,6 @@ def submit_command(
     api_add_fn(game_name, command, image_path, prep_cmd=prep_cmd, detached=[])
 
 
-def add_custom_command_to_sunshine(
-    game_name: str,
-    command: str,
-    image_path: str,
-    *,
-    connection: SunshineConnection = CONNECTION,
-) -> None:
-    submit_command(game_name, command, image_path, connection=connection)
-
-
 def get_display_blocked_apps() -> Tuple[List[Tuple[str, str]], Optional[str]]:
     return [], None
 

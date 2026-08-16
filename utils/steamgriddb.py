@@ -4,7 +4,7 @@ from PIL import Image
 from io import BytesIO
 from typing import Optional
 from config.constants import DEFAULT_IMAGE
-from sunshine.sunshine import get_api_key_path, get_covers_path
+from sunshine.connection import CONNECTION
 from utils.utils import handle_interrupt
 
 def validate_api_key(api_key: str) -> bool:
@@ -19,8 +19,8 @@ def validate_api_key(api_key: str) -> bool:
 def manage_api_key() -> Optional[str]:
     """Manage the SteamGridDB API key."""
     try:
-        if os.path.exists(get_api_key_path()):
-            with open(get_api_key_path(), 'r') as file:
+        if os.path.exists(CONNECTION.get_api_key_path()):
+            with open(CONNECTION.get_api_key_path(), 'r') as file:
                 api_key = file.read().strip()
                 if validate_api_key(api_key):
                     return api_key
@@ -31,7 +31,7 @@ def manage_api_key() -> Optional[str]:
         while True:
             new_key = input("Please enter your SteamGridDB API key: ").strip()
             if validate_api_key(new_key):
-                with open(get_api_key_path(), 'w') as file:
+                with open(CONNECTION.get_api_key_path(), 'w') as file:
                     file.write(new_key)
                 return new_key
             else:
@@ -41,7 +41,7 @@ def manage_api_key() -> Optional[str]:
 
 def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
     """Download game cover image from SteamGridDB or return cached image if available."""
-    image_path = os.path.join(get_covers_path(), f"{game_name.lower().replace(' ', '-')}.png")
+    image_path = os.path.join(CONNECTION.get_covers_path(), f"{game_name.lower().replace(' ', '-')}.png")
 
     if os.path.exists(image_path):
         return image_path

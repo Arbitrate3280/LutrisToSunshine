@@ -4,6 +4,8 @@ from contextlib import redirect_stdout
 
 import lutristosunshine
 from display import hub
+from sunshine import catalog
+from sunshine.connection import CONNECTION
 
 
 class DisplayCliTests(unittest.TestCase):
@@ -75,33 +77,33 @@ class DisplayCliTests(unittest.TestCase):
 
         original_setup_display = hub.setup_display
         original_start_display = hub.start_display
-        original_reconcile_display_apps = hub.reconcile_display_apps
-        original_is_server_running = hub.is_server_running
+        original_reconcile_display_apps = catalog.reconcile_display_apps
+        original_is_server_running = CONNECTION.is_server_running
         original_display_is_enabled = hub.is_enabled
         original_refresh_managed_files = hub.refresh_managed_files
-        original_get_display_blocked_apps = hub.get_display_blocked_apps
+        original_get_display_blocked_apps = catalog.get_display_blocked_apps
         original_get_yes_no_input = hub.get_yes_no_input
         try:
             hub.setup_display = lambda: calls.append("setup") or 0
             hub.start_display = lambda: calls.append("start") or 0
-            hub.reconcile_display_apps = (
+            catalog.reconcile_display_apps = (
                 lambda enable_display: calls.append(("sync", enable_display)) or (2, None)
             )
-            hub.is_server_running = lambda name=None: True
+            CONNECTION.is_server_running = lambda name=None: True
             hub.is_enabled = lambda: True
             hub.refresh_managed_files = lambda: calls.append("refresh")
-            hub.get_display_blocked_apps = lambda: ([], None)
+            catalog.get_display_blocked_apps = lambda: ([], None)
             hub.get_yes_no_input = lambda prompt, default=None: False
 
             result = lutristosunshine.handle_display_command(args)
         finally:
             hub.setup_display = original_setup_display
             hub.start_display = original_start_display
-            hub.reconcile_display_apps = original_reconcile_display_apps
-            hub.is_server_running = original_is_server_running
+            catalog.reconcile_display_apps = original_reconcile_display_apps
+            CONNECTION.is_server_running = original_is_server_running
             hub.is_enabled = original_display_is_enabled
             hub.refresh_managed_files = original_refresh_managed_files
-            hub.get_display_blocked_apps = original_get_display_blocked_apps
+            catalog.get_display_blocked_apps = original_get_display_blocked_apps
             hub.get_yes_no_input = original_get_yes_no_input
 
         self.assertEqual(result, 0)
@@ -111,21 +113,21 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display", "reset"])
         calls = []
 
-        original_reconcile_display_apps = hub.reconcile_display_apps
+        original_reconcile_display_apps = catalog.reconcile_display_apps
         original_remove_display = hub.remove_display
-        original_is_server_running = hub.is_server_running
+        original_is_server_running = CONNECTION.is_server_running
         try:
-            hub.reconcile_display_apps = (
+            catalog.reconcile_display_apps = (
                 lambda enable_display: calls.append(("sync", enable_display)) or (4, None)
             )
             hub.remove_display = lambda: calls.append("remove") or 0
-            hub.is_server_running = lambda name=None: True
+            CONNECTION.is_server_running = lambda name=None: True
 
             result = lutristosunshine.handle_display_command(args)
         finally:
-            hub.reconcile_display_apps = original_reconcile_display_apps
+            catalog.reconcile_display_apps = original_reconcile_display_apps
             hub.remove_display = original_remove_display
-            hub.is_server_running = original_is_server_running
+            CONNECTION.is_server_running = original_is_server_running
 
         self.assertEqual(result, 0)
         self.assertEqual(calls, [("sync", False), "remove"])
@@ -133,21 +135,21 @@ class DisplayCliTests(unittest.TestCase):
     def test_handle_display_reset_prints_clear_summary(self) -> None:
         args = lutristosunshine.parse_args(["display", "reset"])
 
-        original_reconcile_display_apps = hub.reconcile_display_apps
+        original_reconcile_display_apps = catalog.reconcile_display_apps
         original_remove_display = hub.remove_display
-        original_is_server_running = hub.is_server_running
+        original_is_server_running = CONNECTION.is_server_running
         try:
-            hub.reconcile_display_apps = lambda enable_display: (1, None)
+            catalog.reconcile_display_apps = lambda enable_display: (1, None)
             hub.remove_display = lambda: 0
-            hub.is_server_running = lambda name=None: True
+            CONNECTION.is_server_running = lambda name=None: True
 
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
-            hub.reconcile_display_apps = original_reconcile_display_apps
+            catalog.reconcile_display_apps = original_reconcile_display_apps
             hub.remove_display = original_remove_display
-            hub.is_server_running = original_is_server_running
+            CONNECTION.is_server_running = original_is_server_running
 
         rendered = output.getvalue()
         self.assertEqual(result, 0)
@@ -266,7 +268,7 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display"])
 
         original_display_snapshot = hub.display_snapshot
-        original_get_display_blocked_apps = hub.get_display_blocked_apps
+        original_get_display_blocked_apps = catalog.get_display_blocked_apps
         original_get_menu_choice = hub.get_menu_choice
         try:
             hub.display_snapshot = lambda: {
@@ -297,14 +299,14 @@ class DisplayCliTests(unittest.TestCase):
                 "isolation_summary": "rule ready",
                 "isolation_level": "success",
             }
-            hub.get_display_blocked_apps = lambda: ([], None)
+            catalog.get_display_blocked_apps = lambda: ([], None)
             hub.get_menu_choice = lambda prompt, valid_choices: "0"
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
             hub.display_snapshot = original_display_snapshot
-            hub.get_display_blocked_apps = original_get_display_blocked_apps
+            catalog.get_display_blocked_apps = original_get_display_blocked_apps
             hub.get_menu_choice = original_get_menu_choice
 
         rendered = output.getvalue()
@@ -318,7 +320,7 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display"])
 
         original_display_snapshot = hub.display_snapshot
-        original_get_display_blocked_apps = hub.get_display_blocked_apps
+        original_get_display_blocked_apps = catalog.get_display_blocked_apps
         original_get_menu_choice = hub.get_menu_choice
         choices = iter(["6", "0", "0"])
         try:
@@ -348,14 +350,14 @@ class DisplayCliTests(unittest.TestCase):
                 "isolation_summary": "rule ready",
                 "isolation_level": "success",
             }
-            hub.get_display_blocked_apps = lambda: ([], None)
+            catalog.get_display_blocked_apps = lambda: ([], None)
             hub.get_menu_choice = lambda prompt, valid_choices: next(choices)
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
             hub.display_snapshot = original_display_snapshot
-            hub.get_display_blocked_apps = original_get_display_blocked_apps
+            catalog.get_display_blocked_apps = original_get_display_blocked_apps
             hub.get_menu_choice = original_get_menu_choice
 
         rendered = output.getvalue()
@@ -369,7 +371,7 @@ class DisplayCliTests(unittest.TestCase):
         args = lutristosunshine.parse_args(["display", "status"])
 
         original_display_snapshot = hub.display_snapshot
-        original_get_display_blocked_apps = hub.get_display_blocked_apps
+        original_get_display_blocked_apps = catalog.get_display_blocked_apps
         try:
             hub.display_snapshot = lambda: {
                 "configured": True,
@@ -402,14 +404,14 @@ class DisplayCliTests(unittest.TestCase):
                 "isolation_summary": "KWin helper is not running",
                 "isolation_level": "warning",
             }
-            hub.get_display_blocked_apps = lambda: ([], None)
+            catalog.get_display_blocked_apps = lambda: ([], None)
 
             output = io.StringIO()
             with redirect_stdout(output):
                 result = lutristosunshine.handle_display_command(args)
         finally:
             hub.display_snapshot = original_display_snapshot
-            hub.get_display_blocked_apps = original_get_display_blocked_apps
+            catalog.get_display_blocked_apps = original_get_display_blocked_apps
 
         rendered = output.getvalue()
         self.assertEqual(result, 0)

@@ -25,11 +25,8 @@ from display.manager import (
     start_display,
     stop_display,
 )
-from sunshine.sunshine import (
-    get_display_blocked_apps,
-    is_server_running,
-    reconcile_display_apps,
-)
+from sunshine import catalog
+from sunshine.connection import CONNECTION
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input
 from utils.terminal import accent, badge, heading, muted, state_text
 
@@ -100,7 +97,7 @@ def _parse_custom_display_mode_value(value: str, current_mode: DisplayMode) -> T
 
 
 def blocked_apps_report() -> Tuple[List[Tuple[str, str]], Optional[str]]:
-    return get_display_blocked_apps()
+    return catalog.get_display_blocked_apps()
 
 
 def hub_status_summary(snapshot: DisplaySnapshot) -> str:
@@ -266,13 +263,13 @@ def reconcile_apps(enable_display: bool) -> int:
         refresh_managed_files()
 
     started_here = False
-    if not is_server_running("sunshine"):
+    if not CONNECTION.is_server_running("sunshine"):
         start_status = start_display()
         if start_status != 0:
             return start_status
         started_here = True
 
-    updated, error = reconcile_display_apps(enable_display=enable_display)
+    updated, error = catalog.reconcile_display_apps(enable_display=enable_display)
     if error:
         print(error)
         return 1
