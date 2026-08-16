@@ -37,8 +37,9 @@ from display.modes import (
     refresh_rate_sync_mode_summary,
 )
 from display.state import DisplayState, load_state
-from display.sunshine_service import SunshineInstallAudit
 from display.utils import run_command, safe_string
+from sunshine import installation as _installation
+from sunshine.installation import SunshineInstallAudit
 
 
 @dataclass(frozen=True)
@@ -385,7 +386,7 @@ def missing_dependencies(which_fn: Callable[[str], Optional[str]] = shutil.which
         for name in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaymsg", "systemctl"]
         if which_fn(name) is None
     ]
-    if _svc.sunshine_binary() is None and not _svc.show_unit_property(_svc.sunshine_unit(), "ExecStart"):
+    if _installation.sunshine_binary() is None and not _svc.show_unit_property(_svc.sunshine_unit(), "ExecStart"):
         missing.append("sunshine")
     return missing
 
@@ -508,7 +509,7 @@ def display_snapshot(
         host_session=host_session_fn(),
         input_isolation_mode=input_mode,
         sunshine_unit=sunshine_unit,
-        sunshine_install_audit=_svc.sunshine_installation_audit(sunshine_unit),
+        sunshine_install_audit=_installation.sunshine_installation_audit(sunshine_unit),
         sunshine_active=sunshine_active,
         sway_active=sway_active,
         wireplumber_policy=("installed" if Path(state.paths.wireplumber_policy_conf).exists() else "absent"),

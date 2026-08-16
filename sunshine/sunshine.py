@@ -17,7 +17,6 @@ from sunshine.catalog import (
     submit_command as _catalog_submit_command,
 )
 from sunshine.connection import CONNECTION, SunshineConnection
-from sunshine.detection import detect_sunshine_installation
 
 def set_installation_type(type_: str) -> None:
     CONNECTION.set_installation_type(type_)

@@ -20,6 +20,7 @@ from display import scripts_render
 from display.diagnostics import DisplaySnapshot, DoctorReport
 from display.modes import DisplayMode
 from display.state import DisplayPaths, DisplayState, build_paths, default_state, load_state, save_state
+from sunshine import installation
 _default_state = default_state
 from display.input_isolation import (
     clean_kde_libinput_config as _clean_kde_libinput_config,
@@ -209,7 +210,7 @@ def setup_display(
     state.sunshine_unit_name = _svc.sunshine_unit()
     state.paths = _state.build_paths(state.sunshine_unit_name)
     state.paths.sunshine_conf = str(
-        _svc.resolve_sunshine_config_root(state.sunshine_unit_name)
+        installation.resolve_sunshine_config_root(state.sunshine_unit_name)
         / "sunshine.conf"
     )
 

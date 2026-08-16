@@ -1,6 +1,7 @@
 import os
 import argparse
-from typing import Dict, Tuple
+import sys
+from typing import Dict, Optional, Tuple
 
 from config.constants import DEFAULT_IMAGE, LAUNCHER_NAMES, SOURCE_COLORS, RESET_COLOR
 from sunshine.sunshine import (
@@ -20,7 +21,8 @@ from utils.utils import (
 )
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, heading, muted
-from sunshine.sunshine import detect_sunshine_installation, detect_apollo_installation, submit_command, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running
+from sunshine.installation import resolve_installation, save_install_choice
+from sunshine.sunshine import detect_apollo_installation, submit_command, add_custom_command_to_sunshine, ensure_authenticated, get_existing_apps, get_running_servers, is_server_running
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.lutris import is_lutris_running
 from launchers import intake
@@ -215,6 +217,18 @@ def add_custom_command_flow() -> None:
     add_custom_command_to_sunshine(name, command, image_path)
 
 
+def prompt_install_choice(detected_types) -> Optional[str]:
+    """Prompt the user to pick one of multiple detected Sunshine installs."""
+    print("Multiple Sunshine installs detected. Which one should be used?")
+    for index, install_type in enumerate(detected_types, start=1):
+        print(f"{accent(index)}. {install_type}")
+    choice = get_menu_choice(
+        f"{accent('Choose an installation: ')}",
+        [str(index) for index in range(1, len(detected_types) + 1)],
+    )
+    return detected_types[int(choice) - 1]
+
+
 def main(argv=None):
     def prompt_server_connection() -> Tuple[str, int]:
         current_host, current_port = get_api_connection()
@@ -260,9 +274,22 @@ def main(argv=None):
     if args.command == "display":
         raise SystemExit(handle_display_command(args))
     try:
-        sunshine_installed, sunshine_install_type = detect_sunshine_installation()
+        facts = resolve_installation()
+        sunshine_install_type = facts.install_type
+        if facts.installed and sunshine_install_type is None:
+            if sys.stdin.isatty():
+                sunshine_install_type = prompt_install_choice(facts.detected_types)
+                save_install_choice(sunshine_install_type)
+            else:
+                types = ", ".join(facts.detected_types)
+                print(
+                    f"Multiple Sunshine installs detected: {types}. "
+                    "Run 'python3 lutristosunshine.py' once interactively to pick which one to use."
+                )
+                return 1
+
         apollo_installed = detect_apollo_installation()
-        if not sunshine_installed and not apollo_installed:
+        if not facts.installed and not apollo_installed:
             print("Error: No Sunshine or Apollo installation detected.")
             return
 
@@ -285,7 +312,7 @@ def main(argv=None):
             server_name = running_servers[0]
 
         if server_name == "sunshine":
-            if not sunshine_installed:
+            if not facts.installed or sunshine_install_type is None:
                 print("Error: Sunshine is not installed.")
                 return
             set_installation_type(sunshine_install_type)
@@ -440,4 +467,4 @@ def main(argv=None):
         handle_interrupt()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

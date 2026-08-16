@@ -20,6 +20,7 @@ from display import audio_policy
 from display import manager
 from display import scripts_render
 from display import sunshine_service
+from sunshine import installation
 
 
 def _rendered_inject_heredoc_py() -> str:
@@ -63,7 +64,7 @@ class InjectFlatpakAudioEnvTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with patch.object(sunshine_service, "sunshine_unit", return_value="sunshine"), \
-             patch.object(sunshine_service, "sunshine_binary", return_value="/usr/bin/sunshine"):
+             patch.object(installation, "sunshine_binary", return_value="/usr/bin/sunshine"):
             cls._py_code = _rendered_inject_heredoc_py()
 
     def setUp(self):

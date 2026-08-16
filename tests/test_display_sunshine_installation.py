@@ -17,7 +17,7 @@ from display import manager
 from display import state as display_state
 from display.state import DisplayPaths
 from display import sunshine_service
-from sunshine import install as sunshine_install
+from sunshine import installation
 from tests._display_test_helpers import (
     patched,
     temp_display_state,
@@ -32,9 +32,9 @@ def _completed(args, returncode=0, stdout="", stderr=""):
 
 class HomebrewInstallDetectionTests(unittest.TestCase):
     def test_sunshine_unit_candidates_include_homebrew_aliases(self) -> None:
-        candidates = sunshine_service.SUNSHINE_UNIT_CANDIDATES
-        self.assertIn(sunshine_service.SUNSHINE_UNIT, candidates)
-        self.assertIn(sunshine_service.FALLBACK_SUNSHINE_UNIT, candidates)
+        candidates = installation.SUNSHINE_UNIT_CANDIDATES
+        self.assertIn(installation.SUNSHINE_UNIT, candidates)
+        self.assertIn(installation.FALLBACK_SUNSHINE_UNIT, candidates)
         self.assertIn("homebrew.sunshine.service", candidates)
         self.assertIn("homebrew.sunshine-beta.service", candidates)
 
@@ -46,11 +46,11 @@ class HomebrewInstallDetectionTests(unittest.TestCase):
                 )
             return _completed(args, 1, "", "no formula")
 
-        with mock.patch.object(sunshine_install.shutil, "which", return_value="/home/linuxbrew/.linuxbrew/bin/brew"), \
-             mock.patch.object(sunshine_install.subprocess, "run", side_effect=fake_run), \
-             mock.patch.object(sunshine_install.os.path, "isfile", return_value=True), \
-             mock.patch.object(sunshine_install.os, "access", return_value=True):
-            result = sunshine_install.homebrew_sunshine_executable()
+        with mock.patch.object(installation.shutil, "which", return_value="/home/linuxbrew/.linuxbrew/bin/brew"), \
+             mock.patch.object(installation.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(installation.os.path, "isfile", return_value=True), \
+             mock.patch.object(installation.os, "access", return_value=True):
+            result = installation.homebrew_sunshine_executable()
 
         self.assertEqual(
             result,
@@ -59,12 +59,12 @@ class HomebrewInstallDetectionTests(unittest.TestCase):
 
     def test_canonical_install_binary_returns_just_path(self) -> None:
         with mock.patch.object(
-            sunshine_install,
+            installation,
             "homebrew_sunshine_executable",
             return_value=("sunshine", "/opt/sunshine/bin/sunshine"),
         ):
             self.assertEqual(
-                sunshine_install.homebrew_sunshine_binary(),
+                installation.homebrew_sunshine_binary(),
                 "/opt/sunshine/bin/sunshine",
             )
 
@@ -75,11 +75,11 @@ class HomebrewBinaryResolutionTests(unittest.TestCase):
             return None if name == "sunshine" else f"/usr/bin/{name}"
         with mock.patch("shutil.which", side_effect=fake_which), \
              mock.patch(
-                 "sunshine.detection.homebrew_sunshine_binary",
+                 "sunshine.installation.homebrew_sunshine_binary",
                  return_value="/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
              ):
             self.assertEqual(
-                sunshine_service.sunshine_binary(),
+                installation.sunshine_binary(),
                 "/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
             )
 
@@ -122,7 +122,7 @@ class SunshineUnitSelectionTests(unittest.TestCase):
     def test_managed_sunshine_units_includes_known_candidates_without_duplicates(self) -> None:
         units = sunshine_service.managed_sunshine_units()
         self.assertEqual(len(units), len(set(units)))
-        for candidate in sunshine_service.SUNSHINE_UNIT_CANDIDATES:
+        for candidate in installation.SUNSHINE_UNIT_CANDIDATES:
             self.assertIn(candidate, units)
 
     def test_managed_sunshine_units_prepends_saved_homebrew_unit(self) -> None:
@@ -138,16 +138,16 @@ class SunshineUnitSelectionTests(unittest.TestCase):
         def fake_systemctl_user(*args, check=False):
             unit = args[-1]
             if args[:3] == ("show", "--property=LoadState", "--value"):
-                if unit == sunshine_service.SUNSHINE_UNIT:
+                if unit == installation.SUNSHINE_UNIT:
                     return _completed(list(args), 1, "", "missing")
-                if unit == sunshine_service.FALLBACK_SUNSHINE_UNIT:
+                if unit == installation.FALLBACK_SUNSHINE_UNIT:
                     return _completed(list(args), 0, "loaded\n", "")
             return _completed(list(args), 0, "", "")
 
         with patched(sunshine_service, _systemctl_user=fake_systemctl_user):
             self.assertEqual(
                 sunshine_service.sunshine_unit(),
-                sunshine_service.FALLBACK_SUNSHINE_UNIT,
+                installation.FALLBACK_SUNSHINE_UNIT,
             )
 
     def test_sunshine_unit_prefers_canonical_active_unit_id_over_alias(self) -> None:
@@ -156,31 +156,31 @@ class SunshineUnitSelectionTests(unittest.TestCase):
             if args[:3] == ("show", "--property=LoadState", "--value"):
                 return _completed(list(args), 0, "loaded\n")
             if args[:3] == ("show", "--property=Id", "--value"):
-                if unit == sunshine_service.FALLBACK_SUNSHINE_UNIT:
+                if unit == installation.FALLBACK_SUNSHINE_UNIT:
                     return _completed(
-                        list(args), 0, f"{sunshine_service.SUNSHINE_UNIT}\n", ""
+                        list(args), 0, f"{installation.SUNSHINE_UNIT}\n", ""
                     )
                 return _completed(list(args), 0, f"{unit}\n", "")
             if args and args[0] == "is-active":
-                active = (unit == sunshine_service.FALLBACK_SUNSHINE_UNIT)
+                active = (unit == installation.FALLBACK_SUNSHINE_UNIT)
                 return _completed(list(args), 0 if active else 1, "active\n" if active else "inactive\n")
             return _completed(list(args), 0, "", "")
 
         with patched(sunshine_service, _systemctl_user=fake_systemctl_user):
             self.assertEqual(
-                sunshine_service.sunshine_unit(), sunshine_service.SUNSHINE_UNIT
+                sunshine_service.sunshine_unit(), installation.SUNSHINE_UNIT
             )
 
 
 class SunshineConfigRootResolutionTests(unittest.TestCase):
     def test_native_executable_wins_over_flatpak_named_unit(self) -> None:
         with mock.patch.object(
-            sunshine_service, "fragment_sunshine_execstart", return_value="/usr/bin/sunshine"
+            installation, "fragment_sunshine_execstart", return_value="/usr/bin/sunshine"
         ), mock.patch.object(
-            sunshine_service, "detect_sunshine_config_root", return_value=Path("/native/sunshine")
+            installation, "detect_sunshine_config_root", return_value=Path("/native/sunshine")
         ):
             self.assertEqual(
-                sunshine_service.resolve_sunshine_config_root(
+                installation.resolve_sunshine_config_root(
                     "app-dev.lizardbyte.app.Sunshine.service"
                 ),
                 Path("/native/sunshine"),
@@ -188,12 +188,12 @@ class SunshineConfigRootResolutionTests(unittest.TestCase):
 
     def test_flatpak_executable_uses_flatpak_config_root(self) -> None:
         with mock.patch.object(
-            sunshine_service,
+            installation,
             "fragment_sunshine_execstart",
             return_value="/usr/bin/flatpak run dev.lizardbyte.app.Sunshine",
         ):
             self.assertEqual(
-                sunshine_service.resolve_sunshine_config_root(
+                installation.resolve_sunshine_config_root(
                     "app-dev.lizardbyte.app.Sunshine.service"
                 ),
                 Path.home()
@@ -225,6 +225,8 @@ class SunshineExecStartSnapshotTests(unittest.TestCase):
             sunshine_service,
             _systemctl_user=fake_systemctl_user,
             sunshine_unit=lambda: "homebrew.sunshine.service",
+        ), patched(
+            installation,
             sunshine_binary=lambda: "/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
         ):
             updated = sunshine_service.remember_sunshine_execstart(state)
@@ -272,7 +274,7 @@ class OverridePathHelpersTests(unittest.TestCase):
 
         paths = sunshine_service.legacy_unit_override_paths(state)
         path_strs = [str(p) for p in paths]
-        for unit in sunshine_service.SUNSHINE_UNIT_CANDIDATES:
+        for unit in installation.SUNSHINE_UNIT_CANDIDATES:
             if unit == saved_unit:
                 self.assertNotIn(str(systemd_user_dir / f"{unit}.d" / "override.conf"), path_strs)
                 self.assertNotIn(str(systemd_user_dir / f"{unit}.d"), path_strs)

@@ -17,6 +17,7 @@ from display import diagnostics
 from display import input_isolation
 from display import scripts_render
 from display import sunshine_service
+from sunshine import installation
 from tests._display_test_helpers import temp_display_state
 
 
@@ -197,7 +198,7 @@ H: Handlers=sysrq kbd event29
         try:
             display_state.load_state = lambda: state
             display_state.save_state = lambda current: None
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.sunshine_unit = lambda: installation.SUNSHINE_UNIT
             sunshine_service.start_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "start", unit], 1, "", "boom"
             )
@@ -229,7 +230,7 @@ H: Handlers=sysrq kbd event29
         try:
             display_state.load_state = lambda: state
             display_state.save_state = lambda current: None
-            sunshine_service.sunshine_unit = lambda: sunshine_service.SUNSHINE_UNIT
+            sunshine_service.sunshine_unit = lambda: installation.SUNSHINE_UNIT
             sunshine_service.stop_sunshine_unit = lambda unit: subprocess.CompletedProcess(
                 ["systemctl", "--user", "stop", unit], 0, "", ""
             )
@@ -246,11 +247,11 @@ H: Handlers=sysrq kbd event29
 
     def test_stop_display_cleans_audio_when_failed_stop_left_unit_inactive(self) -> None:
         state, _ = self._temp_audio_state("audio_sink = lts-sunshine-stereo\n")
-        state.sunshine_unit_name = sunshine_service.SUNSHINE_UNIT
+        state.sunshine_unit_name = installation.SUNSHINE_UNIT
         with patch.object(display_state, "load_state", return_value=state), \
              patch.object(display_state, "save_state"), \
              patch.object(sunshine_service, "stop_sunshine_unit", return_value=subprocess.CompletedProcess([], 1, "", "")), \
-             patch.object(sunshine_service, "sunshine_unit", return_value=sunshine_service.SUNSHINE_UNIT), \
+             patch.object(sunshine_service, "sunshine_unit", return_value=installation.SUNSHINE_UNIT), \
              patch.object(sunshine_service, "is_sunshine_service_active", return_value=False):
             cleanup = Mock()
             result = manager.stop_display(audio_stop_fn=cleanup)
@@ -261,11 +262,11 @@ H: Handlers=sysrq kbd event29
     def test_remove_display_deletes_override_files(self) -> None:
         state = manager._default_state()
         state.enabled = True
-        state.sunshine_unit_name = sunshine_service.SUNSHINE_UNIT
+        state.sunshine_unit_name = installation.SUNSHINE_UNIT
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
-        override_dir = base / f"{sunshine_service.SUNSHINE_UNIT}.d"
+        override_dir = base / f"{installation.SUNSHINE_UNIT}.d"
         override_dir.mkdir(parents=True)
 
         state.paths = DisplayPaths(**asdict(state.paths))
@@ -466,13 +467,13 @@ H: Handlers=sysrq kbd event29
     def test_display_doctor_report_flags_missing_dependencies(self) -> None:
         state = manager._default_state()
         original_load_state = display_state.load_state
-        original_installation_audit = sunshine_service.sunshine_installation_audit
+        original_installation_audit = installation.sunshine_installation_audit
         dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=["sway", "setfacl"])
         try:
             display_state.load_state = lambda: state
             dependency_patch.start()
-            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
-                managed_unit=sunshine_service.SUNSHINE_UNIT,
+            installation.sunshine_installation_audit = lambda unit=None: installation.make_sunshine_install_audit(
+                managed_unit=installation.SUNSHINE_UNIT,
                 managed_type="native",
                 detected_types=["native"],
             )
@@ -480,7 +481,7 @@ H: Handlers=sysrq kbd event29
         finally:
             display_state.load_state = original_load_state
             dependency_patch.stop()
-            sunshine_service.sunshine_installation_audit = original_installation_audit
+            installation.sunshine_installation_audit = original_installation_audit
 
         self.assertEqual(report["summary"], "needs_attention")
         self.assertTrue(any(check["status"] == "fail" for check in report["checks"]))
@@ -490,14 +491,14 @@ H: Handlers=sysrq kbd event29
         state.enabled = True
         original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_installation_audit = sunshine_service.sunshine_installation_audit
+        original_installation_audit = installation.sunshine_installation_audit
         dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
             display_state.load_state = lambda: state
             dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: True
-            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
-                managed_unit=sunshine_service.SUNSHINE_UNIT,
+            installation.sunshine_installation_audit = lambda unit=None: installation.make_sunshine_install_audit(
+                managed_unit=installation.SUNSHINE_UNIT,
                 managed_type="native",
                 detected_types=["homebrew", "native"],
                 package_probe_type="homebrew",
@@ -509,7 +510,7 @@ H: Handlers=sysrq kbd event29
             display_state.load_state = original_load_state
             dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            sunshine_service.sunshine_installation_audit = original_installation_audit
+            installation.sunshine_installation_audit = original_installation_audit
 
         install_check = next(check for check in report["checks"] if check["label"] == "Sunshine installation")
         self.assertEqual(install_check["status"], "warn")
@@ -522,14 +523,14 @@ H: Handlers=sysrq kbd event29
         state.enabled = True
         original_load_state = display_state.load_state
         original_sunshine_service_active = sunshine_service.is_sunshine_service_active
-        original_installation_audit = sunshine_service.sunshine_installation_audit
+        original_installation_audit = installation.sunshine_installation_audit
         dependency_patch = patch.object(diagnostics, "missing_dependencies", return_value=[])
         try:
             display_state.load_state = lambda: state
             dependency_patch.start()
             sunshine_service.is_sunshine_service_active = lambda: True
-            sunshine_service.sunshine_installation_audit = lambda unit=None: sunshine_service.make_sunshine_install_audit(
-                managed_unit=sunshine_service.SUNSHINE_UNIT,
+            installation.sunshine_installation_audit = lambda unit=None: installation.make_sunshine_install_audit(
+                managed_unit=installation.SUNSHINE_UNIT,
                 managed_type="native",
                 detected_types=["native"],
             )
@@ -539,7 +540,7 @@ H: Handlers=sysrq kbd event29
             display_state.load_state = original_load_state
             dependency_patch.stop()
             sunshine_service.is_sunshine_service_active = original_sunshine_service_active
-            sunshine_service.sunshine_installation_audit = original_installation_audit
+            installation.sunshine_installation_audit = original_installation_audit
 
         self.assertFalse(any(check["label"] == "Sunshine installation" for check in report["checks"]))
 

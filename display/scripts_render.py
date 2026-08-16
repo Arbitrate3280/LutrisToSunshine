@@ -35,8 +35,9 @@ from display.modes import (
     normalized_custom_display_mode,
     normalized_refresh_rate_sync_mode,
 )
-from display.sunshine_service import sunshine_binary, sunshine_unit
+from display.sunshine_service import sunshine_unit
 from display.utils import safe_string
+from sunshine import installation as _installation
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 
@@ -152,7 +153,7 @@ def render_managed_files(state: DisplayState) -> Dict[Path, str]:
     )
     sunshine_command = (
         safe_string(state.sunshine_execstart)
-        or sunshine_binary()
+        or _installation.sunshine_binary()
         or "sunshine"
     )
 
