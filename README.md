@@ -1,6 +1,6 @@
 # LutrisToSunshine
 
-Imports games from supported launchers into Sunshine with optional SteamGridDB cover art, plus a guided virtual-display mode for headless streaming.
+Import games from Steam, Lutris, Heroic, Bottles, Faugus, Ryubing, RetroArch, and Eden into Sunshine, add SteamGridDB covers, and stream headlessly from an isolated virtual display.
 
 <img width="1065" height="444" alt="lutristosunshine" src="https://github.com/user-attachments/assets/e4b02abd-1797-44ec-a965-856ba00e7112" />
 <img width="1648" height="439" alt="Captura_de_tela_20260324_203642" src="https://github.com/user-attachments/assets/bec9a1e3-9318-492f-bdf5-242429dc6607" />
