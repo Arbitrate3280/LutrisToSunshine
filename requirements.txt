@@ -3,3 +3,4 @@ requests
 types-requests
 types-urllib3
 Pillow
+PyYAML

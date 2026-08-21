@@ -51,23 +51,6 @@ def parse_json_output(result: subprocess.CompletedProcess) -> Any:
         print("Error parsing JSON output.")
         return None
 
-def parse_bottles_output(result: subprocess.CompletedProcess) -> List[str]:
-    """Parse the output of the Bottles list command."""
-    if result.returncode != 0:
-        print(f"Error executing Bottles command: {_output_text(result.stderr)}")
-        return []
-    lines = _output_text(result.stdout).split('\n')
-    return [line.strip('- ') for line in lines if line.startswith('-')]
-
-def parse_bottles_programs(result: subprocess.CompletedProcess) -> List[str]:
-    """Parse the output of the Bottles programs command."""
-    if result.returncode != 0:
-        print(f"Error executing Bottles command: {_output_text(result.stderr)}")
-        return []
-    lines = _output_text(result.stdout).split('\n')
-    # Skip the "Found X programs:" line, empty lines, and remove leading "- "
-    return [line.strip("- ").strip() for line in lines if line.strip() and not line.startswith("Found")]
-
 def get_games_found_message(detected_launchers: Dict[str, Any]) -> str:
     sources = [name for name in LAUNCHER_NAMES if detected_launchers.get(name)]
 
