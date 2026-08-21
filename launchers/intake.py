@@ -23,6 +23,31 @@ def detect_launchers() -> Dict[str, bool]:
     return {name: LAUNCHER_REGISTRY[name]["detect"]() for name in LAUNCHER_NAMES}
 
 
+def apply_ignores(
+    detected_launchers: Dict[str, bool],
+    ignored_sources: Iterable[str],
+) -> Tuple[Dict[str, bool], List[str]]:
+    """Zero out ignored sources from a detection map.
+
+    Returns ``(filtered_map, skipped)`` where *skipped* lists the source
+    names that were detected but ignored (in LAUNCHER_NAMES order).
+    Matching is case-insensitive so hand-edited settings still work.
+    A non-iterable *ignored_sources* is treated as empty.
+    """
+    if not isinstance(ignored_sources, (list, tuple)):
+        ignored_sources = []
+    ignored = {name.casefold() for name in ignored_sources}
+    filtered = {
+        name: detected and name.casefold() not in ignored
+        for name, detected in detected_launchers.items()
+    }
+    skipped = [
+        name for name in LAUNCHER_NAMES
+        if detected_launchers.get(name) and not filtered[name]
+    ]
+    return filtered, skipped
+
+
 def collect_games(detected_launchers: Dict[str, bool]) -> List[GameSelection]:
     with ThreadPoolExecutor() as executor:
         futures = {

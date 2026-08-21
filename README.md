@@ -35,6 +35,10 @@ python3 lutristosunshine.py
 | `--sunshine-host` | Override the Sunshine/Apollo web UI host |
 | `--sunshine-port` | Override the Sunshine web UI port (usually `47990`) |
 
+### Ignoring sources
+
+Run `python3 lutristosunshine.py ignore` to toggle which detected sources are scanned. Ignored sources are never listed, in normal runs or with `--all`.
+
 ## Virtual Display
 
 Run `python3 lutristosunshine.py display` to open an interactive menu for managing headless streaming in a separate Sway session. Audio and input stay isolated from your main desktop, so you can keep using it while someone streams a game.

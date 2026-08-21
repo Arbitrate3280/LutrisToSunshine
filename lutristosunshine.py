@@ -13,6 +13,7 @@ from utils.utils import (
 )
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, heading, muted
+from config.settings import load_settings, update_setting
 from sunshine.installation import resolve_installation, save_install_choice
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.lutris import is_lutris_running
@@ -49,6 +50,11 @@ def parse_args(argv=None):
         help="Override the Sunshine/Apollo web UI port used for auth and API calls. Usually 47990.",
     )
     subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser(
+        "ignore",
+        help="Toggle which detected game sources are scanned for games.",
+    ).set_defaults(command="ignore")
 
     display_parser = subparsers.add_parser(
         "display",
@@ -220,6 +226,47 @@ def prompt_install_choice(detected_types) -> Optional[str]:
     return detected_types[int(choice) - 1]
 
 
+def ignore_sources_flow() -> int:
+    """Interactive toggle menu for ignored game sources; saves on every toggle."""
+    detected = intake.detect_launchers()
+    available = [name for name in LAUNCHER_NAMES if detected.get(name)]
+    if not available:
+        print("No game sources detected.")
+        return 0
+
+    def toggle_validator(value: str) -> str:
+        stripped = value.strip()
+        if stripped == "":
+            return ""
+        if stripped.isdigit() and 1 <= int(stripped) <= len(available):
+            return stripped
+        raise ValueError()
+
+    while True:
+        ignored = load_settings().get("ignored_sources", [])
+        ignored = [e for e in ignored if isinstance(e, str)] if isinstance(ignored, list) else []
+        ignored_folded = {name.casefold() for name in ignored}
+
+        print("")
+        print(heading("Game sources"))
+        for index, name in enumerate(available, start=1):
+            marker = f" {muted('(ignored)')}" if name.casefold() in ignored_folded else ""
+            print(f"{accent(f'{index}.')} {name}{marker}")
+
+        choice = get_user_input(
+            f"{accent('Number to toggle, Enter to exit: ')}",
+            toggle_validator,
+            "Invalid selection.",
+        )
+        if choice == "":
+            return 0
+        name = available[int(choice) - 1]
+        if name.casefold() in ignored_folded:
+            update_setting("ignored_sources", [e for e in ignored if e.casefold() != name.casefold()])
+        else:
+            update_setting("ignored_sources", [*ignored, name])
+
+
 def main(argv=None):
     def prompt_server_connection() -> Tuple[str, int]:
         current_host, current_port = CONNECTION.get_api_connection()
@@ -264,6 +311,8 @@ def main(argv=None):
     args = parse_args(argv)
     if args.command == "display":
         raise SystemExit(handle_display_command(args))
+    if args.command == "ignore":
+        raise SystemExit(ignore_sources_flow())
     try:
         facts = resolve_installation()
         sunshine_install_type = facts.install_type
@@ -342,10 +391,19 @@ def main(argv=None):
             )
 
         detected_launchers = intake.detect_launchers()
+        detected_launchers, skipped_sources = intake.apply_ignores(
+            detected_launchers,
+            load_settings().get("ignored_sources", []),
+        )
+        if skipped_sources:
+            print(muted(f"Ignored: {', '.join(skipped_sources)} (manage with 'lutristosunshine ignore')"))
 
         if not any(detected_launchers.values()):
-            names = ", ".join(LAUNCHER_NAMES[:-1]) + " or " + LAUNCHER_NAMES[-1]
-            print(f"No {names} installation detected.")
+            if skipped_sources:
+                print("All detected sources are ignored. Run 'lutristosunshine ignore' to include some.")
+            else:
+                names = ", ".join(LAUNCHER_NAMES[:-1]) + " or " + LAUNCHER_NAMES[-1]
+                print(f"No {names} installation detected.")
             if args.all:
                 return
             print("")

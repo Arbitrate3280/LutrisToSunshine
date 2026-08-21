@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from sunshine import installation
 from sunshine.connection import CONNECTION
+from config import settings as tool_settings
 
 
 def _probes(detected_types, **kwargs):
@@ -257,7 +258,7 @@ class ResolveInstallationTests(unittest.TestCase):
                 json.dumps({"sunshine": {"install_type": "native"}}),
                 encoding="utf-8",
             )
-            with patch.object(
+            with patch.object(tool_settings, "SETTINGS_DIR", raw), patch.object(
                 installation,
                 "probe_packages",
                 return_value=_probes(
@@ -282,7 +283,7 @@ class ResolveInstallationTests(unittest.TestCase):
                 json.dumps({"sunshine": {"install_type": "appimage"}}),
                 encoding="utf-8",
             )
-            with patch.object(
+            with patch.object(tool_settings, "SETTINGS_DIR", raw), patch.object(
                 installation,
                 "probe_packages",
                 return_value=_probes(
@@ -304,61 +305,69 @@ class ResolveInstallationTests(unittest.TestCase):
 class InstallChoicePersistenceTests(unittest.TestCase):
     def test_round_trip_preserves_other_settings(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            (root / "server_connection.json").write_text(
-                json.dumps(
+            with patch.object(tool_settings, "SETTINGS_DIR", raw):
+                tool_settings.save_settings(
                     {
-                        "sunshine": {"host": "192.168.1.10", "port": 47990},
-                        "apollo": {"host": "localhost", "port": 47989},
+                        "servers": {
+                            "sunshine": {"host": "192.168.1.10", "port": 47990},
+                            "apollo": {"host": "localhost", "port": 47989},
+                        }
                     }
-                ),
-                encoding="utf-8",
-            )
-            with patch.object(
-                installation, "detect_sunshine_config_root", return_value=root
-            ):
+                )
                 installation.save_install_choice("native")
                 saved = json.loads(
-                    (root / "server_connection.json").read_text(encoding="utf-8")
+                    (Path(raw) / "settings.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(
                     installation.load_install_choice(["flatpak", "native"]), "native"
                 )
 
-        self.assertEqual(saved["sunshine"]["install_type"], "native")
-        self.assertEqual(saved["sunshine"]["host"], "192.168.1.10")
-        self.assertEqual(saved["sunshine"]["port"], 47990)
-        self.assertEqual(saved["apollo"], {"host": "localhost", "port": 47989})
+        self.assertEqual(saved["sunshine_install"], "native")
+        self.assertEqual(saved["servers"]["sunshine"]["host"], "192.168.1.10")
+        self.assertEqual(saved["servers"]["apollo"], {"host": "localhost", "port": 47989})
 
-    def test_save_creates_missing_config_root(self):
+    def test_save_creates_missing_settings_dir(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw) / "sunshine"
-            with patch.object(
-                installation, "detect_sunshine_config_root", return_value=root
-            ):
+            nested = str(Path(raw) / "lutristosunshine")
+            with patch.object(tool_settings, "SETTINGS_DIR", nested):
                 installation.save_install_choice("flatpak")
             saved = json.loads(
-                (root / "server_connection.json").read_text(encoding="utf-8")
+                (Path(nested) / "settings.json").read_text(encoding="utf-8")
             )
 
-        self.assertEqual(saved["sunshine"]["install_type"], "flatpak")
+        self.assertEqual(saved["sunshine_install"], "flatpak")
 
-    def test_save_drops_stale_choice(self):
+    def test_legacy_server_connection_file_still_read(self):
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
+            root = Path(raw) / "legacy-root"
+            root.mkdir()
             (root / "server_connection.json").write_text(
                 json.dumps({"sunshine": {"install_type": "appimage"}}),
                 encoding="utf-8",
             )
-            with patch.object(
+            with patch.object(tool_settings, "SETTINGS_DIR", raw), patch.object(
+                installation, "detect_sunshine_config_root", return_value=root
+            ):
+                self.assertEqual(
+                    installation.load_install_choice(["flatpak", "appimage"]),
+                    "appimage",
+                )
+
+    def test_new_store_wins_over_legacy_choice(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "legacy-root"
+            root.mkdir()
+            (root / "server_connection.json").write_text(
+                json.dumps({"sunshine": {"install_type": "appimage"}}),
+                encoding="utf-8",
+            )
+            with patch.object(tool_settings, "SETTINGS_DIR", raw), patch.object(
                 installation, "detect_sunshine_config_root", return_value=root
             ):
                 installation.save_install_choice("native")
-                saved = json.loads(
-                    (root / "server_connection.json").read_text(encoding="utf-8")
+                self.assertEqual(
+                    installation.load_install_choice(["flatpak", "native"]), "native"
                 )
-
-        self.assertEqual(saved["sunshine"]["install_type"], "native")
 
 
 class SunshineConfigRootTests(unittest.TestCase):

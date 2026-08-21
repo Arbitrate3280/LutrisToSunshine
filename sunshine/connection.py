@@ -15,6 +15,7 @@ import urllib3  # type: ignore[import-not-found]
 from requests.utils import cookiejar_from_dict, dict_from_cookiejar  # type: ignore[import-untyped]
 
 from config.constants import DEFAULT_SUNSHINE_HOST, DEFAULT_SUNSHINE_PORT
+from config.settings import load_settings, update_setting
 from utils.utils import run_command
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -144,6 +145,15 @@ class SunshineConnection:
         return os.path.join(self.get_config_root(), "credentials")
 
     def _load_api_connection_settings(self) -> Dict[str, Dict[str, object]]:
+        """Saved per-server connections from the tool settings store.
+
+        Falls back to the legacy ``server_connection.json`` inside the
+        Sunshine config root when the store has no servers yet, so
+        pre-existing installs keep their saved host/port.
+        """
+        servers = load_settings().get("servers")
+        if isinstance(servers, dict) and servers:
+            return servers
         path = os.path.join(self.get_config_root(), "server_connection.json")
         if not os.path.exists(path):
             return {}
@@ -157,14 +167,14 @@ class SunshineConnection:
     def save_api_connection(self, host: Optional[str], port: Optional[object], server_name: Optional[str] = None) -> None:
         target = (server_name or self.server_name or "sunshine").strip().lower()
         current_host, current_port = self.get_api_connection(server_name=target)
-        settings = self._load_api_connection_settings()
-        settings[target] = {
+        servers = load_settings().get("servers")
+        if not isinstance(servers, dict):
+            servers = {}
+        servers[target] = {
             "host": self._normalize_api_host(host if host is not None else current_host),
             "port": self._normalize_api_port(port if port is not None else current_port),
         }
-        os.makedirs(self.get_config_root(), exist_ok=True)
-        with open(os.path.join(self.get_config_root(), "server_connection.json"), "w", encoding="utf-8") as file:
-            json.dump(settings, file, indent=2)
+        update_setting("servers", servers)
 
     def detect_apollo_installation(self) -> bool:
         return shutil.which("apollo") is not None

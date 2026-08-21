@@ -7,8 +7,8 @@ install audit consumed by doctor output.
 
 Resolution is stateless: every :func:`resolve_installation` call runs
 one full probe pass; nothing is cached.  Multiple detections require
-an explicit user choice, persisted in ``server_connection.json``
-inside the existence-based config root; this module never prompts.
+an explicit user choice, persisted in the tool settings store
+(``~/.config/lutristosunshine/settings.json``); this module never prompts.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple, TypedDict
 
 from display.utils import safe_string
+from config.settings import load_settings, update_setting
 from utils.utils import run_command
 
 SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
@@ -443,8 +444,8 @@ def _install_choice_path() -> Path:
     return Path(detect_sunshine_config_root()) / INSTALL_CHOICE_FILENAME
 
 
-def load_install_choice(detected_types: List[str]) -> Optional[str]:
-    """Return the saved install choice if it is still valid, else ``None``."""
+def _legacy_install_choice() -> Optional[str]:
+    """Read the install choice from the pre-settings.json location."""
     try:
         settings = json.loads(_install_choice_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -455,28 +456,22 @@ def load_install_choice(detected_types: List[str]) -> Optional[str]:
     if not isinstance(sunshine_section, dict):
         return None
     saved = sunshine_section.get("install_type")
+    return saved if isinstance(saved, str) else None
+
+
+def load_install_choice(detected_types: List[str]) -> Optional[str]:
+    """Return the saved install choice if it is still valid, else ``None``."""
+    saved = load_settings().get("sunshine_install")
+    if not isinstance(saved, str):
+        saved = _legacy_install_choice()
     if isinstance(saved, str) and saved in detected_types:
         return saved
     return None
 
 
 def save_install_choice(install_type: str) -> None:
-    """Persist the user's install choice, preserving other settings keys."""
-    path = _install_choice_path()
-    os.makedirs(path.parent, exist_ok=True)
-    settings: dict = {}
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            settings = loaded
-    except (OSError, ValueError):
-        pass
-    sunshine_section = settings.get("sunshine")
-    if not isinstance(sunshine_section, dict):
-        sunshine_section = {}
-    sunshine_section["install_type"] = install_type
-    settings["sunshine"] = sunshine_section
-    path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    """Persist the user's install choice to the tool settings store."""
+    update_setting("sunshine_install", install_type)
 
 
 def resolve_installation() -> SunshineInstallation:
