@@ -89,6 +89,7 @@ def temp_display_state(
             "audio_module_file",
             "wireplumber_policy_script",
             "wireplumber_policy_conf",
+            "sunshine_conf",
         ):
             if key in extra_paths:
                 target = extra_paths[key]
