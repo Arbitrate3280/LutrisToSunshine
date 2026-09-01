@@ -54,7 +54,7 @@ The menu includes:
 - **Status dashboard** — health overview, input isolation state, and more
 - **Advanced tools** — logs and full teardown
 
-Requires `sway` and `xdg-desktop-portal-wlr`.
+Requires `sway`.
 
 ## Binary Release
 
