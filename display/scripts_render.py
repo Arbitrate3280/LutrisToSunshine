@@ -47,7 +47,7 @@ _TEMPLATE_FILES = {
     "sway_start_script": "sway_start.sh",
     "sunshine_start_script": "sunshine_start.sh",
     "sunshine_wrapper_script": "sunshine_wrapper.sh",
-    "kwin_input_isolation_script": "kwin_input_isolation.py",
+    "kwin_input_isolation_script": "kwin_input_isolation.py.template",
     "headless_prep_script": "headless_prep.sh",
     "launch_app_script": "launch_app.sh",
     "get_gpu_addr": "get_gpu_addr.sh",

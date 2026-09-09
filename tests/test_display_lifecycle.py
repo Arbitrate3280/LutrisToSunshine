@@ -99,6 +99,12 @@ class DisplayLifecycleTests(unittest.TestCase):
         self.assertEqual(status["failed_devices"], [])
         self.assertEqual(status["last_error"], "")
 
+    def test_template_files_have_no_python_suffix(self) -> None:
+        # Nuitka onefile silently drops .py files from --include-data-dir
+        # payloads; template names must stay non-.py so bundles include them.
+        for name in scripts_render._TEMPLATE_FILES.values():
+            self.assertFalse(name.endswith(".py"), name)
+
     def test_kwin_input_isolation_script_bakes_host_session_family(self) -> None:
         state = manager._default_state()
         with patch.dict(
