@@ -9,6 +9,7 @@ import requests  # type: ignore[import-untyped]
 
 from display.app_transform import normalize_app_payload, transform_app_for_display
 from display.command_wrap import get_app_prep_commands, wrap_command
+from display.constants import FLATPAK_SPAWN_HOST_PREFIX
 from display.state import is_enabled as display_enabled
 from config.types import SunshineApp, SunshineAppReference, SunshinePrepCommand
 from sunshine.connection import CONNECTION, SunshineConnection
@@ -140,6 +141,61 @@ def get_existing_apps(*, connection: SunshineConnection = CONNECTION) -> List[Su
     return [{"name": app["name"]} for app in apps if isinstance(app.get("name"), str)]
 
 
+_HOST_PREFIX = shlex.join(FLATPAK_SPAWN_HOST_PREFIX)
+
+
+def _escaped_for_host(value: str) -> str:
+    """Escape one command to the host (idempotent, no-op on empty)."""
+    if not value or value.startswith(_HOST_PREFIX + " "):
+        return value
+    try:
+        return shlex.join([*FLATPAK_SPAWN_HOST_PREFIX, *shlex.split(value)])
+    except ValueError:
+        return f"{_HOST_PREFIX} {value}"
+
+
+def _stripped_from_host(value: str) -> str:
+    """Remove our host escape (inverse of :func:`_escaped_for_host`)."""
+    prefix = _HOST_PREFIX + " "
+    return value[len(prefix):] if value.startswith(prefix) else value
+
+
+def _map_prep_cmds(app: SunshineApp, fn: Callable[[str], str]) -> SunshineApp:
+    """Copy ``app`` with ``fn`` applied to each prep command's do/undo."""
+    app = dict(app)
+    app["prep-cmd"] = [
+        {**entry, "do": fn(entry.get("do", "")), "undo": fn(entry.get("undo", ""))}
+        if isinstance(entry, dict) else entry
+        for entry in app.get("prep-cmd") or []
+    ]
+    return app
+
+
+def _finalize_for_installation(app: SunshineApp, installation_type: Optional[str]) -> SunshineApp:
+    """Escape an app payload's cmd + prep commands to the host when Flatpak.
+
+    Commands run in Sunshine's environment (the sandbox when Flatpak), so host
+    paths need the escape. Idempotent; no-op for any other install type.
+    """
+    if installation_type != "flatpak":
+        return app
+    app = _map_prep_cmds(app, _escaped_for_host)
+    app["cmd"] = _escaped_for_host(app.get("cmd") or "")
+    return app
+
+
+def _unescaped_for_transform(app: SunshineApp) -> SunshineApp:
+    """Copy ``app`` with our escape removed from cmd + prep commands.
+
+    Lets reconcile compare/transform idempotently: strip before matching
+    (so the wrapper detection sees through the escape), re-add after
+    via :func:`_finalize_for_installation`.
+    """
+    app = _map_prep_cmds(app, _stripped_from_host)
+    app["cmd"] = _stripped_from_host(app.get("cmd") or "")
+    return app
+
+
 def submit_command(
     game_name: str,
     command: str,
@@ -152,15 +208,11 @@ def submit_command(
     api_add_fn: ApiAdder = add_game_to_sunshine_api,
 ) -> None:
     enabled = connection.server_name == "sunshine" and display_enabled_fn()
-    if connection.installation_type == "flatpak":
-        try:
-            command = shlex.join(["flatpak-spawn", "--host", *shlex.split(command)])
-        except ValueError:
-            command = f"flatpak-spawn --host {command}"
     if enabled:
         command = wrap_fn(command, "cmd") or command
     prep_cmd = prep_fn(enabled) if enabled else []
-    api_add_fn(game_name, command, image_path, prep_cmd=prep_cmd, detached=[])
+    finalized = _finalize_for_installation({"cmd": command, "prep-cmd": prep_cmd}, connection.installation_type)
+    api_add_fn(game_name, finalized["cmd"], image_path, prep_cmd=finalized["prep-cmd"], detached=[])
 
 
 def get_display_blocked_apps() -> Tuple[List[Tuple[str, str]], Optional[str]]:
@@ -178,9 +230,17 @@ def reconcile_display_apps(
         return 0, error
     display_is_enabled = display_enabled_fn()
     updated_count = 0
+    flatpak = connection.installation_type == "flatpak"
     for app in apps:
+        if flatpak:
+            app = _unescaped_for_transform(app)
         transformed = transform_app_for_display(app, enable_display, display_is_enabled)
-        if transformed == normalize_app_payload(app):
+        if flatpak:
+            transformed = _finalize_for_installation(transformed, "flatpak")
+            compared = _unescaped_for_transform(transformed)
+        else:
+            compared = transformed
+        if compared == normalize_app_payload(app):
             continue
         _, update_error = connection.api_request("POST", "/api/apps", json=transformed)
         if update_error:

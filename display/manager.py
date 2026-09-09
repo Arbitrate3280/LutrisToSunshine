@@ -330,11 +330,6 @@ def display_doctor_report() -> DoctorReport:
 
     return diagnostics.display_doctor_report(display_snapshot())
 
-def display_status() -> int:
-    """Compatibility entry point; presentation lives in :mod:`display.hub`."""
-    from display.hub import status
-
-    return status()
 def display_logs(lines: int = 80) -> int:
     return _svc.fetch_sunshine_journal(lines).returncode
 

@@ -40,8 +40,7 @@ SUNSHINE_OWNED_SINK_NAMES = [
 
 # ponytail: shell-side flatpak option parser.  @FLAGS@ and @VALUE_OPTS@ are
 # rendered at script-generation time from the same FLATPAK_FLAG_OPTIONS /
-# FLATPAK_VALUE_OPTIONS constants that display.manager._parse_flatpak_run_command
-# uses.  If the parser's option sets change, this heredoc picks up the change
+# FLATPAK_VALUE_OPTIONS constants in display.audio_policy.  If the parser's option sets change, this heredoc picks up the change
 # automatically via the shared constants — but the two parsers' logic
 # (option boundary, --env handling) must stay in sync.
 _INJECT_FLATPAK_AUDIO_ENV_HEREDOC = """\

@@ -1,4 +1,3 @@
-import json
 import subprocess
 import sys
 from typing import Any, Dict, List, Sequence, Tuple
@@ -39,17 +38,6 @@ def _output_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode(errors="replace")
     return str(value or "")
-
-def parse_json_output(result: subprocess.CompletedProcess) -> Any:
-    """Parse JSON output from a command, handling errors."""
-    if result.returncode != 0:
-        print(f"Error executing command: {_output_text(result.stderr)}")
-        return None
-    try:
-        return json.loads(_output_text(result.stdout))
-    except json.JSONDecodeError:
-        print("Error parsing JSON output.")
-        return None
 
 def get_games_found_message(detected_launchers: Dict[str, Any]) -> str:
     sources = [name for name in LAUNCHER_NAMES if detected_launchers.get(name)]

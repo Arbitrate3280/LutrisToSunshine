@@ -195,15 +195,3 @@ def transform_app_for_display(
         updated["cmd"], updated["detached"] = disable_display_launch(updated)
     updated["prep-cmd"] = normalize_prep_cmd(updated, enable_display, display_enabled)
     return updated
-
-
-def iter_unwrapped_app_commands(app: SunshineApp) -> List[str]:
-    commands: List[str] = []
-    cmd, _ = unwrap_with_origin(app.get("cmd") or "", "cmd")
-    if cmd:
-        commands.append(cmd)
-    for command in app.get("detached") or []:
-        unwrapped, _ = unwrap_with_origin(command, "detached")
-        if unwrapped:
-            commands.append(unwrapped)
-    return commands

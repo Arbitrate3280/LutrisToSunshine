@@ -100,51 +100,6 @@ def get_retroarch_cores_directory() -> str:
     return default_dir
 
 
-def resolve_core_path(core_path: Optional[str], core_name: Optional[str]) -> Optional[str]:
-    """Determine the actual core path to use when launching RetroArch."""
-    if core_path:
-        expanded = os.path.expanduser(core_path)
-        if expanded.upper() not in ("DETECT", "", "NULL"):
-            return expanded
-
-    if not core_name:
-        return None
-
-    cores_dir = get_retroarch_cores_directory()
-    sanitized = (
-        core_name.lower()
-        .replace(" ", "_")
-        .replace("-", "_")
-        .replace("(", "")
-        .replace(")", "")
-    )
-    sanitized_compact = sanitized.replace("_", "")
-
-    candidate_files = [
-        f"{sanitized}_libretro.so",
-        f"{sanitized}.so",
-    ]
-
-    if cores_dir:
-        for candidate in candidate_files:
-            candidate_path = candidate if os.path.isabs(candidate) else os.path.join(cores_dir, candidate)
-            if os.path.isfile(candidate_path):
-                return candidate_path
-
-        if os.path.isdir(cores_dir):
-            for entry in os.listdir(cores_dir):
-                if not entry.endswith(".so"):
-                    continue
-                entry_compact = entry.lower().replace("_", "").replace("-", "").replace(" ", "")
-                if sanitized_compact in entry_compact:
-                    return os.path.join(cores_dir, entry)
-
-        # As a last resort, return the guessed path even if it cannot be verified
-        first_candidate = candidate_files[0]
-        return first_candidate if os.path.isabs(first_candidate) else os.path.join(cores_dir, first_candidate)
-
-    return None
-
 def get_retroarch_command() -> str:
     """Get the RetroArch command based on installation type."""
     # Check for Flatpak installation
