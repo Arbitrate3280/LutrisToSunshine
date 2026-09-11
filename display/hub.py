@@ -17,7 +17,6 @@ from display.manager import (
     refresh_managed_files,
     remove_display,
     restart_display,
-    set_custom_display_mode,
     set_dynamic_mangohud_fps_limit,
     set_renderer_mode,
     set_refresh_rate_sync_mode,

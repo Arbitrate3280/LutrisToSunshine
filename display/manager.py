@@ -1,80 +1,43 @@
-import glob
-import grp
-import hashlib
 import os
-import pwd
-import shlex
 import shutil
 import stat
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from display import audio_policy
 from display import input_isolation as _input_isolation
 from display import state as _state
 from display import sunshine_service as _svc
-from display.utils import run_command, safe_string
 from display import scripts_render
 from display.diagnostics import DisplaySnapshot, DoctorReport
 from display.modes import DisplayMode
-from display.state import DisplayPaths, DisplayState, build_paths, default_state, load_state, save_state
+from display.state import DisplayState, default_state
 from sunshine import installation
 _default_state = default_state
 from display.input_isolation import (
     clean_kde_libinput_config as _clean_kde_libinput_config,
-    current_user_group,
-    current_user_name,
-    empty_kwin_input_isolation_status as _empty_kwin_input_isolation_status,
-    host_session_name as _host_session_name,
     input_isolation_mode as _input_isolation_mode,
     install_udev_rule as _install_udev_rule,
     kwin_input_isolation_status as _kwin_input_isolation_status,
     remove_udev_rule as _remove_udev_rule,
-    sunshine_virtual_input_devices as _sunshine_virtual_input_devices,
     udev_rule as _udev_rule,
 )
 
 
 from display.constants import (
-    AUDIO_MODULE_PATH,
     BIN_ROOT,
-    CONFIG_ROOT,
     DISPLAY_ROOT,
-    DISPLAY_SOCKET_PATH,
-    DISPLAY_STATE_PATH,
     FALLBACK_FPS,
     FALLBACK_HEIGHT,
     FALLBACK_WIDTH,
     FLATPAK_FLAG_OPTIONS,
     FLATPAK_PORTAL_ENV_KEYS,
-    FLATPAK_PORTAL_RESTORE_GRACE,
-    FLATPAK_PORTAL_SPAWN_TIMEOUT,
-    FLATPAK_PORTAL_SWITCH_TIMEOUT,
-    FLATPAK_PORTAL_UNIT,
-    FLATPAK_SPAWN_HOST_PREFIX,
     FLATPAK_VALUE_OPTIONS,
-    FLATPAK_VALUE_PREFIXES,
-    LAST_LAUNCH_LOG_PATH,
-    LEGACY_DISPLAY_DIRNAME,
     LEGACY_DISPLAY_ROOT,
-    LEGACY_STATE_PATH,
-    PORTAL_ACTIVE_PATH,
-    PORTAL_LOCK_PATH,
-    PROFILE_NAME,
     PROFILE_ROOT,
-    REFRESH_RATE_SYNC_MODES,
-    SUNSHINE_INPUT_NAME_MARKERS,
-    SUNSHINE_INPUT_PRODUCT_ID,
-    SUNSHINE_INPUT_VENDOR_ID,
-    UDEV_RULE_PATH,
-    VIRTUALDISPLAY_SANDBOX_UNSET_VARS,
-    WAYLAND_DISPLAY_PATH,
-    _PCI_IDS_PATHS,
 )
 from display.modes import (
-    format_refresh_rate_hz as _format_refresh_rate_hz,
     normalized_custom_display_mode as _normalized_custom_display_mode,
     normalized_refresh_rate_sync_mode as _normalized_refresh_rate_sync_mode,
 )

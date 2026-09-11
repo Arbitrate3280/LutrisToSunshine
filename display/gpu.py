@@ -2,7 +2,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 
 from display.constants import _PCI_IDS_PATHS
 from display.state import DisplayState, load_state, save_state

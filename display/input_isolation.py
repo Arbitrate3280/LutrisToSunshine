@@ -6,7 +6,7 @@ import pwd
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Dict, List, Optional, TypedDict
 
 from display.constants import (
     SUNSHINE_INPUT_PRODUCT_ID,

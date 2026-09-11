@@ -7,8 +7,6 @@ import shlex
 
 from config.types import GameSelection, LauncherSource
 
-from utils.utils import run_command
-
 SUPPORTED_EXTENSIONS = (".nsp", ".xci", ".nca", ".nro")
 TITLE_ID_PATTERN = re.compile(r"\[([0-9A-Fa-f]{16})\]")
 

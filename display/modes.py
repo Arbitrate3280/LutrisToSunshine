@@ -1,5 +1,5 @@
 """Pure display-mode normalization functions (no side effects)."""
-from typing import Any, Dict, TypedDict
+from typing import Any, TypedDict
 
 from display.constants import FALLBACK_FPS, FALLBACK_HEIGHT, FALLBACK_WIDTH, REFRESH_RATE_SYNC_MODES
 from display.utils import safe_string

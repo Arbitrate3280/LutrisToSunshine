@@ -10,7 +10,6 @@ exposes the audio-policy interface.
 """
 
 import json
-import os
 import shlex
 import shutil
 import subprocess
@@ -21,10 +20,8 @@ from display.utils import safe_string
 from display.state import DisplayState
 from display.utils import run_command
 from display.constants import (
-    WIREPLUMBER_CONF_DIR,
     WIREPLUMBER_POLICY_CONF_NAME,
     WIREPLUMBER_POLICY_SCRIPT_NAME,
-    WIREPLUMBER_SCRIPTS_DIR,
 )
 
 # WirePlumber loads user scripts from XDG_DATA and merges XDG_CONFIG fragments.
