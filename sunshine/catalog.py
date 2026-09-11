@@ -9,7 +9,7 @@ import requests  # type: ignore[import-untyped]
 
 from display.app_transform import normalize_app_payload, transform_app_for_display
 from display.command_wrap import get_app_prep_commands, wrap_command
-from display.constants import FLATPAK_SPAWN_HOST_PREFIX
+from display.constants import BIN_ROOT, FLATPAK_SPAWN_HOST_PREFIX
 from display.state import is_enabled as display_enabled
 from config.types import SunshineApp, SunshineAppReference, SunshinePrepCommand
 from sunshine.connection import CONNECTION, SunshineConnection
@@ -142,11 +142,29 @@ def get_existing_apps(*, connection: SunshineConnection = CONNECTION) -> List[Su
 
 
 _HOST_PREFIX = shlex.join(FLATPAK_SPAWN_HOST_PREFIX)
+_MANAGED_BIN = str(BIN_ROOT)
+
+
+def _routes_through_managed_scripts(value: str) -> bool:
+    """Check whether the command invokes a managed script under BIN_ROOT."""
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return "lutristosunshine-" in value
+    return any(
+        token == _MANAGED_BIN or token.startswith(_MANAGED_BIN + "/")
+        for token in tokens
+    )
 
 
 def _escaped_for_host(value: str) -> str:
     """Escape one command to the host (idempotent, no-op on empty)."""
     if not value or value.startswith(_HOST_PREFIX + " "):
+        return value
+    # ponytail: managed scripts hop to the host themselves (forwarding
+    # SUNSHINE_CLIENT_*); a bare escape here would drop that env and
+    # set-resolution would no-op, sticking the display at fallback.
+    if _routes_through_managed_scripts(value):
         return value
     try:
         return shlex.join([*FLATPAK_SPAWN_HOST_PREFIX, *shlex.split(value)])
