@@ -41,7 +41,6 @@ def get_heroic_command() -> Tuple[Optional[str], Optional[str]]:
     else:
         return None, None
 
-    return f"{base_cmd} {args}".strip(), installation_type
 
 def list_heroic_games() -> List[Tuple[str, str, str, str]]:
     """List all games in Heroic."""

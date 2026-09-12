@@ -180,17 +180,6 @@ def probe_packages() -> SunshinePackageProbes:
     )
 
 
-def preferred_install_type(detected_types: List[str]) -> Optional[str]:
-    """Return the preferred installation type based on detected types.
-
-    Preference order: flatpak -> homebrew -> native -> appimage.
-    """
-    for t in ("flatpak", "homebrew", "native", "appimage"):
-        if t in detected_types:
-            return t
-    return None
-
-
 def preferred_launch_binary(probes: SunshinePackageProbes) -> Optional[str]:
     """Return the preferred binary path/command to run Sunshine.
 

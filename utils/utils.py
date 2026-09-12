@@ -34,11 +34,6 @@ def run_command(
         return subprocess.CompletedProcess(argv, 127, "", str(error))
 
 
-def _output_text(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    return str(value or "")
-
 def get_games_found_message(detected_launchers: Dict[str, Any]) -> str:
     sources = [name for name in LAUNCHER_NAMES if detected_launchers.get(name)]
 

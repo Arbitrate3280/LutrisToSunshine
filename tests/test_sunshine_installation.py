@@ -104,9 +104,6 @@ class HomebrewPackageProbeTests(unittest.TestCase):
             "/home/linuxbrew/.linuxbrew/opt/sunshine/bin/sunshine",
         )
         self.assertIn("homebrew", probes.detected_types)
-        self.assertEqual(
-            installation.preferred_install_type(probes.detected_types), "homebrew"
-        )
 
     def test_homebrew_detection_returns_homebrew_for_beta_formula(self):
         probes = self._patched_probes(
@@ -125,9 +122,6 @@ class HomebrewPackageProbeTests(unittest.TestCase):
             probes.homebrew_binary,
             "/home/linuxbrew/.linuxbrew/opt/sunshine-beta/bin/sunshine",
         )
-        self.assertEqual(
-            installation.preferred_install_type(probes.detected_types), "homebrew"
-        )
 
     def test_homebrew_preferred_before_generic_native(self):
         probes = self._patched_probes(
@@ -142,9 +136,6 @@ class HomebrewPackageProbeTests(unittest.TestCase):
             access_results={"bin/sunshine": True},
         )
         self.assertEqual(probes.detected_types, ["homebrew", "native"])
-        self.assertEqual(
-            installation.preferred_install_type(probes.detected_types), "homebrew"
-        )
 
     def test_homebrew_detection_skips_formula_when_binary_missing(self):
         probes = self._patched_probes(
@@ -165,9 +156,6 @@ class HomebrewPackageProbeTests(unittest.TestCase):
     def test_no_brew_falls_through_to_native(self):
         probes = self._patched_probes(brew=None)
         self.assertEqual(probes.detected_types, ["native"])
-        self.assertEqual(
-            installation.preferred_install_type(probes.detected_types), "native"
-        )
 
 
 class ResolveInstallationTests(unittest.TestCase):

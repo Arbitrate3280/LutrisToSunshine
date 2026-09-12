@@ -80,26 +80,6 @@ def get_retroarch_playlist_directory() -> str:
     return os.path.join(config_path, "playlists")
 
 
-def get_retroarch_cores_directory() -> str:
-    """Resolve the directory where RetroArch cores are stored."""
-    configured = _parse_config_value("libretro_directory")
-    if configured:
-        return configured
-
-    config_path = get_retroarch_config_path()
-    default_dir = os.path.join(config_path, "cores")
-    if os.path.isdir(default_dir):
-        return default_dir
-
-    # Flatpak ships cores under /app directories when launched through flatpak
-    # but from the host we do not have direct access; still, passing this path
-    # through works for the launched process.
-    if run_command(["flatpak", "info", RETROARCH_FLATPAK_ID]).returncode == 0:
-        return "/app/libretro"
-
-    return default_dir
-
-
 def get_retroarch_command() -> str:
     """Get the RetroArch command based on installation type."""
     # Check for Flatpak installation
