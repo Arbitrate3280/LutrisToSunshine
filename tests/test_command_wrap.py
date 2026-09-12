@@ -77,5 +77,35 @@ class GetAppPrepCommandsTests(unittest.TestCase):
               "undo": str(command_wrap.BIN_ROOT / "lutristosunshine-reset-resolution.sh")}],
         )
 
+
+class RoutesThroughManagedScriptsTests(unittest.TestCase):
+    SCRIPT = str(command_wrap.BIN_ROOT / "lutristosunshine-set-resolution.sh")
+
+    def test_matches_bare_and_escaped_and_prefixed(self):
+        for command in (
+            self.SCRIPT,
+            f"flatpak-spawn --host {self.SCRIPT}",
+            f"flatpak-spawn --host env SWAYSOCK=/run/x {self.SCRIPT}",
+            f"env FOO=bar {self.SCRIPT} 2560 1440",
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(command_wrap.routes_through_managed_scripts(command))
+
+    def test_ignores_foreign_commands(self):
+        for command in (
+            "",
+            "lutris lutris:rungame/test",
+            "notify-send hi",
+            # Merely mentioning our prefix is not our script.
+            "my-game lutristosunshine-fan-mod",
+            f"{command_wrap.BIN_ROOT}-backup/tool.sh",
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(command_wrap.routes_through_managed_scripts(command))
+
+    def test_unparseable_command_falls_back_to_prefix_scan(self):
+        self.assertTrue(command_wrap.routes_through_managed_scripts(f"sh -c '{self.SCRIPT}"))
+        self.assertFalse(command_wrap.routes_through_managed_scripts("sh -c 'echo oops"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,26 @@ from typing import Dict, List, Optional
 CONFIG_ROOT = Path("~/.config/lutristosunshine").expanduser()
 BIN_ROOT = CONFIG_ROOT / "bin"
 HEADLESS_PREP_PREFIX = "headless:"
+_MANAGED_BIN_ROOT = str(BIN_ROOT)
+
+
+def routes_through_managed_scripts(value: str) -> bool:
+    """Check whether a command invokes a script under :data:`BIN_ROOT`.
+
+    Matches any invocation form (bare path, ``flatpak-spawn --host`` escape,
+    ``env`` prefix), so callers can recognise tool-owned commands in payloads
+    written by older releases instead of relying on exact string equality.
+    """
+    if not value:
+        return False
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return "lutristosunshine-" in value
+    return any(
+        token == _MANAGED_BIN_ROOT or token.startswith(_MANAGED_BIN_ROOT + "/")
+        for token in tokens
+    )
 
 
 def get_launch_app_script() -> str:

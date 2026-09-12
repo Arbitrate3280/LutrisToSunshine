@@ -16,23 +16,12 @@ from display.command_wrap import (
     get_wrapped_command_origin,
     is_headless_prep_wrapped,
     is_wrapped_command,
+    routes_through_managed_scripts,
     unwrap_command,
     unwrap_headless_prep_command,
     wrap_command,
     wrap_headless_prep_command,
 )
-
-
-def get_display_prep_scripts(display_enabled: bool) -> set:
-    managed_scripts = set()
-    for command in get_app_prep_commands(display_enabled):
-        do_cmd = command.get("do", "")
-        undo_cmd = command.get("undo", "")
-        if do_cmd:
-            managed_scripts.add(do_cmd)
-        if undo_cmd:
-            managed_scripts.add(undo_cmd)
-    return managed_scripts
 
 
 def normalize_single_prep_command(command: str, enable_display: bool) -> str:
@@ -64,14 +53,15 @@ def normalize_prep_cmd(
     display_enabled: bool,
 ) -> List[SunshinePrepCommand]:
     prep_cmd = app.get("prep-cmd") or []
-    managed_scripts = get_display_prep_scripts(display_enabled)
     filtered: List[SunshinePrepCommand] = []
     for command in prep_cmd:
         if not isinstance(command, dict):
             continue
         do_cmd = command.get("do", "")
         undo_cmd = command.get("undo", "")
-        if do_cmd in managed_scripts or undo_cmd in managed_scripts:
+        # Tool-owned prep commands are re-added below in canonical form; drop
+        # any earlier copy, however it was invoked (raw or host-escaped).
+        if routes_through_managed_scripts(do_cmd) or routes_through_managed_scripts(undo_cmd):
             continue
         normalized: SunshinePrepCommand = dict(command)
         normalized["do"] = normalize_single_prep_command(do_cmd, enable_display)
