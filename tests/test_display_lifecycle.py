@@ -26,7 +26,12 @@ from display import input_isolation
 from display import scripts_render
 from display import sunshine_service
 from sunshine import installation
-from tests._display_test_helpers import patched, temp_display_state
+from tests._display_test_helpers import (
+    assert_state_paths_under,
+    patched,
+    redirect_state_paths,
+    temp_display_state,
+)
 
 
 class DisplayLifecycleTests(unittest.TestCase):
@@ -42,12 +47,17 @@ class DisplayLifecycleTests(unittest.TestCase):
     def _temp_audio_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        conf_path = Path(tempdir.name) / "sunshine.conf"
+        base = Path(tempdir.name)
+        conf_path = base / "sunshine.conf"
         conf_path.write_text(config_text, encoding="utf-8")
 
         state = manager._default_state()
         state.enabled = True
         state.paths = DisplayPaths(**asdict(state.paths))
+        # stop_display runs the rendered cleanup script through
+        # state.paths.audio_cleanup_script; leaving the real paths here
+        # unloads the developer's live audio sink and deletes its module file.
+        redirect_state_paths(state, base)
         state.paths.sunshine_conf = str(conf_path)
         return state, conf_path
 
@@ -284,6 +294,7 @@ H: Handlers=sysrq kbd event29
         override_dir.mkdir(parents=True)
 
         state.paths = DisplayPaths(**asdict(state.paths))
+        redirect_state_paths(state, base)
         state.paths.state_path = str(base / "display.json")
         state.paths.systemd_user_dir = str(base)
         state.paths.sunshine_override_dir = str(override_dir)
@@ -967,6 +978,10 @@ H: Handlers=sysrq kbd event29
         self.addCleanup(_remove_tempdir.cleanup)
         _remove_base = Path(_remove_tempdir.name)
         state.paths = DisplayPaths(**asdict(state.paths))
+        # remove_display unlinks managed + legacy paths; without this the real
+        # ~/.config/lutristosunshine files would be deleted by the test run.
+        redirect_state_paths(state, _remove_base)
+        assert_state_paths_under(state, _remove_base)
         for _key in (
             "state_path", "sway_config", "sway_start_script", "sunshine_start_script",
             "sunshine_wrapper_script",
@@ -1092,6 +1107,23 @@ H: Handlers=sysrq kbd event29
             for path in legacy:
                 self.assertFalse(path.exists(), f"{path.name} survived reset")
             self.assertTrue(keepsake.exists(), "unrelated profile files must stay")
+
+    def test_temp_display_state_never_points_at_the_real_install(self) -> None:
+        # A bare default_state() carries the real ~/.config/lutristosunshine
+        # paths; tests that unlink through it (remove_display, the audio
+        # cleanup script) would edit the developer's live install instead.
+        with temp_display_state(manager) as (state, base):
+            leaked = sorted(
+                f"{key}={value}"
+                for key, value in asdict(state.paths).items()
+                if value and not value.startswith(str(base))
+            )
+            self.assertEqual(leaked, [], "temp state leaked real paths")
+            for path in [*manager._managed_setup_paths(state), *manager._legacy_managed_paths(state)]:
+                self.assertTrue(
+                    str(path).startswith(str(base)),
+                    f"a reset would unlink {path}",
+                )
 
     def test_temp_display_state_redirects_wireplumber_paths(self) -> None:
         # remove_display unlinks the WP policy files; if the helper ever stops

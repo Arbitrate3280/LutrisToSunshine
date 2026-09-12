@@ -23,7 +23,7 @@ from display.constants import (
 )
 from display import manager
 from display.state import DisplayPaths
-from tests._display_test_helpers import temp_display_state
+from tests._display_test_helpers import redirect_state_paths, temp_display_state
 
 
 def _wp_script(state):
@@ -40,12 +40,21 @@ class AudioPolicyTests(unittest.TestCase):
     def _temp_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
-        conf_path = Path(tempdir.name) / "sunshine.conf"
+        base = Path(tempdir.name)
+        conf_path = base / "sunshine.conf"
         conf_path.write_text(config_text, encoding="utf-8")
 
         state = manager._default_state()
         state.enabled = True
         state.paths = DisplayPaths(**asdict(state.paths))
+        # setup/stop/remove write and unlink through these paths; only
+        # sunshine_conf was redirected before, so the tests edited the real
+        # WirePlumber policy files and deleted the real audio module file.
+        redirect_state_paths(state, base)
+        # Keep the managed script basenames realistic: the prep entries under
+        # test are asserted by name.
+        state.paths.audio_create_script = str(base / "lutristosunshine-create-audio-sink.sh")
+        state.paths.audio_cleanup_script = str(base / "lutristosunshine-cleanup-audio-sink.sh")
         state.paths.sunshine_conf = str(conf_path)
         return state, conf_path
 

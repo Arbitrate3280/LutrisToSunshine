@@ -23,7 +23,6 @@ from display.input_isolation import (
 
 from display.constants import (
     BIN_ROOT,
-    DISPLAY_ROOT,
     LEGACY_DISPLAY_ROOT,
     PROFILE_ROOT,
 )
@@ -368,22 +367,20 @@ def remove_display(
         Path(state.paths.state_path).unlink()
     except OSError:
         pass
-    try:
-        PROFILE_ROOT.rmdir()
-    except OSError:
-        pass
-    try:
-        BIN_ROOT.rmdir()
-    except OSError:
-        pass
-    try:
-        DISPLAY_ROOT.rmdir()
-    except OSError:
-        pass
-    try:
-        LEGACY_DISPLAY_ROOT.rmdir()
-    except OSError:
-        pass
+    # Derived from the state so the temp layouts used by tests are respected;
+    # in production these are the same directories the constants name.
+    for directory in [
+        state.paths.profile_root,
+        state.paths.bin_root,
+        str(Path(state.paths.state_path).parent) if state.paths.state_path else "",
+        str(LEGACY_DISPLAY_ROOT),
+    ]:
+        if not directory:
+            continue
+        try:
+            Path(directory).rmdir()
+        except OSError:
+            pass
     daemon_reload_fn()
 
     print("Virtual display setup removed.")

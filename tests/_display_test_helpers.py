@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import tempfile
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -24,6 +25,38 @@ def patched(target: Any, **overrides: Any) -> Iterator[None]:
             setattr(target, name, original)
 
 
+# DisplayPaths fields that name a directory rather than a file.
+_TEMP_DIR_PATH_FIELDS = frozenset(
+    {"bin_root", "profile_root", "systemd_user_dir", "sunshine_override_dir"}
+)
+
+
+def assert_state_paths_under(state: DisplayState, base: Path) -> None:
+    """Fail if any state path escapes ``base`` -- i.e. points at the real install."""
+    leaked = sorted(
+        f"{key}={value}"
+        for key, value in asdict(state.paths).items()
+        if value and not str(value).startswith(str(base))
+    )
+    assert not leaked, f"state paths leaked outside {base}: {leaked}"
+
+
+def redirect_state_paths(state: DisplayState, base: Path) -> None:
+    """Point every :class:`DisplayPaths` entry at ``base``.
+
+    A state built from :func:`default_state` carries the *real*
+    ``~/.config/lutristosunshine`` paths. Anything that unlinks through such a
+    state (``remove_display``, the audio policy, the rendered cleanup script)
+    would then edit the developer's live install, so every field has to be
+    redirected -- including ones added later.
+    """
+    for field in dataclasses.fields(DisplayPaths):
+        target = base / field.name
+        if field.name in _TEMP_DIR_PATH_FIELDS:
+            target.mkdir(parents=True, exist_ok=True)
+        setattr(state.paths, field.name, str(target))
+
+
 @contextmanager
 def temp_display_state(
     manager: Any,
@@ -37,11 +70,9 @@ def temp_display_state(
 ) -> Iterator[Tuple[DisplayState, Path]]:
     """Yield ``(state, base_dir)`` pointing at a temporary on-disk layout.
 
-    Any ``paths`` key that is not provided keeps the value from
-    :func:`default_state` -- with one exception: the standard
-    script and status file keys are materialised as placeholder files
-    under ``base_dir`` so remove/cleanup tests have something real to
-    delete.
+    Every ``DisplayPaths`` entry is redirected under ``base_dir`` (files
+    materialised as placeholders so remove/cleanup tests have something real
+    to delete) unless the caller overrides it explicitly.
     """
     extra_paths = dict(extra_paths or {})
     explicit: set = set()
@@ -66,30 +97,8 @@ def temp_display_state(
             state.paths.sunshine_wrapper_script = str(sunshine_wrapper_script)
             explicit.add("sunshine_wrapper_script")
 
-        for key in (
-            "state_path",
-            "sunshine_wrapper_script",
-            "sway_config",
-            "sway_start_script",
-            "sunshine_start_script",
-            "kwin_input_isolation_script",
-            "audio_create_script",
-            "audio_cleanup_script",
-            "launch_app_script",
-            "resolve_stream_fps_script",
-            "apply_exact_refresh_script",
-            "headless_prep_script",
-            "set_resolution_script",
-            "reset_resolution_script",
-            "portal_active_file",
-            "portal_lock_file",
-            "kwin_input_isolation_status_file",
-            "wayland_display_file",
-            "audio_module_file",
-            "wireplumber_policy_script",
-            "wireplumber_policy_conf",
-            "sunshine_conf",
-        ):
+        for field in dataclasses.fields(DisplayPaths):
+            key = field.name
             if key in extra_paths:
                 target = extra_paths[key]
                 if target is None:
@@ -98,6 +107,11 @@ def temp_display_state(
                 setattr(state.paths, key, str(target))
                 continue
             if key in explicit:
+                continue
+            if key in _TEMP_DIR_PATH_FIELDS:
+                directory = base / key
+                directory.mkdir(parents=True, exist_ok=True)
+                setattr(state.paths, key, str(directory))
                 continue
             placeholder = base / f"{key}.placeholder"
             placeholder.write_text("managed\n", encoding="utf-8")
