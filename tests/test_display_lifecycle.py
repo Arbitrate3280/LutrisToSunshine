@@ -19,7 +19,7 @@ from display import input_isolation
 from display import scripts_render
 from display import sunshine_service
 from sunshine import installation
-from tests._display_test_helpers import temp_display_state
+from tests._display_test_helpers import patched, temp_display_state
 
 
 class DisplayLifecycleTests(unittest.TestCase):
@@ -1042,6 +1042,49 @@ H: Handlers=sysrq kbd event29
 
         self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, path_names)
         self.assertIn(audio_policy.WIREPLUMBER_POLICY_CONF_NAME, path_names)
+
+    def test_remove_display_unlinks_legacy_artifacts(self) -> None:
+        # Upgrades leave pre-sway artifacts behind; a reset is the only chance
+        # to take them out, otherwise rmdir of the managed dirs keeps failing.
+        with temp_display_state(manager) as (state, base):
+            state.enabled = True
+            bin_root = base / "bin"
+            profile_root = base / "profile"
+            bin_root.mkdir()
+            profile_root.mkdir()
+            state.paths.bin_root = str(bin_root)
+            state.paths.profile_root = str(profile_root)
+
+            legacy = [
+                bin_root / "lutristosunshine-input-bridge.py",
+                bin_root / "lutristosunshine-start-headless-hyprland.sh",
+                bin_root / "lutristosunshine-get-gpu-addr.sh",
+                profile_root / "hyprland.conf",
+                profile_root / "hyprland-instance",
+                profile_root / "portal-env-abc123",
+                profile_root / "systemd-env-abc123",
+                profile_root / "portal-monitor-abc.log",
+            ]
+            keepsake = profile_root / "wayland-display"
+            for path in [*legacy, keepsake]:
+                path.write_text("stale\n", encoding="utf-8")
+
+            with patched(
+                display_state,
+                load_state=lambda: state,
+                save_state=lambda current: None,
+            ), patched(sunshine_service, cleanup_managed_overrides=lambda current: None):
+                result = manager.remove_display(
+                    stop_display_fn=lambda: 0,
+                    remove_udev_rule_fn=lambda current: True,
+                    daemon_reload_fn=lambda: None,
+                    audio_remove_fn=lambda current: None,
+                )
+
+            self.assertEqual(result, 0)
+            for path in legacy:
+                self.assertFalse(path.exists(), f"{path.name} survived reset")
+            self.assertTrue(keepsake.exists(), "unrelated profile files must stay")
 
     def test_temp_display_state_redirects_wireplumber_paths(self) -> None:
         # remove_display unlinks the WP policy files; if the helper ever stops

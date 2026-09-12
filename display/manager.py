@@ -149,6 +149,41 @@ def _managed_setup_paths(state: DisplayState) -> List[Path]:
     return [Path(getattr(paths, key)) for key in keys if getattr(paths, key, "")]
 
 
+# Files written by older releases that no longer generate them. Without this
+# a reset leaves them on disk forever: it only unlinks the paths the current
+# release manages, which then also blocks the directory rmdir below.
+LEGACY_BIN_FILES = (
+    "lutristosunshine-input-bridge.py",
+    "lutristosunshine-start-headless-hyprland.sh",
+    "lutristosunshine-get-gpu-addr.sh",
+)
+LEGACY_PROFILE_FILES = (
+    "hyprland.conf",
+    "hyprland-instance",
+)
+# Leftovers from runs that died before their trap could clean up.
+LEGACY_PROFILE_GLOBS = (
+    "portal-env-*",
+    "systemd-env-*",
+    "portal-monitor-*.log",
+)
+
+
+def _legacy_managed_paths(state: DisplayState) -> List[Path]:
+    """Paths left behind by older releases that this one no longer writes."""
+    legacy: List[Path] = []
+    bin_root = state.paths.bin_root
+    if bin_root:
+        legacy.extend(Path(bin_root) / name for name in LEGACY_BIN_FILES)
+    profile_root = state.paths.profile_root
+    if profile_root:
+        artifacts = [Path(profile_root) / name for name in LEGACY_PROFILE_FILES]
+        for pattern in LEGACY_PROFILE_GLOBS:
+            artifacts.extend(sorted(Path(profile_root).glob(pattern)))
+        legacy.extend(artifacts)
+    return legacy
+
+
 def _daemon_reload() -> None:
     _svc.daemon_reload()
 
@@ -316,7 +351,7 @@ def remove_display(
     _clean_kde_libinput_config()
     audio_remove_fn(state)
 
-    for path in _managed_setup_paths(state):
+    for path in [*_managed_setup_paths(state), *_legacy_managed_paths(state)]:
         try:
             path.unlink()
         except OSError:
