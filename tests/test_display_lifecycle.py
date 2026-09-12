@@ -10,6 +10,13 @@ from unittest.mock import Mock, patch
 from dataclasses import asdict
 
 from display import state as display_state
+from display.constants import (
+    FALLBACK_FPS,
+    FALLBACK_HEIGHT,
+    FALLBACK_WIDTH,
+    WIREPLUMBER_POLICY_CONF_NAME,
+    WIREPLUMBER_POLICY_SCRIPT_NAME,
+)
 from display.state import DisplayPaths
 
 from display import audio_policy
@@ -45,7 +52,7 @@ class DisplayLifecycleTests(unittest.TestCase):
         return state, conf_path
 
     def test_udev_rule_does_not_match_bridge_phys_prefix(self) -> None:
-        rule = manager._udev_rule()
+        rule = input_isolation.udev_rule()
         self.assertNotIn('ATTRS{phys}=="lts-inputbridge/*"', rule)
 
     def test_udev_rule_grants_current_user_access_to_sunshine_inputs(self) -> None:
@@ -55,7 +62,7 @@ class DisplayLifecycleTests(unittest.TestCase):
         try:
             input_isolation.current_user_name = lambda: "alice"
             input_isolation.current_user_group = lambda: "streaming"
-            rule = manager._udev_rule("permissions-only")
+            rule = input_isolation.udev_rule("permissions-only")
         finally:
             input_isolation.current_user_name = original_user
             input_isolation.current_user_group = original_group
@@ -64,14 +71,14 @@ class DisplayLifecycleTests(unittest.TestCase):
         self.assertIn('MODE="0660"', rule)
 
     def test_udev_rule_preserves_input_classification_outside_plasma(self) -> None:
-        rule = manager._udev_rule("permissions-only")
+        rule = input_isolation.udev_rule("permissions-only")
         self.assertNotIn('ENV{ID_INPUT}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_KEYBOARD}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_MOUSE}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_TOUCHPAD}=""', rule)
 
     def test_udev_rule_preserves_input_classification_on_plasma(self) -> None:
-        rule = manager._udev_rule("kwin-runtime-disable")
+        rule = input_isolation.udev_rule("kwin-runtime-disable")
         self.assertNotIn('ENV{ID_INPUT}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_KEYBOARD}=""', rule)
         self.assertNotIn('ENV{ID_INPUT_MOUSE}=""', rule)
@@ -79,7 +86,7 @@ class DisplayLifecycleTests(unittest.TestCase):
 
     def test_input_isolation_mode_detects_plasma(self) -> None:
         with patch.dict(
-            manager.os.environ,
+            os.environ,
             {
                 "XDG_CURRENT_DESKTOP": "KDE",
                 "XDG_SESSION_DESKTOP": "KDE",
@@ -88,13 +95,13 @@ class DisplayLifecycleTests(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertEqual(manager._input_isolation_mode(), "kwin-runtime-disable")
+            self.assertEqual(input_isolation.input_isolation_mode(), "kwin-runtime-disable")
 
     def test_kwin_input_isolation_status_defaults_when_missing(self) -> None:
         state = manager._default_state()
         state.paths = DisplayPaths(**asdict(state.paths))
         state.paths.kwin_input_isolation_status_file = str(Path(tempfile.mkdtemp()) / "missing-status.json")
-        status = manager._kwin_input_isolation_status(state)
+        status = input_isolation.kwin_input_isolation_status(state)
         self.assertEqual(status["state"], "inactive")
         self.assertEqual(status["disabled_devices"], [])
         self.assertEqual(status["failed_devices"], [])
@@ -109,7 +116,7 @@ class DisplayLifecycleTests(unittest.TestCase):
     def test_kwin_input_isolation_script_bakes_host_session_family(self) -> None:
         state = manager._default_state()
         with patch.dict(
-            manager.os.environ,
+            os.environ,
             {
                 "XDG_CURRENT_DESKTOP": "KDE",
                 "DESKTOP_SESSION": "plasma",
@@ -156,7 +163,7 @@ H: Handlers=sysrq kbd event29
         self.assertIn("setfacl", missing)
 
     def test_udev_rule_no_longer_grants_bridged_hidraw_access_by_phys(self) -> None:
-        rule = manager._udev_rule()
+        rule = input_isolation.udev_rule()
         self.assertNotIn('KERNEL=="hidraw*"', rule)
         self.assertNotIn('SUBSYSTEM=="hidraw"', rule)
 
@@ -375,9 +382,9 @@ H: Handlers=sysrq kbd event29
         self.assertIn("display enable", snapshot["next_step"])
         self.assertEqual(snapshot["current_headless_mode"], "")
         self.assertEqual(snapshot["refresh_rate_sync_mode"], "client")
-        self.assertEqual(snapshot["custom_display_mode"]["width"], manager.FALLBACK_WIDTH)
-        self.assertEqual(snapshot["custom_display_mode"]["height"], manager.FALLBACK_HEIGHT)
-        self.assertEqual(snapshot["custom_display_mode"]["refresh"], float(manager.FALLBACK_FPS))
+        self.assertEqual(snapshot["custom_display_mode"]["width"], FALLBACK_WIDTH)
+        self.assertEqual(snapshot["custom_display_mode"]["height"], FALLBACK_HEIGHT)
+        self.assertEqual(snapshot["custom_display_mode"]["refresh"], float(FALLBACK_FPS))
         self.assertEqual(snapshot["current_mangohud_config"], "")
         self.assertEqual(snapshot["status_summary"], "NOT SET UP")
         self.assertEqual(
@@ -559,7 +566,7 @@ H: Handlers=sysrq kbd event29
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
         rule_path = base / "85-lutristosunshine-sunshine-input.rules"
-        rule_path.write_text(manager._udev_rule("permissions-only"), encoding="utf-8")
+        rule_path.write_text(input_isolation.udev_rule("permissions-only"), encoding="utf-8")
         kwin_status_path = base / "kwin-input-isolation-status.json"
         kwin_status_path.write_text(
             json.dumps(
@@ -590,7 +597,7 @@ H: Handlers=sysrq kbd event29
             display_state.load_state = lambda: state
             input_isolation.sunshine_virtual_input_devices = lambda: [{"name": "Keyboard passthrough", "event_path": "/dev/input/event29"}]
             with patch.dict(
-                manager.os.environ,
+                os.environ,
                 {
                     "XDG_CURRENT_DESKTOP": "KDE",
                     "XDG_SESSION_DESKTOP": "KDE",
@@ -616,7 +623,7 @@ H: Handlers=sysrq kbd event29
         self.addCleanup(tempdir.cleanup)
         base = Path(tempdir.name)
         rule_path = base / "85-lutristosunshine-sunshine-input.rules"
-        rule_path.write_text(manager._udev_rule("permissions-only"), encoding="utf-8")
+        rule_path.write_text(input_isolation.udev_rule("permissions-only"), encoding="utf-8")
         kwin_status_path = base / "kwin-input-isolation-status.json"
         kwin_status_path.write_text(
             json.dumps(
@@ -654,7 +661,7 @@ H: Handlers=sysrq kbd event29
                 {"name": "Pen passthrough", "event_path": "/dev/input/event31"},
             ]
             with patch.dict(
-                manager.os.environ,
+                os.environ,
                 {
                     "XDG_CURRENT_DESKTOP": "KDE",
                     "XDG_SESSION_DESKTOP": "KDE",
@@ -1030,7 +1037,7 @@ H: Handlers=sysrq kbd event29
         files = audio_policy.managed_files(state)
         conf = files[Path(state.paths.wireplumber_policy_conf)]
 
-        self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, conf)
+        self.assertIn(WIREPLUMBER_POLICY_SCRIPT_NAME, conf)
         self.assertIn("script/lua", conf)
         self.assertIn("script.lts-audio-policy", conf)
         self.assertIn("script.lts-audio-policy = required", conf)
@@ -1040,8 +1047,8 @@ H: Handlers=sysrq kbd event29
         paths = manager._managed_setup_paths(state)
         path_names = [p.name for p in paths]
 
-        self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, path_names)
-        self.assertIn(audio_policy.WIREPLUMBER_POLICY_CONF_NAME, path_names)
+        self.assertIn(WIREPLUMBER_POLICY_SCRIPT_NAME, path_names)
+        self.assertIn(WIREPLUMBER_POLICY_CONF_NAME, path_names)
 
     def test_remove_display_unlinks_legacy_artifacts(self) -> None:
         # Upgrades leave pre-sway artifacts behind; a reset is the only chance
@@ -1116,7 +1123,7 @@ H: Handlers=sysrq kbd event29
             self.assertTrue(conf_path.exists())
             self.assertIn("LTS audio policy registered", script_path.read_text())
             self.assertIn("script.lts-audio-policy = required", conf_path.read_text())
-            with patch.object(audio_policy.subprocess, "run") as fake_run:
+            with patch.object(subprocess, "run"):
                 audio_policy.remove(state)
             self.assertFalse(script_path.exists())
             self.assertFalse(conf_path.exists())
@@ -1134,7 +1141,7 @@ H: Handlers=sysrq kbd event29
             conf_path.write_text(f"global_prep_cmd = {combined}\n", encoding="utf-8")
             state.paths.sunshine_conf = str(conf_path)
 
-            with patch.object(audio_policy.subprocess, "run") as fake_run, \
+            with patch.object(subprocess, "run"), \
                  patch.object(audio_policy.shutil, "which", return_value=None):
                 audio_policy.setup(state)
 
@@ -1155,7 +1162,7 @@ H: Handlers=sysrq kbd event29
             conf_path.write_text(f"global_prep_cmd = {combined}\n", encoding="utf-8")
             state.paths.sunshine_conf = str(conf_path)
 
-            with patch.object(audio_policy.subprocess, "run") as fake_run:
+            with patch.object(subprocess, "run"):
                 audio_policy.remove(state)
 
             self.assertNotIn("global_prep_cmd", conf_path.read_text(encoding="utf-8"))

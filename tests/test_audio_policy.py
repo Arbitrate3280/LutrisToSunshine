@@ -16,6 +16,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from display import audio_policy
+from display.constants import (
+    FLATPAK_FLAG_OPTIONS,
+    FLATPAK_VALUE_OPTIONS,
+    WIREPLUMBER_POLICY_SCRIPT_NAME,
+)
 from display import manager
 from display.state import DisplayPaths
 from tests._display_test_helpers import temp_display_state
@@ -78,7 +83,7 @@ class AudioPolicyTests(unittest.TestCase):
             self.assertIn('audio_sink = "lts-sunshine-stereo"', wp_script)
             for name in ("sink-sunshine-stereo", "sink-sunshine-surround51", "sink-sunshine-surround71"):
                 self.assertIn(f'["{name}"] = true', wp_script)
-            self.assertIn(audio_policy.WIREPLUMBER_POLICY_SCRIPT_NAME, wp_conf)
+            self.assertIn(WIREPLUMBER_POLICY_SCRIPT_NAME, wp_conf)
             self.assertIn("script.lts-audio-policy = required", wp_conf)
 
             create = files[Path(state.paths.audio_create_script)]
@@ -109,7 +114,7 @@ class AudioPolicyTests(unittest.TestCase):
         )
         state.sunshine_unit_name = "app-dev.lizardbyte.app.Sunshine.service"
         calls = []
-        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+        with patch.object(subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value=None):
             audio_policy.setup(state)
             audio_policy.setup(state)
@@ -127,7 +132,7 @@ class AudioPolicyTests(unittest.TestCase):
         state.sunshine_unit_name = "app-dev.lizardbyte.app.Sunshine.service"
         state.sunshine_execstart = "/usr/bin/sunshine"
         calls = []
-        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+        with patch.object(subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value=None):
             audio_policy.setup(state)
 
@@ -138,7 +143,7 @@ class AudioPolicyTests(unittest.TestCase):
     def test_setup_drains_activation_env_and_reloads_wireplumber(self) -> None:
         state, conf_path = self._temp_state()
         calls = []
-        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+        with patch.object(subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value="/usr/bin/dbus-update-activation-environment"):
             audio_policy.setup(state)
 
@@ -159,7 +164,7 @@ class AudioPolicyTests(unittest.TestCase):
     def test_start_drains_activation_env_without_rewriting_config(self) -> None:
         state, conf_path = self._temp_state()
         calls = []
-        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)), \
+        with patch.object(subprocess, "run", side_effect=self._fake_run(calls)), \
              patch.object(audio_policy.shutil, "which", return_value="/usr/bin/dbus-update-activation-environment"):
             audio_policy.start(state)
 
@@ -173,7 +178,7 @@ class AudioPolicyTests(unittest.TestCase):
         cleanup_script.write_text("#!/bin/sh\n", encoding="utf-8")
         state.paths.audio_cleanup_script = str(cleanup_script)
         calls = []
-        with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)):
+        with patch.object(subprocess, "run", side_effect=self._fake_run(calls)):
             audio_policy.stop(state)
 
         self.assertEqual(conf_path.read_text(encoding="utf-8"), "audio_sink = lts-sunshine-stereo\n")
@@ -198,7 +203,7 @@ class AudioPolicyTests(unittest.TestCase):
             conf_path_wp.write_text("managed\n", encoding="utf-8")
 
             calls = []
-            with patch.object(audio_policy.subprocess, "run", side_effect=self._fake_run(calls)):
+            with patch.object(subprocess, "run", side_effect=self._fake_run(calls)):
                 audio_policy.remove(state)
 
             self.assertFalse(script_path.exists())
@@ -215,7 +220,7 @@ class AudioPolicyTests(unittest.TestCase):
 
     def test_flatpak_audio_env_rendering_preserves_existing_behavior(self) -> None:
         rendered = audio_policy.render_flatpak_audio_env(
-            "lts-sunshine-stereo", manager.FLATPAK_FLAG_OPTIONS, manager.FLATPAK_VALUE_OPTIONS
+            "lts-sunshine-stereo", FLATPAK_FLAG_OPTIONS, FLATPAK_VALUE_OPTIONS
         )
         func_start = rendered.index("inject_flatpak_audio_env()")
         marker = "<<'PY'\n"

@@ -12,7 +12,6 @@ exposes the audio-policy interface.
 import json
 import shlex
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -20,7 +19,6 @@ from display.utils import safe_string
 from display.state import DisplayState
 from display.utils import run_command
 from display.constants import (
-    WIREPLUMBER_POLICY_CONF_NAME,
     WIREPLUMBER_POLICY_SCRIPT_NAME,
 )
 

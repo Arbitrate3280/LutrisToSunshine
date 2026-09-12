@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import patch
 
 from display import audio_policy
+from display.constants import FLATPAK_PORTAL_ENV_KEYS
 from display import manager
 from display import scripts_render
 from display import sunshine_service
@@ -160,7 +161,7 @@ class PortalEnvKeysLeakGuardTests(unittest.TestCase):
 
     def test_audio_vars_not_in_portal_env_keys(self):
         for key in ("PULSE_SINK", "PULSE_PROP", "PIPEWIRE_PROPS"):
-            self.assertNotIn(key, manager.FLATPAK_PORTAL_ENV_KEYS)
+            self.assertNotIn(key, FLATPAK_PORTAL_ENV_KEYS)
 
 
 if __name__ == "__main__":

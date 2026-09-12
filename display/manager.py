@@ -1,4 +1,3 @@
-import os
 import shutil
 import stat
 import subprocess
@@ -17,23 +16,14 @@ from sunshine import installation
 _default_state = default_state
 from display.input_isolation import (
     clean_kde_libinput_config as _clean_kde_libinput_config,
-    input_isolation_mode as _input_isolation_mode,
     install_udev_rule as _install_udev_rule,
-    kwin_input_isolation_status as _kwin_input_isolation_status,
     remove_udev_rule as _remove_udev_rule,
-    udev_rule as _udev_rule,
 )
 
 
 from display.constants import (
     BIN_ROOT,
     DISPLAY_ROOT,
-    FALLBACK_FPS,
-    FALLBACK_HEIGHT,
-    FALLBACK_WIDTH,
-    FLATPAK_FLAG_OPTIONS,
-    FLATPAK_PORTAL_ENV_KEYS,
-    FLATPAK_VALUE_OPTIONS,
     LEGACY_DISPLAY_ROOT,
     PROFILE_ROOT,
 )
