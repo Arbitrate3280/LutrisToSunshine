@@ -8,6 +8,7 @@ LAUNCHER_NAMES = [
     "Ryubing",
     "RetroArch",
     "Eden",
+    "Cemu",
 ]
 
 SOURCE_PRIORITY = {name: idx for idx, name in enumerate(LAUNCHER_NAMES)}
@@ -27,6 +28,7 @@ SOURCE_COLORS = {
     "Ryubing": "\033[38;5;196m",  # Bright red - Nintendo Switch theme
     "RetroArch": "\033[38;5;46m",  # Green - retro gaming theme
     "Eden": "\033[38;5;201m",  # Pink - distinct highlight for Eden
+    "Cemu": "\033[38;5;226m",  # Yellow - Wii U GamePad highlight
 }
 RESET_COLOR = "\033[0m"
 

@@ -19,6 +19,7 @@ from launchers.faugus import build_faugus_command, detect_faugus_installation, l
 from launchers.ryubing import build_ryubing_command, detect_ryubing_installation, list_ryubing_selections
 from launchers.retroarch import build_retroarch_command, detect_retroarch_installation, list_retroarch_selections, validate_retroarch_selection
 from launchers.eden import build_eden_command, detect_eden_installation, list_eden_selections
+from launchers.cemu import build_cemu_command, detect_cemu_installation, list_cemu_selections
 
 
 class LauncherEntry(TypedDict):
@@ -79,6 +80,12 @@ LAUNCHER_REGISTRY: dict[str, LauncherEntry] = {
         "detect": detect_eden_installation,
         "list": list_eden_selections,
         "command": build_eden_command,
+        "validate": _valid_selection,
+    },
+    "Cemu": {
+        "detect": detect_cemu_installation,
+        "list": list_cemu_selections,
+        "command": build_cemu_command,
         "validate": _valid_selection,
     },
 }
