@@ -227,7 +227,10 @@ class DisplayCliTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(result, 0)
         self.assertEqual(calls, ["exact"])
-        self.assertIn("Refresh rate sync mode set to client's refresh rate", rendered)
+        self.assertIn(
+            "Refresh rate sync mode set to client's exact refresh rate (fractional, e.g. 59.94/119.88)",
+            rendered,
+        )
 
     def test_handle_display_refresh_rate_mode_custom_updates_setting(self) -> None:
         args = lutristosunshine.parse_args(
@@ -294,8 +297,8 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run enable.",
                 "status_summary": "NOT SET UP",
-                "display_sync_summary": "follow Moonlight requested FPS; MangoHud FPS sync off",
-                "refresh_rate_sync_mode_summary": "follow Moonlight requested FPS",
+                "display_sync_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
+                "refresh_rate_sync_mode_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120)",
                 "isolation_summary": "rule ready",
                 "isolation_level": "success",
             }
@@ -345,8 +348,8 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run start.",
                 "status_summary": "STOPPED",
-                "display_sync_summary": "follow Moonlight requested FPS; MangoHud FPS sync off",
-                "refresh_rate_sync_mode_summary": "follow Moonlight requested FPS",
+                "display_sync_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
+                "refresh_rate_sync_mode_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120)",
                 "isolation_summary": "rule ready",
                 "isolation_level": "success",
             }
@@ -399,8 +402,8 @@ class DisplayCliTests(unittest.TestCase):
                 "renderer_status_label": "[DEFAULT] wlroots default renderer",
                 "next_step": "Run doctor.",
                 "status_summary": "PARTIAL",
-                "display_sync_summary": "client's refresh rate; MangoHud FPS sync on",
-                "refresh_rate_sync_mode_summary": "client's refresh rate",
+                "display_sync_summary": "client's exact refresh rate (fractional, e.g. 59.94/119.88); MangoHud FPS sync on",
+                "refresh_rate_sync_mode_summary": "client's exact refresh rate (fractional, e.g. 59.94/119.88)",
                 "isolation_summary": "KWin helper is not running",
                 "isolation_level": "warning",
             }
@@ -418,7 +421,10 @@ class DisplayCliTests(unittest.TestCase):
         self.assertIn("Virtual display", rendered)
         self.assertIn("Auto FPS limit (MangoHud): [ENABLED]", rendered)
         self.assertIn("MangoHud env value: read_cfg,fps_limit=59.94", rendered)
-        self.assertIn("Refresh rate sync mode: client's refresh rate", rendered)
+        self.assertIn(
+            "Refresh rate sync mode: client's exact refresh rate (fractional, e.g. 59.94/119.88)",
+            rendered,
+        )
         self.assertIn("Current headless mode: 2560x1440 @ 120 Hz", rendered)
         self.assertIn("Dependencies: [OK]", rendered)
         self.assertNotIn("\033[", rendered)

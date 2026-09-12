@@ -382,9 +382,13 @@ H: Handlers=sysrq kbd event29
         self.assertEqual(snapshot["current_mangohud_config"], "")
         self.assertEqual(snapshot["status_summary"], "NOT SET UP")
         self.assertEqual(
-            snapshot["display_sync_summary"], "follow Moonlight requested FPS; MangoHud FPS sync off"
+            snapshot["display_sync_summary"],
+            "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
         )
-        self.assertEqual(snapshot["refresh_rate_sync_mode_summary"], "follow Moonlight requested FPS")
+        self.assertEqual(
+            snapshot["refresh_rate_sync_mode_summary"],
+            "Moonlight's requested FPS (integer, e.g. 60/90/120)",
+        )
         self.assertEqual(snapshot["isolation_level"], "success")
         self.assertEqual(snapshot["isolation_summary"], "rule ready")
 

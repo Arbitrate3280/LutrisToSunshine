@@ -20,10 +20,10 @@ def normalized_refresh_rate_sync_mode(value: Any) -> str:
 
 def refresh_rate_sync_mode_summary(mode: str) -> str:
     if mode == "exact":
-        return "client's refresh rate"
+        return "client's exact refresh rate (fractional, e.g. 59.94/119.88)"
     if mode == "custom":
         return "custom fixed display mode"
-    return "follow Moonlight requested FPS"
+    return "Moonlight's requested FPS (integer, e.g. 60/90/120)"
 
 
 def normalized_custom_display_mode(value: Any) -> DisplayMode:

@@ -354,9 +354,9 @@ def set_sync_mode(mode: str) -> int:
     normalized_mode = mode if mode in {"exact", "custom"} else "client"
     previous, _ = set_refresh_rate_sync_mode(normalized_mode)
     summary = {
-        "exact": "client's refresh rate",
+        "exact": "client's exact refresh rate (fractional, e.g. 59.94/119.88)",
         "custom": "custom fixed display mode",
-    }.get(normalized_mode, "follow Moonlight requested FPS")
+    }.get(normalized_mode, "Moonlight's requested FPS (integer, e.g. 60/90/120)")
     if previous == normalized_mode:
         print(f"Refresh rate sync mode is already set to {summary} for virtual-display launches.")
     else:
@@ -471,8 +471,9 @@ def run_hub() -> int:
         elif choice == "3":
             print("")
             print("Display sync mode")
-            print("1. Follow Moonlight's requested resolution and FPS")
-            print("2. Use the client's refresh rate")
+            print("Both client modes take the resolution from Moonlight; only the refresh rate source differs.")
+            print("1. Match Moonlight's requested resolution and FPS (integer, e.g. 60/90/120)")
+            print("2. Match the client's exact refresh rate (fractional, e.g. 59.94/119.88)")
             print('3. Use a custom resolution and refresh rate')
             print("0. Cancel")
             mode_choice = get_menu_choice("Choose a mode: ", ["0", "1", "2", "3"])

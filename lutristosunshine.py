@@ -79,12 +79,12 @@ def parse_args(argv=None):
     mangohud_subparsers.add_parser("disable", help="Disable the dynamic MangoHud FPS limit.")
     refresh_rate_parser = display_subparsers.add_parser(
         "refresh-rate-mode",
-        help="Choose whether virtual-display refresh follows Moonlight's requested FPS, the client's refresh rate, or a custom fixed mode.",
+        help="Choose whether the virtual display uses Moonlight's requested integer FPS, the client's exact fractional refresh rate, or a custom fixed mode.",
     )
     refresh_rate_parser.add_argument(
         "mode",
         choices=["client", "exact", "custom"],
-        help="Use 'client' to follow Moonlight's requested FPS, 'exact' to use the client's refresh rate, or 'custom' for a fixed display mode.",
+        help="Use 'client' for Moonlight's requested integer FPS (60/90/120), 'exact' for the client's exact fractional refresh rate (59.94/119.88), or 'custom' for a fixed display mode.",
     )
     refresh_rate_parser.add_argument(
         "--width",
