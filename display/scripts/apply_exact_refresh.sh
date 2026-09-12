@@ -19,7 +19,9 @@ width="${1}"
 height="${2}"
 since_time="${3:-}"
 
-exact_stream_fps="$("@RESOLVE_STREAM_FPS_SCRIPT@" exact none "$since_time")"
+# Fall back to the client's requested FPS: an unresolvable exact rate
+# must not leave the display stuck on the fallback mode.
+exact_stream_fps="$("@RESOLVE_STREAM_FPS_SCRIPT@" exact fallback "$since_time")"
 if [ -z "$exact_stream_fps" ]; then
     exit 0
 fi

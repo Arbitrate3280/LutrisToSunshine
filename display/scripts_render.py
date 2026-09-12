@@ -139,6 +139,19 @@ fi
     return blocks
 
 
+def _sunshine_log_file(state: DisplayState) -> str:
+    """Sunshine's own log file, which sits next to sunshine.conf.
+
+    The systemd journal is not a reliable source: Flatpak runs Sunshine
+    inside a transient scope, so the log lines are not attributed to the
+    managed unit.
+    """
+    sunshine_conf = safe_string(state.paths.sunshine_conf)
+    if sunshine_conf:
+        return str(Path(sunshine_conf).parent / "sunshine.log")
+    return str(_installation.detect_sunshine_config_root() / "sunshine.log")
+
+
 def render_managed_files(state: DisplayState) -> Dict[Path, str]:
     """Render every managed script/systemd file for the given state."""
     paths = state.paths
@@ -181,6 +194,7 @@ def render_managed_files(state: DisplayState) -> Dict[Path, str]:
         "@CUSTOM_HEIGHT@": str(custom_mode["height"]),
         "@CUSTOM_REFRESH@": custom_refresh,
         "@REFRESH_RATE_SYNC_MODE@": refresh_mode,
+        "@SUNSHINE_LOG_FILE@": _sunshine_log_file(state),
         "@SUNSHINE_UNIT@": safe_string(state.sunshine_unit_name) or sunshine_unit(),
         "@SUNSHINE_COMMAND@": shlex.quote(sunshine_command),
         "@PYTHON_EXECUTABLE@": sys.executable or "/usr/bin/env python3",

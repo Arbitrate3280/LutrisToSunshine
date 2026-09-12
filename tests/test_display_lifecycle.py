@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 from dataclasses import asdict
@@ -857,27 +858,34 @@ H: Handlers=sysrq kbd event29
         self.assertIn('attempts=100', resolver_script)
         self.assertIn('if [ "$fallback_mode" = "none" ]; then', resolver_script)
         self.assertIn('since_time="${3:-}"', resolver_script)
+        # Sunshine's own log is the primary source; the unit journal is only a
+        # fallback (Flatpak runs the app in a transient scope).
+        self.assertIn(
+            f'cat "{Path(state.paths.sunshine_conf).parent / "sunshine.log"}"',
+            resolver_script,
+        )
         self.assertIn('journalctl --user -u "', resolver_script)
         self.assertIn('line_epoch is not None and line_epoch >= since_epoch', resolver_script)
 
     def test_resolve_stream_fps_accepts_sunshine_fps_log_format(self) -> None:
         state = manager._default_state()
         state.refresh_rate_sync_mode = "exact"
-        scripts = scripts_render.render_managed_files(state)
 
         with tempfile.TemporaryDirectory() as tempdir:
             base = Path(tempdir)
             fake_bin = base / "bin"
             fake_bin.mkdir()
-            (fake_bin / "journalctl").write_text(
-                "#!/bin/sh\n"
-                "printf '%s\\n' \"[$(date '+%Y-%m-%d %H:%M:%S.%3N')]: Info: [wlgrab] Requested frame rate [59fps]\"\n"
-                "printf '%s\\n' \"[$(date '+%Y-%m-%d %H:%M:%S.%3N')]: Info: CLIENT CONNECTED\"\n",
+            (base / "sunshine.conf").write_text("", encoding="utf-8")
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            (base / "sunshine.log").write_text(
+                f"[{stamp}]: Info: [wlgrab] Requested frame rate [59fps]\n"
+                f"[{stamp}]: Info: CLIENT CONNECTED\n",
                 encoding="utf-8",
             )
+            state.paths.sunshine_conf = str(base / "sunshine.conf")
+            scripts = scripts_render.render_managed_files(state)
             (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            for executable in (fake_bin / "journalctl", fake_bin / "sleep"):
-                executable.chmod(0o755)
+            (fake_bin / "sleep").chmod(0o755)
 
             resolver_path = base / "resolve-stream-fps.sh"
             resolver_path.write_text(
@@ -886,7 +894,7 @@ H: Handlers=sysrq kbd event29
             )
             resolver_path.chmod(0o755)
             result = subprocess.run(
-                [str(resolver_path), "exact", "none", str(time.time() - 1)],
+                [str(resolver_path), "exact", "none", str(time.time() - 30)],
                 env={
                     **os.environ,
                     "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
@@ -909,7 +917,7 @@ H: Handlers=sysrq kbd event29
 
         self.assertIn('since_time="${3:-}"', apply_exact_refresh_script)
         self.assertIn(
-            f'exact_stream_fps="$("{state.paths.resolve_stream_fps_script}" exact none "$since_time")"',
+            f'exact_stream_fps="$("{state.paths.resolve_stream_fps_script}" exact fallback "$since_time")"',
             apply_exact_refresh_script,
         )
         self.assertIn(

@@ -36,21 +36,26 @@ if [ "$mode" != "exact" ]; then
     exit 0
 fi
 
-if ! command -v journalctl >/dev/null 2>&1; then
-    printf '%s\n' "$requested_fps"
-    exit 0
-fi
-
 attempts=100
 while [ "$attempts" -gt 0 ]; do
-    journal_output_file="$(mktemp)"
-    journalctl --user -u "@SUNSHINE_UNIT@" -n 200 --no-pager -o cat >"$journal_output_file" 2>/dev/null || true
-    resolved_fps="$(python3 - "$requested_fps" "$journal_output_file" "$since_time" <<'PY'
+    stream_output_file="$(mktemp)"
+    if [ -r "@SUNSHINE_LOG_FILE@" ]; then
+        # Sunshine writes its log next to sunshine.conf. The systemd
+        # journal cannot be trusted: Flatpak runs the app inside a
+        # transient scope, so `--user -u <unit>` never sees these lines.
+        cat "@SUNSHINE_LOG_FILE@" >"$stream_output_file" 2>/dev/null || true
+    elif command -v journalctl >/dev/null 2>&1; then
+        journalctl --user -u "@SUNSHINE_UNIT@" -n 200 --no-pager -o cat >"$stream_output_file" 2>/dev/null || true
+    else
+        printf '%s\n' "$requested_fps"
+        exit 0
+    fi
+    resolved_fps="$(python3 - "$requested_fps" "$stream_output_file" "$since_time" <<'PY'
 from datetime import datetime
 import re
 import sys
 
-journal_output_path = sys.argv[2]
+stream_output_path = sys.argv[2]
 since_time = sys.argv[3].strip()
 since_epoch = None
 if since_time:
@@ -73,7 +78,7 @@ def parse_epoch(line: str):
         except ValueError:
             return None
 
-with open(journal_output_path, "r", encoding="utf-8", errors="replace") as handle:
+with open(stream_output_path, "r", encoding="utf-8", errors="replace") as handle:
     raw_lines = [line.strip() for line in handle.read().splitlines() if line.strip()]
 
 lines = []
@@ -125,7 +130,7 @@ for line in reversed(search_lines):
 print("")
 PY
 )"
-    rm -f "$journal_output_file"
+    rm -f "$stream_output_file"
     if [ -n "$resolved_fps" ]; then
         printf '%s\n' "$resolved_fps"
         exit 0
