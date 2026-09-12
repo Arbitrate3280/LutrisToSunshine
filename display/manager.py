@@ -145,7 +145,6 @@ def _managed_setup_paths(state: DisplayState) -> List[Path]:
         "set_resolution_script",
         "reset_resolution_script",
         "kwin_input_isolation_script",
-        "get_gpu_addr",
     ]
     return [Path(getattr(paths, key)) for key in keys if getattr(paths, key, "")]
 

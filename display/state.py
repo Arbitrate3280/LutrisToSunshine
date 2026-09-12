@@ -50,7 +50,6 @@ class DisplayPaths:
     headless_prep_script: str = ""
     set_resolution_script: str = ""
     reset_resolution_script: str = ""
-    get_gpu_addr: str = ""
     portal_lock_file: str = ""
     portal_active_file: str = ""
     last_launch_log_file: str = ""
@@ -125,7 +124,6 @@ def build_paths(
         headless_prep_script=str(BIN_ROOT / "lutristosunshine-run-headless-prep.sh"),
         set_resolution_script=str(BIN_ROOT / "lutristosunshine-set-resolution.sh"),
         reset_resolution_script=str(BIN_ROOT / "lutristosunshine-reset-resolution.sh"),
-        get_gpu_addr=str(BIN_ROOT / "lutristosunshine-get-gpu-addr.sh"),
         portal_lock_file=str(PORTAL_LOCK_PATH),
         portal_active_file=str(PORTAL_ACTIVE_PATH),
         last_launch_log_file=str(LAST_LAUNCH_LOG_PATH),

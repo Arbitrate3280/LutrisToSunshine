@@ -50,7 +50,6 @@ _TEMPLATE_FILES = {
     "kwin_input_isolation_script": "kwin_input_isolation.py.template",
     "headless_prep_script": "headless_prep.sh",
     "launch_app_script": "launch_app.sh",
-    "get_gpu_addr": "get_gpu_addr.sh",
     "resolve_stream_fps_script": "resolve_stream_fps.sh",
     "apply_exact_refresh_script": "apply_exact_refresh.sh",
     "set_resolution_script": "set_resolution.sh",

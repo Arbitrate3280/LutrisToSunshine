@@ -299,7 +299,6 @@ H: Handlers=sysrq kbd event29
         state.paths.headless_prep_script = str(base / "lutristosunshine-run-headless-prep.sh")
         state.paths.set_resolution_script = str(base / "lutristosunshine-set-resolution.sh")
         state.paths.reset_resolution_script = str(base / "lutristosunshine-reset-resolution.sh")
-        state.paths.get_gpu_addr = str(base / "lutristosunshine-get-gpu-addr.sh")
         state.paths.wireplumber_policy_script = str(base / "lts-audio-policy.lua")
         state.paths.wireplumber_policy_conf = str(base / "54-lts-audio-policy.conf")
 
@@ -311,7 +310,7 @@ H: Handlers=sysrq kbd event29
             "sunshine_wrapper_script",
             "launch_app_script", "resolve_stream_fps_script",
             "apply_exact_refresh_script", "headless_prep_script",
-            "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
+            "set_resolution_script", "reset_resolution_script",
             "portal_active_file",
             "portal_lock_file",
             "kwin_input_isolation_status_file",
@@ -968,7 +967,7 @@ H: Handlers=sysrq kbd event29
             "audio_create_script", "audio_cleanup_script",
             "launch_app_script", "resolve_stream_fps_script",
             "apply_exact_refresh_script", "headless_prep_script",
-            "set_resolution_script", "reset_resolution_script", "get_gpu_addr",
+            "set_resolution_script", "reset_resolution_script",
             "portal_active_file", "portal_lock_file",
             "kwin_input_isolation_status_file",
             "wayland_display_file", "audio_module_file",

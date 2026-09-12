@@ -81,7 +81,6 @@ def temp_display_state(
             "headless_prep_script",
             "set_resolution_script",
             "reset_resolution_script",
-            "get_gpu_addr",
             "portal_active_file",
             "portal_lock_file",
             "kwin_input_isolation_status_file",
