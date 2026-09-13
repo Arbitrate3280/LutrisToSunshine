@@ -1199,5 +1199,75 @@ H: Handlers=sysrq kbd event29
 
             self.assertNotIn("global_prep_cmd", conf_path.read_text(encoding="utf-8"))
 
+
+class DisplaySettingRenderingTests(unittest.TestCase):
+    """Menu settings must reach the rendered scripts, not just the state.
+
+    The hub writes renderer mode, the MangoHud FPS limit, and the refresh
+    sync mode through manager setters; a broken placeholder mapping would
+    make those menu options silently do nothing.
+    """
+
+    def _render_with(self, apply) -> dict:
+        with temp_display_state(manager) as (state, _base):
+            state.enabled = True
+            state.sunshine_execstart = "sunshine"
+            state.sunshine_unit_name = "sunshine.service"
+            with patched(
+                display_state,
+                load_state=lambda: state,
+                save_state=lambda current: None,
+            ), patched(manager, _daemon_reload=lambda: None):
+                apply(state)
+                return {
+                    key: Path(getattr(state.paths, key)).read_text(encoding="utf-8")
+                    for key in (
+                        "sway_start_script",
+                        "launch_app_script",
+                        "resolve_stream_fps_script",
+                        "set_resolution_script",
+                    )
+                }
+
+    def test_renderer_mode_reaches_the_sway_script(self) -> None:
+        scripts = self._render_with(lambda state: manager.set_renderer_mode("vulkan"))
+        self.assertIn("WLR_RENDERER=vulkan", scripts["sway_start_script"])
+
+        scripts = self._render_with(lambda state: manager.set_renderer_mode("default"))
+        self.assertNotIn("WLR_RENDERER=vulkan", scripts["sway_start_script"])
+
+    def test_fps_limit_reaches_the_launch_script(self) -> None:
+        scripts = self._render_with(
+            lambda state: manager.set_dynamic_mangohud_fps_limit(True)
+        )
+        self.assertIn("fps_limit=", scripts["launch_app_script"])
+
+        scripts = self._render_with(
+            lambda state: manager.set_dynamic_mangohud_fps_limit(False)
+        )
+        self.assertNotIn("fps_limit=", scripts["launch_app_script"])
+
+    def test_sync_mode_reaches_the_refresh_scripts(self) -> None:
+        for mode in ("client", "exact", "custom"):
+            with self.subTest(mode=mode):
+                scripts = self._render_with(
+                    lambda state, mode=mode: manager.set_refresh_rate_sync_mode(mode)
+                )
+                self.assertIn('mode="%s"' % mode, scripts["resolve_stream_fps_script"])
+                self.assertIn(
+                    'if [ "$mode" = "exact" ]; then',
+                    scripts["set_resolution_script"],
+                )
+
+    def test_unknown_renderer_and_sync_mode_fall_back(self) -> None:
+        scripts = self._render_with(lambda state: manager.set_renderer_mode("metal"))
+        self.assertNotIn("WLR_RENDERER=vulkan", scripts["sway_start_script"])
+
+        scripts = self._render_with(
+            lambda state: manager.set_refresh_rate_sync_mode("bogus")
+        )
+        self.assertIn('mode="client"', scripts["resolve_stream_fps_script"])
+
+
 if __name__ == "__main__":
     unittest.main()
