@@ -4,7 +4,6 @@ All reconciliation of Sunshine app payloads with the virtual display
 lifecycle lives here. sunshine/sunshine.py calls one interface:
 transform_app_for_display.
 """
-import shlex
 from typing import List, Tuple
 
 from config.types import SunshineApp, SunshinePrepCommand
@@ -16,6 +15,7 @@ from display.command_wrap import (
     get_wrapped_command_origin,
     is_headless_prep_wrapped,
     is_wrapped_command,
+    managed_wrapper_parts,
     routes_through_managed_scripts,
     unwrap_command,
     unwrap_headless_prep_command,
@@ -107,11 +107,7 @@ def unwrap_with_origin(command: str, field_origin: str) -> Tuple[str, str]:
 
     origin = get_wrapped_command_origin(command) or field_origin
     # Legacy wrappers only encoded the command, so preserve the field placement.
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        parts = []
-    if len(parts) < 3:
+    if len(managed_wrapper_parts(command) or []) < 3:
         origin = field_origin
 
     unwrapped = unwrap_command(command) or ""

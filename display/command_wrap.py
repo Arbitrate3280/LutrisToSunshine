@@ -9,6 +9,8 @@ import shlex
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from display.constants import FLATPAK_SPAWN_HOST_PREFIX
+
 CONFIG_ROOT = Path("~/.config/lutristosunshine").expanduser()
 BIN_ROOT = CONFIG_ROOT / "bin"
 HEADLESS_PREP_PREFIX = "headless:"
@@ -63,34 +65,36 @@ def wrap_command(command: Optional[str], origin: str = "cmd", exit_timeout: int 
     return f"{get_launch_app_script()} {shlex.quote(origin)} {shlex.quote(str(timeout))} {shlex.quote(encoded)}"
 
 
-def _wrapped_command_parts(command: Optional[str]) -> Optional[List[str]]:
-    if not command or not is_wrapped_command(command):
+def _without_host_escape(parts: List[str]) -> List[str]:
+    """Drop a leading ``flatpak-spawn --host`` escape from parsed tokens."""
+    prefix = list(FLATPAK_SPAWN_HOST_PREFIX)
+    if parts[: len(prefix)] == prefix:
+        return parts[len(prefix):]
+    return parts
+
+
+def managed_wrapper_parts(command: Optional[str], script: Optional[str] = None) -> Optional[List[str]]:
+    """Split a managed wrapper call into ``[script, origin?, timeout?, payload]``.
+
+    Tolerates the ``flatpak-spawn --host`` escape older releases put in front
+    of managed wrappers: without that, the escaped form looks like an ordinary
+    game command and gets wrapped a second time.
+    """
+    if not command:
         return None
     try:
-        return shlex.split(command or "")
+        parts = _without_host_escape(shlex.split(command))
     except ValueError:
         return None
+    if not parts or parts[0] != (script or get_launch_app_script()):
+        return None
+    return parts
 
 
-def get_wrapped_command_exit_timeout(command: Optional[str], default: int = 5) -> int:
-    parts = _wrapped_command_parts(command)
-    if not parts:
-        return default
-    if len(parts) >= 4 and parts[2].isdigit():
-        return int(parts[2])
-    return default
-
-
-def unwrap_command(command: Optional[str]) -> Optional[str]:
-    if not command:
-        return command
-    if not is_wrapped_command(command):
-        return command
-    parts = _wrapped_command_parts(command)
-    if not parts:
-        return command
+def _wrapper_payload(parts: List[str]) -> Optional[str]:
+    """Decode the base64 payload of wrapper ``parts`` (legacy layouts included)."""
     if len(parts) < 2:
-        return command
+        return None
     encoded_part = parts[1]
     if len(parts) >= 4 and parts[2].isdigit():
         encoded_part = parts[3]
@@ -99,23 +103,45 @@ def unwrap_command(command: Optional[str]) -> Optional[str]:
     try:
         return base64.b64decode(encoded_part).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def get_wrapped_command_exit_timeout(command: Optional[str], default: int = 5) -> int:
+    parts = managed_wrapper_parts(command)
+    if not parts:
+        return default
+    if len(parts) >= 4 and parts[2].isdigit():
+        return int(parts[2])
+    return default
+
+
+def unwrap_command(command: Optional[str]) -> Optional[str]:
+    """Return a wrapper's payload, unwrapping nested wrappers.
+
+    An older release escaped the wrapper and then wrapped it again, so a
+    payload can itself be a wrapper; collapse those to the original command.
+    """
+    if not command:
         return command
+    result = command
+    seen = {command}
+    while True:
+        parts = managed_wrapper_parts(result)
+        if not parts:
+            return result
+        decoded = _wrapper_payload(parts)
+        if not decoded or decoded in seen:
+            return result
+        seen.add(decoded)
+        result = decoded
 
 
 def is_wrapped_command(command: Optional[str]) -> bool:
-    if not command:
-        return False
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return False
-    if not parts:
-        return False
-    return parts[0] == get_launch_app_script()
+    return managed_wrapper_parts(command) is not None
 
 
 def get_wrapped_command_origin(command: Optional[str]) -> Optional[str]:
-    parts = _wrapped_command_parts(command)
+    parts = managed_wrapper_parts(command)
     if not parts:
         return None
     if len(parts) >= 3:
@@ -132,36 +158,13 @@ def wrap_headless_prep_command(command: Optional[str]) -> Optional[str]:
     return f"{get_headless_prep_script()} {shlex.quote(encoded)}"
 
 
-def _wrapped_headless_prep_parts(command: Optional[str]) -> Optional[List[str]]:
-    if not command or not is_headless_prep_wrapped(command):
-        return None
-    try:
-        return shlex.split(command or "")
-    except ValueError:
-        return None
+def is_headless_prep_wrapped(command: Optional[str]) -> bool:
+    return managed_wrapper_parts(command, get_headless_prep_script()) is not None
 
 
 def unwrap_headless_prep_command(command: Optional[str]) -> Optional[str]:
-    if not command:
-        return command
-    if not is_headless_prep_wrapped(command):
-        return command
-    parts = _wrapped_headless_prep_parts(command)
-    if not parts or len(parts) < 2:
-        return command
-    try:
-        return base64.b64decode(parts[1]).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return command
-
-
-def is_headless_prep_wrapped(command: Optional[str]) -> bool:
-    if not command:
-        return False
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return False
+    parts = managed_wrapper_parts(command, get_headless_prep_script())
     if not parts:
-        return False
-    return parts[0] == get_headless_prep_script()
+        return command
+    decoded = _wrapper_payload(parts)
+    return decoded if decoded else command

@@ -78,6 +78,62 @@ class GetAppPrepCommandsTests(unittest.TestCase):
         )
 
 
+class HostEscapedWrapperTests(unittest.TestCase):
+    """Older releases stored managed wrappers behind a host escape.
+
+    Matching ``parts[0]`` exactly made such a command look like an ordinary
+    game command, so it got wrapped a second time on every reconcile.
+    """
+
+    def _escaped(
+        self,
+        payload: str = "flatpak run com.google.Chrome",
+        origin: str = "cmd",
+        timeout: int = 5,
+    ) -> str:
+        inner = command_wrap.wrap_command(payload, origin, timeout)
+        return f"flatpak-spawn --host {inner}"
+
+    def test_escaped_wrapper_is_recognised(self) -> None:
+        self.assertTrue(command_wrap.is_wrapped_command(self._escaped()))
+
+    def test_wrapping_an_escaped_wrapper_is_a_no_op(self) -> None:
+        escaped = self._escaped()
+        self.assertEqual(command_wrap.wrap_command(escaped), escaped)
+
+    def test_unwrap_sees_through_the_host_escape(self) -> None:
+        self.assertEqual(
+            command_wrap.unwrap_command(self._escaped()),
+            "flatpak run com.google.Chrome",
+        )
+
+    def test_origin_and_timeout_survive_the_host_escape(self) -> None:
+        escaped = self._escaped(origin="steam", timeout=12)
+        self.assertEqual(command_wrap.get_wrapped_command_origin(escaped), "steam")
+        self.assertEqual(command_wrap.get_wrapped_command_exit_timeout(escaped), 12)
+
+    def test_nested_wrappers_collapse_to_the_original_command(self) -> None:
+        nested = command_wrap.wrap_command(self._escaped(), "cmd", 5)
+        self.assertEqual(
+            command_wrap.unwrap_command(nested),
+            "flatpak run com.google.Chrome",
+        )
+
+    def test_malformed_inner_payload_does_not_crash(self) -> None:
+        broken = f"{command_wrap.get_launch_app_script()} cmd 5 not-base64!"
+        nested = command_wrap.wrap_command(broken, "cmd", 5)
+        self.assertEqual(command_wrap.unwrap_command(nested), broken)
+
+    def test_escaped_headless_prep_wrapper_is_recognised(self) -> None:
+        wrapped = command_wrap.wrap_headless_prep_command("notify-send hi")
+        escaped = f"flatpak-spawn --host {wrapped}"
+        self.assertTrue(command_wrap.is_headless_prep_wrapped(escaped))
+        self.assertEqual(
+            command_wrap.unwrap_headless_prep_command(escaped),
+            "notify-send hi",
+        )
+
+
 class RoutesThroughManagedScriptsTests(unittest.TestCase):
     SCRIPT = str(command_wrap.BIN_ROOT / "lutristosunshine-set-resolution.sh")
 
