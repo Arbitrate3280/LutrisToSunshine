@@ -26,16 +26,6 @@ from display.state import DisplayPaths
 from tests._display_test_helpers import redirect_state_paths, temp_display_state
 
 
-def _wp_script(state):
-    files = audio_policy.managed_files(state)
-    return files[Path(state.paths.wireplumber_policy_script)]
-
-
-def _wp_conf(state):
-    files = audio_policy.managed_files(state)
-    return files[Path(state.paths.wireplumber_policy_conf)]
-
-
 class AudioPolicyTests(unittest.TestCase):
     def _temp_state(self, config_text: str = "audio_sink = host-speakers\n"):
         tempdir = tempfile.TemporaryDirectory()

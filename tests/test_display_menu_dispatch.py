@@ -13,32 +13,14 @@ import unittest
 from unittest.mock import patch
 
 from display import hub
+from tests._display_test_helpers import snapshot_fixture
 
 
-SNAPSHOT = {
-    "configured": True,
-    "dynamic_mangohud_fps_limit": False,
-    "current_mangohud_config": "",
-    "refresh_rate_sync_mode": "client",
-    "custom_display_mode": {"width": 1920, "height": 1080, "refresh": 60.0},
-    "custom_display_mode_summary": "1920x1080 @ 60 Hz",
-    "host_session": "unknown",
-    "input_isolation_mode": "permissions-only",
-    "sunshine_active": False,
-    "sway_active": False,
-    "dependencies_missing": [],
-    "wayland_display": "",
-    "current_headless_mode": "",
-    "gpu_status_label": "[AUTO] wlroots chooses GPU",
-    "renderer_mode": "default",
-    "renderer_status_label": "[DEFAULT] wlroots default renderer",
-    "next_step": "Run start.",
-    "status_summary": "STOPPED",
-    "display_sync_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
-    "refresh_rate_sync_mode_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120)",
-    "isolation_summary": "rule ready",
-    "isolation_level": "success",
-}
+SNAPSHOT = snapshot_fixture(
+    configured=True,
+    status_summary="STOPPED",
+    next_step="Run start.",
+)
 
 # Every module-level entry point the two menus can reach.
 HANDLERS = (
@@ -203,8 +185,8 @@ class MenuDispatchTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(self._only(calls), ["print_dashboard"])
 
-    def test_menu_rejects_unknown_choices(self) -> None:
-        # The menus must only offer the rendered options to the prompt.
+    def test_menu_offers_only_rendered_options(self) -> None:
+        # The prompt validator gets exactly the options the menu printed.
         seen = []
         self.choices = iter(["0"])
         with contextlib.ExitStack() as stack:

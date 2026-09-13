@@ -6,6 +6,7 @@ import lutristosunshine
 from display import hub
 from sunshine import catalog
 from sunshine.connection import CONNECTION
+from tests._display_test_helpers import snapshot_fixture
 
 
 class DisplayCliTests(unittest.TestCase):
@@ -274,34 +275,7 @@ class DisplayCliTests(unittest.TestCase):
         original_get_display_blocked_apps = catalog.get_display_blocked_apps
         original_get_menu_choice = hub.get_menu_choice
         try:
-            hub.display_snapshot = lambda: {
-                "configured": False,
-                "dynamic_mangohud_fps_limit": False,
-                "current_mangohud_config": "",
-                "refresh_rate_sync_mode": "client",
-                "host_session": "unknown",
-                "input_isolation_mode": "permissions-only",
-                "sunshine_active": False,
-                "sway_active": False,
-                "bridge_state": "inactive",
-                "wireplumber_policy": "absent",
-                "portal_handoff_active": False,
-                "dependencies_missing": [],
-                "wayland_display": "",
-                "current_headless_mode": "",
-                "controller_detection_error": None,
-                "controller_count": 0,
-                "controllers": [],
-                "gpu_status_label": "[AUTO] wlroots chooses GPU",
-                "renderer_mode": "default",
-                "renderer_status_label": "[DEFAULT] wlroots default renderer",
-                "next_step": "Run enable.",
-                "status_summary": "NOT SET UP",
-                "display_sync_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
-                "refresh_rate_sync_mode_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120)",
-                "isolation_summary": "rule ready",
-                "isolation_level": "success",
-            }
+            hub.display_snapshot = lambda: snapshot_fixture()
             catalog.get_display_blocked_apps = lambda: ([], None)
             hub.get_menu_choice = lambda prompt, valid_choices: "0"
             output = io.StringIO()
@@ -327,32 +301,13 @@ class DisplayCliTests(unittest.TestCase):
         original_get_menu_choice = hub.get_menu_choice
         choices = iter(["6", "0", "0"])
         try:
-            hub.display_snapshot = lambda: {
-                "configured": True,
-                "dynamic_mangohud_fps_limit": False,
-                "current_mangohud_config": "",
-                "refresh_rate_sync_mode": "client",
-                "custom_display_mode": {"width": 1920, "height": 1080, "refresh": 60.0},
-                "host_session": "unknown",
-                "input_isolation_mode": "permissions-only",
-                "sunshine_active": False,
-                "sway_active": False,
-                "bridge_state": "inactive",
-                "wireplumber_policy": "installed",
-                "portal_handoff_active": False,
-                "dependencies_missing": [],
-                "wayland_display": "",
-                "current_headless_mode": "",
-                "gpu_status_label": "[AUTO] wlroots chooses GPU",
-                "renderer_mode": "default",
-                "renderer_status_label": "[DEFAULT] wlroots default renderer",
-                "next_step": "Run start.",
-                "status_summary": "STOPPED",
-                "display_sync_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
-                "refresh_rate_sync_mode_summary": "Moonlight's requested FPS (integer, e.g. 60/90/120)",
-                "isolation_summary": "rule ready",
-                "isolation_level": "success",
-            }
+            hub.display_snapshot = lambda: snapshot_fixture(
+                configured=True,
+                custom_display_mode={'width': 1920, 'height': 1080, 'refresh': 60.0},
+                wireplumber_policy='installed',
+                next_step='Run start.',
+                status_summary='STOPPED',
+            )
             catalog.get_display_blocked_apps = lambda: ([], None)
             hub.get_menu_choice = lambda prompt, valid_choices: next(choices)
             output = io.StringIO()
@@ -376,37 +331,30 @@ class DisplayCliTests(unittest.TestCase):
         original_display_snapshot = hub.display_snapshot
         original_get_display_blocked_apps = catalog.get_display_blocked_apps
         try:
-            hub.display_snapshot = lambda: {
-                "configured": True,
-                "dynamic_mangohud_fps_limit": True,
-                "current_mangohud_config": "read_cfg,fps_limit=59.94",
-                "refresh_rate_sync_mode": "exact",
-                "host_session": "plasma",
-                "input_isolation_mode": "kwin-runtime-disable",
-                "sunshine_active": True,
-                "sway_active": False,
-                "bridge_state": "starting",
-                "wireplumber_policy": "installed",
-                "portal_handoff_active": False,
-                "dependencies_missing": [],
-                "wayland_display": "",
-                "current_headless_mode": "2560x1440 @ 120 Hz",
-                "kwin_isolation_error": "",
-                "kwin_isolation_state": "inactive",
-                "kwin_isolation_devices": [],
-                "kwin_isolation_seen_device_count": 0,
-                "sunshine_input_device_count": 0,
-                "kwin_isolation_failed_devices": [],
-                "gpu_status_label": "[AUTO] wlroots chooses GPU",
-                "renderer_mode": "default",
-                "renderer_status_label": "[DEFAULT] wlroots default renderer",
-                "next_step": "Run doctor.",
-                "status_summary": "PARTIAL",
-                "display_sync_summary": "client's exact refresh rate (fractional, e.g. 59.94/119.88); MangoHud FPS sync on",
-                "refresh_rate_sync_mode_summary": "client's exact refresh rate (fractional, e.g. 59.94/119.88)",
-                "isolation_summary": "KWin helper is not running",
-                "isolation_level": "warning",
-            }
+            hub.display_snapshot = lambda: snapshot_fixture(
+                configured=True,
+                dynamic_mangohud_fps_limit=True,
+                current_mangohud_config='read_cfg,fps_limit=59.94',
+                refresh_rate_sync_mode='exact',
+                host_session='plasma',
+                input_isolation_mode='kwin-runtime-disable',
+                sunshine_active=True,
+                bridge_state='starting',
+                wireplumber_policy='installed',
+                current_headless_mode='2560x1440 @ 120 Hz',
+                kwin_isolation_error='',
+                kwin_isolation_state='inactive',
+                kwin_isolation_devices=[],
+                kwin_isolation_seen_device_count=0,
+                sunshine_input_device_count=0,
+                kwin_isolation_failed_devices=[],
+                next_step='Run doctor.',
+                status_summary='PARTIAL',
+                display_sync_summary="client's exact refresh rate (fractional, e.g. 59.94/119.88); MangoHud FPS sync on",
+                refresh_rate_sync_mode_summary="client's exact refresh rate (fractional, e.g. 59.94/119.88)",
+                isolation_summary='KWin helper is not running',
+                isolation_level='warning',
+            )
             catalog.get_display_blocked_apps = lambda: ([], None)
 
             output = io.StringIO()

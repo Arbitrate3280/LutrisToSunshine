@@ -41,6 +41,43 @@ def assert_state_paths_under(state: DisplayState, base: Path) -> None:
     assert not leaked, f"state paths leaked outside {base}: {leaked}"
 
 
+def snapshot_fixture(**overrides: Any) -> Dict[str, Any]:
+    """Return the pseudo DisplaySnapshot the hub views consume.
+
+    The CLI rendering tests assert on rendered labels, so keep the full
+    field set here and override only what each test exercises.
+    """
+    snapshot: Dict[str, Any] = {
+        'configured': False,
+        'dynamic_mangohud_fps_limit': False,
+        'current_mangohud_config': '',
+        'refresh_rate_sync_mode': 'client',
+        'host_session': 'unknown',
+        'input_isolation_mode': 'permissions-only',
+        'sunshine_active': False,
+        'sway_active': False,
+        'bridge_state': 'inactive',
+        'wireplumber_policy': 'absent',
+        'portal_handoff_active': False,
+        'dependencies_missing': [],
+        'wayland_display': '',
+        'current_headless_mode': '',
+        'controller_detection_error': None,
+        'controller_count': 0,
+        'controllers': [],
+        'gpu_status_label': '[AUTO] wlroots chooses GPU',
+        'renderer_mode': 'default',
+        'renderer_status_label': '[DEFAULT] wlroots default renderer',
+        'next_step': 'Run enable.',
+        'status_summary': 'NOT SET UP',
+        'display_sync_summary': "Moonlight's requested FPS (integer, e.g. 60/90/120); MangoHud FPS sync off",
+        'refresh_rate_sync_mode_summary': "Moonlight's requested FPS (integer, e.g. 60/90/120)",
+        'isolation_summary': 'rule ready',
+        'isolation_level': 'success',
+    }
+    snapshot.update(overrides)
+    return snapshot
+
 def redirect_state_paths(state: DisplayState, base: Path) -> None:
     """Point every :class:`DisplayPaths` entry at ``base``.
 
