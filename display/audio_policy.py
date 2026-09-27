@@ -15,6 +15,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from display.sunshine_conf import read_key_value, remove_key, set_key_value
 from display.utils import safe_string
 from display.state import DisplayState
 from display.utils import run_command
@@ -409,12 +410,15 @@ if run_audio_command pactl list sinks short 2>/dev/null | grep -q "$sink_name"; 
     exit 0
 fi
 
-if ! module_id="$(run_audio_command pactl load-module module-null-sink "sink_name=$sink_name" "sink_properties=device.description=$sink_name" 2>/dev/null)"; then
+if ! module_output="$(run_audio_command pactl load-module module-null-sink "sink_name=$sink_name" "sink_properties=device.description=$sink_name" 2>&1)"; then
     echo "Audio sink creation failed: $sink_name" >&2
+    printf '%s\\n' "$module_output" >&2
     exit 1
 fi
+module_id="$(printf '%s\\n' "$module_output" | grep -E '^[0-9]+$' | head -n 1)"
 if [ -z "$module_id" ]; then
     echo "Audio sink creation returned no module id: $sink_name" >&2
+    printf '%s\\n' "$module_output" >&2
     exit 1
 fi
 echo "$module_id" > "$module_file"
@@ -489,56 +493,18 @@ def managed_files(state: DisplayState) -> Dict[Path, str]:
 
 
 def _read_key_value(path: Path, key: str) -> Dict[str, Any]:
-    if not path.exists():
-        return {"present": False, "value": ""}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        current_key, value = stripped.split("=", 1)
-        if current_key.strip() == key:
-            return {"present": True, "value": value.strip()}
-    return {"present": False, "value": ""}
+    """Backwards-compatible alias for :func:`display.sunshine_conf.read_key_value`."""
+    return read_key_value(path, key)
 
 
 def _set_key_value(path: Path, key: str, value: str) -> None:
-    lines: List[str] = []
-    found = False
-    if path.exists():
-        lines = path.read_text(encoding="utf-8").splitlines()
-
-    updated_lines: List[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            current_key = stripped.split("=", 1)[0].strip()
-            if current_key == key:
-                updated_lines.append(f"{key} = {value}")
-                found = True
-                continue
-        updated_lines.append(line)
-
-    if not found:
-        if updated_lines and updated_lines[-1] != "":
-            updated_lines.append("")
-        updated_lines.append(f"{key} = {value}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    """Backwards-compatible alias for :func:`display.sunshine_conf.set_key_value`."""
+    set_key_value(path, key, value)
 
 
 def _remove_key(path: Path, key: str) -> None:
-    if not path.exists():
-        return
-    updated_lines = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            current_key = stripped.split("=", 1)[0].strip()
-            if current_key == key:
-                continue
-        updated_lines.append(line)
-    path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+    """Backwards-compatible alias for :func:`display.sunshine_conf.remove_key`."""
+    remove_key(path, key)
 
 
 def _read_global_prep_cmd_list(sunshine_conf: Path) -> List[Dict[str, str]]:

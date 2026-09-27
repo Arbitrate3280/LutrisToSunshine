@@ -12,10 +12,12 @@ import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from display import sunshine_service as _svc
+from display import portal as _portal
 from display.constants import (
+    DEFAULT_CAPTURE_METHOD,
     PORTAL_ACTIVE_PATH,
     WAYLAND_DISPLAY_PATH,
 )
@@ -83,6 +85,13 @@ class DisplaySnapshot:
     sunshine_input_devices: List[InputDevice] = field(default_factory=list)
     sunshine_input_device_count: int = 0
     portal_handoff_active: bool = False
+    capture_method: str = DEFAULT_CAPTURE_METHOD
+    capture_method_label: str = ""
+    capture_method_summary: str = ""
+    capture_config_drift: Tuple[str, ...] = ()
+    portal_bus_active: bool = False
+    portal_names_active: bool = False
+    portal_error: str = ""
     current_mangohud_config: str = ""
     last_launch_log_file: str = ""
     dependencies_missing: List[str] = field(default_factory=list)
@@ -226,6 +235,10 @@ def _legacy_snapshot(value: Mapping[str, object]) -> DisplaySnapshot:
         "gpu_status_label",
         "renderer_mode",
         "renderer_status_label",
+        "capture_method",
+        "capture_method_label",
+        "capture_method_summary",
+        "portal_error",
         "next_step",
         "status_summary",
         "display_sync_summary",
@@ -240,6 +253,8 @@ def _legacy_snapshot(value: Mapping[str, object]) -> DisplaySnapshot:
         "sway_active",
         "udev_rule_present",
         "portal_handoff_active",
+        "portal_bus_active",
+        "portal_names_active",
     )
     int_fields = ("kwin_isolation_seen_device_count", "sunshine_input_device_count")
     string_defaults = {
@@ -249,6 +264,7 @@ def _legacy_snapshot(value: Mapping[str, object]) -> DisplaySnapshot:
         "wireplumber_policy": "absent",
         "gpu_mode": "auto",
         "renderer_mode": "default",
+        "capture_method": DEFAULT_CAPTURE_METHOD,
         "status_summary": "NOT SET UP",
         "isolation_level": "success",
         "isolation_summary": "rule ready",
@@ -260,6 +276,7 @@ def _legacy_snapshot(value: Mapping[str, object]) -> DisplaySnapshot:
     values.update({key: _legacy_bool(value, key, False) for key in bool_fields})
     values.update({key: _legacy_int(value, key, 0) for key in int_fields})
     values["dependencies_missing"] = _legacy_string_list(value, "dependencies_missing")
+    values["capture_config_drift"] = _legacy_string_list(value, "capture_config_drift")
     values["custom_display_mode"] = _legacy_display_mode(value)
     values["sunshine_install_audit"] = _legacy_sunshine_audit(value)
     values["kwin_isolation_devices"] = _legacy_devices(value, "kwin_isolation_devices", "path")
@@ -380,12 +397,17 @@ def current_headless_mode(
     return ""
 
 
-def missing_dependencies(which_fn: Callable[[str], Optional[str]] = shutil.which) -> List[str]:
+def missing_dependencies(
+    which_fn: Callable[[str], Optional[str]] = shutil.which,
+    capture_method: str = DEFAULT_CAPTURE_METHOD,
+) -> List[str]:
     missing = [
         name
         for name in ["flock", "gdbus", "pactl", "python3", "setfacl", "stdbuf", "sway", "swaymsg", "systemctl"]
         if which_fn(name) is None
     ]
+    if capture_method == _portal.CAPTURE_PORTAL:
+        missing.extend(_portal.missing_dependencies(which_fn=which_fn))
     if _installation.sunshine_binary() is None and not _svc.show_unit_property(_svc.sunshine_unit(), "ExecStart"):
         missing.append("sunshine")
     return missing
@@ -464,9 +486,12 @@ def display_snapshot(
     empty_kwin_status_fn: Optional[Callable[[], KwinInputIsolationStatus]] = None,
     sunshine_input_devices_fn: Optional[Callable[[], List[InputDevice]]] = None,
     renderer_status_fn: Optional[Callable[[DisplayState], str]] = None,
+    portal_status_fn: Optional[Callable[[DisplayState], Dict[str, object]]] = None,
 ) -> DisplaySnapshot:
     load_state_fn = load_state_fn or load_state
-    ensure_dependencies_fn = ensure_dependencies_fn or missing_dependencies
+    state = load_state_fn()
+    if ensure_dependencies_fn is None:
+        ensure_dependencies_fn = lambda: missing_dependencies(capture_method=state.capture_method)
     current_headless_mode_fn = current_headless_mode_fn or current_headless_mode
     sunshine_active_fn = sunshine_active_fn or _svc.is_sunshine_service_active
     sunshine_unit_fn = sunshine_unit_fn or _svc.sunshine_unit
@@ -476,7 +501,7 @@ def display_snapshot(
     empty_kwin_status_fn = empty_kwin_status_fn or empty_kwin_input_isolation_status
     sunshine_input_devices_fn = sunshine_input_devices_fn or sunshine_virtual_input_devices
     renderer_status_fn = renderer_status_fn or renderer_status_label
-    state = load_state_fn()
+    portal_status_fn = portal_status_fn or _portal.portal_status
     configured = state.enabled
     sunshine_active = sunshine_active_fn() if configured else False
     sunshine_unit = state.sunshine_unit_name or sunshine_unit_fn()
@@ -498,6 +523,8 @@ def display_snapshot(
     mode_summary = refresh_rate_sync_mode_summary(state.refresh_rate_sync_mode)
     if state.refresh_rate_sync_mode == "custom":
         mode_summary = f"{mode_summary} ({custom_display_mode_string(custom_mode)})"
+
+    portal_status = portal_status_fn(state) if (configured and _portal.portal_capture_enabled(state)) else {}
 
     snapshot = DisplaySnapshot(
         configured=configured,
@@ -528,6 +555,16 @@ def display_snapshot(
         sunshine_input_devices=input_devices,
         sunshine_input_device_count=len(input_devices),
         portal_handoff_active=PORTAL_ACTIVE_PATH.exists(),
+        capture_method=state.capture_method,
+        capture_method_label=_portal.capture_method_label(state),
+        capture_method_summary=_portal.capture_method_summary(state),
+        capture_config_drift=tuple(
+            f"{key} = {actual or '(unset)'} (expected {expected})"
+            for key, expected, actual in _portal.capture_config_drift(state)
+        ),
+        portal_bus_active=bool(portal_status.get("bus_active")),
+        portal_names_active=bool(portal_status.get("names_active")),
+        portal_error=safe_string(portal_status.get("error")),
         current_mangohud_config=safe_string(active_launch_status.get("mangohud_config")),
         last_launch_log_file=state.paths.last_launch_log_file,
         dependencies_missing=ensure_dependencies_fn(),
@@ -654,12 +691,54 @@ def _doctor_configured_checks(snapshot: DisplaySnapshot) -> List[DoctorCheck]:
     return checks
 
 
+def _doctor_portal_check(snapshot: DisplaySnapshot) -> Optional[DoctorCheck]:
+    if snapshot.capture_method != _portal.CAPTURE_PORTAL:
+        return None
+    if snapshot.portal_names_active:
+        return DoctorCheck(
+            "Portal capture",
+            "pass",
+            "Private portal session is serving the headless output.",
+        )
+    if snapshot.portal_bus_active:
+        return DoctorCheck(
+            "Portal capture",
+            "warn",
+            snapshot.portal_error or "Private portal session is starting.",
+        )
+    return DoctorCheck(
+        "Portal capture",
+        "warn",
+        snapshot.portal_error or "Private portal session bus is not running.",
+    )
+
+
+def _doctor_capture_config_check(snapshot: DisplaySnapshot) -> Optional[DoctorCheck]:
+    """Warn when Sunshine's own config points the capture somewhere else."""
+    if not snapshot.capture_config_drift:
+        return None
+    return DoctorCheck(
+        "Capture config",
+        "warn",
+        "Sunshine's config does not match this display's capture backend: "
+        + "; ".join(snapshot.capture_config_drift)
+        + ". Run 'display restart' to re-pin it.",
+    )
+
+
 def display_doctor_report(snapshot: Optional[DisplaySnapshot] = None) -> DoctorReport:
     snapshot = as_display_snapshot(snapshot or display_snapshot())
     checks = _doctor_host_and_dependencies(snapshot)
     installation_check = _doctor_installation_check(snapshot)
     if installation_check:
         checks.append(installation_check)
+    if snapshot.configured:
+        capture_config_check = _doctor_capture_config_check(snapshot)
+        if capture_config_check:
+            checks.append(capture_config_check)
+        portal_check = _doctor_portal_check(snapshot)
+        if portal_check:
+            checks.append(portal_check)
     checks.extend(_doctor_configured_checks(snapshot))
     summary = (
         "needs_attention"

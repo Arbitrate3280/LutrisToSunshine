@@ -14,8 +14,10 @@ pulse_server_value="${PULSE_SERVER:-}"
 pulse_clientconfig_value="${PULSE_CLIENTCONFIG:-}"
 kwin_input_isolation_pid=""
 sway_pid=""
+portal_pid=""
 sunshine_pid=""
 sunshine_status=0
+@PORTAL_SETUP_BLOCK@
 
 export XDG_RUNTIME_DIR="$runtime_dir"
 export DBUS_SESSION_BUS_ADDRESS="$dbus_value"
@@ -42,6 +44,7 @@ cleanup() {
     local exit_code=$?
     stop_child "$sunshine_pid"
     stop_child "$kwin_input_isolation_pid"
+@PORTAL_CLEANUP_BLOCK@
     stop_child "$sway_pid"
     rm -f "$kwin_input_isolation_status_file" "$display_file"
     "$audio_cleanup_script" >/dev/null 2>&1 || true
@@ -50,6 +53,7 @@ cleanup() {
 
 trap cleanup EXIT INT TERM HUP
 
+@PORTAL_BUS_START_BLOCK@
 setsid "$sway_start_script" &
 sway_pid=$!
 
@@ -67,7 +71,7 @@ if [ ! -s "$display_file" ] || [ ! -S "$sway_socket" ]; then
     echo "Headless sway did not become ready." >&2
     exit 1
 fi
-
+@PORTAL_DAEMON_BLOCK@
 setsid python3 "$kwin_input_isolation_script" &
 kwin_input_isolation_pid=$!
 

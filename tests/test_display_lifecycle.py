@@ -834,7 +834,7 @@ H: Handlers=sysrq kbd event29
         set_resolution_script = scripts[Path(state.paths.set_resolution_script)]
 
         self.assertIn(
-            'swaymsg_cmd "output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
+            'lts_mode_command="output HEADLESS-1 mode ${target_width}x${target_height}@${target_fps}Hz"',
             set_resolution_script,
         )
         self.assertIn('target_width="${SUNSHINE_CLIENT_WIDTH:-}"', set_resolution_script)
@@ -942,7 +942,7 @@ H: Handlers=sysrq kbd event29
             apply_exact_refresh_script,
         )
         self.assertIn(
-            'swaymsg "output HEADLESS-1 mode ${width}x${height}@${exact_stream_fps}Hz"',
+            'mode_command="output HEADLESS-1 mode ${width}x${height}@${exact_stream_fps}Hz"',
             apply_exact_refresh_script,
         )
 

@@ -6,7 +6,7 @@ if [ ! -S "@SWAY_SOCKET@" ]; then
 fi
 
 if [ -f /.flatpak-info ]; then
-    flatpak-spawn --host env SWAYSOCK="@SWAY_SOCKET@" swaymsg "output HEADLESS-1 mode @FALLBACK_MODE@" >/dev/null 2>&1 || true
+    flatpak-spawn --host env SWAYSOCK="@SWAY_SOCKET@" swaymsg "output @HEADLESS_OUTPUT@ mode @FALLBACK_MODE@" >/dev/null 2>&1 || true
 else
-    SWAYSOCK="@SWAY_SOCKET@" swaymsg "output HEADLESS-1 mode @FALLBACK_MODE@" >/dev/null 2>&1 || true
+    SWAYSOCK="@SWAY_SOCKET@" swaymsg "output @HEADLESS_OUTPUT@ mode @FALLBACK_MODE@" >/dev/null 2>&1 || true
 fi

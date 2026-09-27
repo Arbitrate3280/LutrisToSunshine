@@ -95,10 +95,53 @@ for index, line in enumerate(lines):
     if "CLIENT CONNECTED" in line:
         connect_index = index
 
-pattern = re.compile(
+# Sunshine logs the rate the client asked for in a backend-specific shape:
+#   wlroots capture: "[wlgrab] Requested frame rate [60000/1001, approx. 59.94 fps]"
+#   portal capture:  "[pipewire] Requested frame rate: 120/1, approx. 120.00 fps"
+#   portal capture, variable rate:
+#                    "[pipewire] Requested variable frame rate (Sunshine pacing required: 8.3333ms)"
+# The portal forms never matched, so portal capture always fell back to the
+# launch request's FPS (SUNSHINE_CLIENT_FPS), which is a different value.
+WLGRAB_PATTERN = re.compile(
     r"Requested frame rate \[(?P<value>\d+(?:\.\d+)?)(?:"
     r"/(?P<denominator>\d+)(?:, approx\. [^\]]+)?|fps)\]"
 )
+PIPEWIRE_PATTERN = re.compile(
+    r"Requested frame rate: (?P<value>\d+(?:\.\d+)?)"
+    r"(?:/(?P<denominator>\d+))?"
+)
+PACING_PATTERN = re.compile(
+    r"Requested variable frame rate \(Sunshine pacing required: "
+    r"(?P<milliseconds>\d+(?:\.\d+)?)ms\)"
+)
+
+
+def rate_from_line(line: str):
+    match = WLGRAB_PATTERN.search(line)
+    if match:
+        return rational_rate(match.group("value"), match.group("denominator"))
+    match = PIPEWIRE_PATTERN.search(line)
+    if match:
+        return rational_rate(match.group("value"), match.group("denominator"))
+    match = PACING_PATTERN.search(line)
+    if match:
+        milliseconds = float(match.group("milliseconds"))
+        if milliseconds <= 0:
+            return None
+        return 1000.0 / milliseconds
+    return None
+
+
+def rational_rate(value_text: str, denominator_text):
+    value = float(value_text)
+    if denominator_text:
+        denominator = int(denominator_text)
+        if denominator <= 0:
+            return None
+        return value / denominator
+    return value
+
+
 # A prep command starts before Sunshine emits CLIENT CONNECTED. When the
 # caller supplies since_time, the timestamp filter already isolates this
 # stream, so do not discard the requested-rate line that precedes that event.
@@ -108,18 +151,9 @@ search_lines = (
     else lines
 )
 for line in reversed(search_lines):
-    match = pattern.search(line)
-    if not match:
+    fps = rate_from_line(line)
+    if fps is None:
         continue
-    value = float(match.group("value"))
-    denominator_text = match.group("denominator")
-    if denominator_text:
-        denominator = int(denominator_text)
-        if denominator <= 0:
-            break
-        fps = value / denominator
-    else:
-        fps = value
     nearest = round(fps)
     if abs(fps - nearest) < 0.005:
         print(str(int(nearest)))

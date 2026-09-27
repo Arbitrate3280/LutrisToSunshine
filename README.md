@@ -49,6 +49,9 @@ The menu includes:
 - **Display sync** — match the client's resolution and FPS, set a custom mode, or lock a fixed resolution
 - **GPU selection** — pick which GPU drives the virtual display (for multi-GPU setups)
 - **Renderer** — toggle between GLES2 (stable, broad support) and Vulkan (HDR capable)
+- **Capture backend** — `wlr` (Sunshine reads the headless output directly) or `portal`
+  (Sunshine captures through a private xdg-desktop-portal + PipeWire session; the first run asks
+  for screen-sharing permission on the desktop once, after that it starts on its own)
 - **MangoHud FPS limit** — dynamically cap FPS to the client's refresh rate
 - **Service controls** — start, stop, or restart Sunshine for the virtual display
 - **Status dashboard** — health overview, input isolation state, and more

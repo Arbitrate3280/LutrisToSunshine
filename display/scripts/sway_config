@@ -1,5 +1,5 @@
 # Managed by LutrisToSunshine display.
-output HEADLESS-1 resolution @FALLBACK_MODE@
+output @HEADLESS_OUTPUT@ resolution @FALLBACK_MODE@
 swaybg_command /usr/bin/true
 
 input * events disabled

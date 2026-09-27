@@ -30,6 +30,7 @@ HANDLERS = (
     "configure_custom_mode",
     "configure_gpu",
     "configure_renderer_mode",
+    "configure_capture_method",
     "start",
     "stop_display",
     "restart",
@@ -128,6 +129,12 @@ class MenuDispatchTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(self._only(calls), ["configure_renderer_mode"])
 
+    def test_option_7_chooses_capture_backend(self) -> None:
+        result, calls = self._drive(["7", "0"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(self._only(calls), ["configure_capture_method"])
+
     def test_tools_1_start_sunshine(self) -> None:
         result, calls = self._drive(["6", "1", "0", "0"])
 
@@ -202,7 +209,7 @@ class MenuDispatchTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 hub.run_hub()
 
-        self.assertEqual(seen, [["0", "1", "2", "3", "4", "5", "6"]])
+        self.assertEqual(seen, [["0", "1", "2", "3", "4", "5", "6", "7"]])
 
 
 if __name__ == "__main__":

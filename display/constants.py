@@ -11,8 +11,11 @@ LEGACY_DISPLAY_ROOT = CONFIG_ROOT / LEGACY_DISPLAY_DIRNAME
 PROFILE_ROOT = DISPLAY_ROOT / PROFILE_NAME
 BIN_ROOT = CONFIG_ROOT / "bin"
 DEFAULT_SUNSHINE_UNIT = "app-dev.lizardbyte.app.Sunshine.service"
-WIREPLUMBER_SCRIPTS_DIR = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser() / "wireplumber" / "scripts"
-WIREPLUMBER_CONF_DIR = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "wireplumber" / "wireplumber.conf.d"
+XDG_DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser()
+XDG_CONFIG_HOME = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser()
+XDG_RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+WIREPLUMBER_SCRIPTS_DIR = XDG_DATA_HOME / "wireplumber" / "scripts"
+WIREPLUMBER_CONF_DIR = XDG_CONFIG_HOME / "wireplumber" / "wireplumber.conf.d"
 WIREPLUMBER_POLICY_SCRIPT_NAME = "lts-audio-policy.lua"
 WIREPLUMBER_POLICY_CONF_NAME = "54-lts-audio-policy.conf"
 DISPLAY_STATE_PATH = DISPLAY_ROOT / "display.json"
@@ -20,6 +23,31 @@ LEGACY_STATE_PATH = LEGACY_DISPLAY_ROOT / f"{LEGACY_DISPLAY_DIRNAME}.json"
 FLATPAK_PORTAL_UNIT = "flatpak-portal.service"
 DISPLAY_SOCKET_PATH = f"/run/user/{os.getuid()}/lutristosunshine-display.sock"
 WAYLAND_DISPLAY_PATH = PROFILE_ROOT / "wayland-display"
+DEFAULT_CAPTURE_METHOD = "wlr"
+CAPTURE_METHODS = ("wlr", "portal")
+HEADLESS_OUTPUT_NAME = "HEADLESS-1"
+# Private session bus + portal stack owned by the virtual display.  The socket
+# lives in the runtime dir so the address is short enough for a unix socket and
+# disappears with the user session.
+PORTAL_BUS_SOCKET_NAME = "lutristosunshine-portal-bus"
+PORTAL_BUS_ADDRESS_PATH = PROFILE_ROOT / "portal-bus-address"
+PORTAL_BUS_PID_PATH = PROFILE_ROOT / "portal-bus.pid"
+PORTAL_READY_PATH = PROFILE_ROOT / "portal-ready"
+PORTAL_LOG_PATH = PROFILE_ROOT / "portal.log"
+# Sunshine usually carries file capabilities (cap_sys_admin for KMS capture),
+# which makes the kernel mark its processes AT_SECURE.  GLib then refuses
+# DBUS_SESSION_BUS_ADDRESS and only looks for $XDG_RUNTIME_DIR/bus, so portal
+# capture needs a private runtime dir whose `bus` entry is our portal bus.
+PORTAL_RUNTIME_DIR = PROFILE_ROOT / "runtime"
+PORTAL_CONFIG_HOME = PROFILE_ROOT / "portal-config"
+PORTAL_ROUTING_CONF_NAME = "sway-portals.conf"
+PORTAL_WLR_CONFIG_NAME = "config"
+# Private portal directory: xdg-desktop-portal only ever sees the wlroots
+# backend, so no other implementation (KDE, GTK, ...) can serve a request.
+PORTAL_PORTALS_DIRNAME = "portals"
+PORTAL_WLR_PORTAL_NAME = "wlr.portal"
+PORTAL_DESKTOP_NAME = "org.freedesktop.portal.Desktop"
+PORTAL_WLR_BACKEND_NAME = "org.freedesktop.impl.portal.desktop.wlr"
 AUDIO_MODULE_PATH = PROFILE_ROOT / "audio-module-id"
 PORTAL_LOCK_PATH = PROFILE_ROOT / "flatpak-portal.lock"
 PORTAL_ACTIVE_PATH = PROFILE_ROOT / "flatpak-portal-active"

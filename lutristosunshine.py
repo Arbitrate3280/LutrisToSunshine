@@ -126,6 +126,18 @@ def parse_args(argv=None):
         choices=["default", "vulkan"],
         help="'default' lets wlroots choose, 'vulkan' forces WLR_RENDERER=vulkan.",
     )
+    capture_parser = display_subparsers.add_parser(
+        "capture-method",
+        help=(
+            "Choose how Sunshine captures the virtual display: 'wlr' (direct wlroots screencopy) "
+            "or 'portal' (private xdg-desktop-portal + PipeWire session)."
+        ),
+    )
+    capture_parser.add_argument(
+        "method",
+        choices=["wlr", "portal"],
+        help="Capture backend Sunshine uses for the virtual display.",
+    )
 
     return parser.parse_args(argv)
 
@@ -184,6 +196,17 @@ def handle_display_command(args) -> int:
     if action == "renderer-mode":
         from display.manager import set_renderer_mode
         set_renderer_mode(args.mode)
+        return 0
+    if action == "capture-method":
+        from display import portal
+        from display.manager import set_capture_method
+        previous, _ = set_capture_method(args.method)
+        if args.method == portal.CAPTURE_PORTAL:
+            print("Sunshine capture pinned to 'portal' (private xdg-desktop-portal session).")
+        else:
+            print("Sunshine capture restored to 'wlr'; the portal files were removed.")
+        if previous != args.method:
+            print("Restart the virtual display for the change to take effect: 'display restart'.")
         return 0
     print(f"Unknown display action: {action}")
     return 1

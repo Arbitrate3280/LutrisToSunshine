@@ -41,14 +41,19 @@ unset KDE_SESSION_VERSION
 decoded_command="$(printf '%s' "$encoded_command" | base64 --decode)"
 display_value=":1"
 wayland_value="$(cat "@WAYLAND_DISPLAY_FILE@")"
-runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# Sunshine may run with a private XDG_RUNTIME_DIR (portal capture mode);
+# games always use the real one, so PipeWire and PulseAudio sockets resolve.
+runtime_dir="@HOST_RUNTIME_DIR@"
 path_value="${PATH:-/usr/local/bin:/usr/bin:/bin}"
 lang_value="${LANG:-C.UTF-8}"
 home_value="${HOME:-/home/$(id -un)}"
 user_value="${USER:-$(id -un)}"
 logname_value="${LOGNAME:-$user_value}"
 shell_value="${SHELL:-/bin/sh}"
-dbus_value="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}"
+# Games always run against the host session bus.  In portal capture mode
+# Sunshine itself talks to the private virtual-display bus, so the address is
+# rendered in explicitly instead of inherited from Sunshine's environment.
+dbus_value="@HOST_SESSION_BUS_ADDRESS@"
 pulse_server_value="${PULSE_SERVER:-}"
 pulse_clientconfig_value="${PULSE_CLIENTCONFIG:-}"
 portal_lock_file="@PORTAL_LOCK_FILE@"
@@ -136,7 +141,7 @@ import_portal_env() {
     names=("$@")
     systemctl --user import-environment "${names[@]}" >/dev/null
     if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-        dbus-update-activation-environment --systemd "${names[@]}" >/dev/null 2>&1 || true
+        DBUS_SESSION_BUS_ADDRESS="$dbus_value" dbus-update-activation-environment --systemd "${names[@]}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -191,7 +196,7 @@ EOF
 
 start_portal_monitor() {
     monitor_log="$(mktemp "@PROFILE_ROOT@/portal-monitor-XXXXXX.log")"
-    stdbuf -oL -eL gdbus monitor --session --dest org.freedesktop.portal.Flatpak --object-path /org/freedesktop/portal/Flatpak > "$monitor_log" 2>/dev/null &
+    DBUS_SESSION_BUS_ADDRESS="$dbus_value" stdbuf -oL -eL gdbus monitor --session --dest org.freedesktop.portal.Flatpak --object-path /org/freedesktop/portal/Flatpak > "$monitor_log" 2>/dev/null &
     monitor_pid="$!"
     sleep 0.2
 }

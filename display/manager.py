@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Tuple
 
 from display import audio_policy
 from display import input_isolation as _input_isolation
+from display import portal
 from display import state as _state
 from display import sunshine_service as _svc
 from display import scripts_render
@@ -80,6 +81,21 @@ def set_renderer_mode(mode: str) -> DisplayState:
     return refresh_managed_files(state)
 
 
+def set_capture_method(
+    method: str,
+    *,
+    load_state_fn: Optional[Callable[[], DisplayState]] = None,
+    refresh_managed_files_fn: Optional[Callable[[DisplayState], DisplayState]] = None,
+) -> Tuple[str, DisplayState]:
+    """Switch Sunshine's capture backend and reconcile the managed files."""
+    load_state_fn = load_state_fn or _state.load_state
+    refresh_managed_files_fn = refresh_managed_files_fn or refresh_managed_files
+    state = load_state_fn()
+    previous = state.capture_method
+    state.capture_method = _state.normalized_capture_method(method)
+    return previous, refresh_managed_files_fn(state)
+
+
 def _write_file(path: Path, content: str, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -96,13 +112,22 @@ def _write_managed_files(state: DisplayState) -> None:
         _write_file(path, content, executable=path.suffix == ".sh")
     for path, content in audio_policy.managed_files(state).items():
         _write_file(path, content, executable=path.suffix == ".sh")
+    for path, content in portal.managed_files(state).items():
+        _write_file(path, content)
+    if not portal.portal_capture_enabled(state):
+        portal.remove_files(state)
 
 
-def _ensure_dependencies() -> List[str]:
+def _ensure_dependencies(state: Optional[DisplayState] = None) -> List[str]:
     """Legacy lifecycle seam; dependency probing remains in diagnostics."""
     from display import diagnostics
 
-    return diagnostics.missing_dependencies(which_fn=shutil.which)
+    if state is None:
+        state = _state.load_state()
+    return diagnostics.missing_dependencies(
+        which_fn=shutil.which,
+        capture_method=state.capture_method,
+    )
 
 
 def refresh_managed_files(state: Optional[DisplayState] = None) -> DisplayState:
@@ -111,6 +136,9 @@ def refresh_managed_files(state: Optional[DisplayState] = None) -> DisplayState:
     if not state.sunshine_execstart:
         state = _svc.remember_sunshine_execstart(state)
     _write_managed_files(state)
+    # Portal capture has to be pinned in Sunshine's own config: the automatic
+    # capture order prefers KMS over the portal.
+    state = portal.sync_capture_config(state)
     _state.save_state(state)
     _daemon_reload()
     return state
@@ -134,6 +162,11 @@ def _managed_setup_paths(state: DisplayState) -> List[Path]:
         "set_resolution_script",
         "reset_resolution_script",
         "kwin_input_isolation_script",
+        "portal_bus_script",
+        "portal_start_script",
+        "portal_routing_conf",
+        "portal_wlr_config",
+        "portal_wlr_portal",
     ]
     return [Path(getattr(paths, key)) for key in keys if getattr(paths, key, "")]
 
@@ -179,11 +212,13 @@ def _daemon_reload() -> None:
 
 def setup_display(
     *,
-    refresh_managed_files_fn: Callable[[DisplayState], DisplayState] = refresh_managed_files,
+    refresh_managed_files_fn: Optional[Callable[[DisplayState], DisplayState]] = None,
     install_udev_rule_fn: Callable[[DisplayState], bool] = _install_udev_rule,
-    audio_setup_fn: Callable[[DisplayState], None] = audio_policy.setup,
+    audio_setup_fn: Optional[Callable[[DisplayState], None]] = None,
 ) -> int:
-    missing = _ensure_dependencies()
+    refresh_managed_files_fn = refresh_managed_files_fn or refresh_managed_files
+    audio_setup_fn = audio_setup_fn or audio_policy.setup
+    missing = _ensure_dependencies(_state.load_state())
     if missing:
         print("Missing required commands:", ", ".join(missing))
         return 1
@@ -194,23 +229,24 @@ def setup_display(
     # Re-detect and persist the unit name so overrides go to the right directory,
     # even if the user switched Sunshine installations since the last run.
     state.sunshine_unit_name = _svc.sunshine_unit()
-    state.paths = _state.build_paths(state.sunshine_unit_name)
+    state.paths = _state.with_sunshine_unit(state.paths, state.sunshine_unit_name)
     state.paths.sunshine_conf = str(
         installation.resolve_sunshine_config_root(state.sunshine_unit_name)
         / "sunshine.conf"
     )
 
+    # The privileged step comes first: it is the one that can still fail, and a
+    # half-written managed stack (override without its scripts) leaves the
+    # Sunshine unit pointing at files that were never installed.
+    if not install_udev_rule_fn(state):
+        print("Error: unable to install the Sunshine input isolation udev rule.")
+        print("Install sudo or pkexec, then rerun the command.")
+        return 1
+
     state = _svc.remember_sunshine_execstart(state)
     state = refresh_managed_files_fn(state)
     audio_setup_fn(state)
     _state.save_state(state)
-
-    if not install_udev_rule_fn(state):
-        audio_policy.remove(state)
-        _state.save_state(state)
-        print("Error: unable to install the Sunshine input isolation udev rule.")
-        print("Install sudo or pkexec, then rerun the command.")
-        return 1
 
     _daemon_reload()
     state.enabled = True
@@ -347,6 +383,8 @@ def remove_display(
             pass
 
     _svc.cleanup_managed_overrides(state)
+    portal.remove_files(state)
+    portal.clear_capture_config(state)
 
     for path_key in [
         "portal_active_file",
@@ -354,6 +392,10 @@ def remove_display(
         "kwin_input_isolation_status_file",
         "wayland_display_file",
         "audio_module_file",
+        "portal_bus_address_file",
+        "portal_bus_pid_file",
+        "portal_ready_file",
+        "portal_log_file",
     ]:
         try:
             path_value = getattr(state.paths, path_key, "")
@@ -372,6 +414,7 @@ def remove_display(
     for directory in [
         state.paths.profile_root,
         state.paths.bin_root,
+        state.paths.portal_runtime_dir,
         str(Path(state.paths.state_path).parent) if state.paths.state_path else "",
         str(LEGACY_DISPLAY_ROOT),
     ]:

@@ -10,6 +10,8 @@ from typing import Optional
 from display.constants import (
     AUDIO_MODULE_PATH,
     BIN_ROOT,
+    CAPTURE_METHODS,
+    DEFAULT_CAPTURE_METHOD,
     DEFAULT_SUNSHINE_UNIT,
     DISPLAY_ROOT,
     DISPLAY_SOCKET_PATH,
@@ -17,7 +19,17 @@ from display.constants import (
     LAST_LAUNCH_LOG_PATH,
     LEGACY_STATE_PATH,
     PORTAL_ACTIVE_PATH,
+    PORTAL_BUS_ADDRESS_PATH,
+    PORTAL_BUS_PID_PATH,
+    PORTAL_CONFIG_HOME,
     PORTAL_LOCK_PATH,
+    PORTAL_LOG_PATH,
+    PORTAL_PORTALS_DIRNAME,
+    PORTAL_READY_PATH,
+    PORTAL_ROUTING_CONF_NAME,
+    PORTAL_RUNTIME_DIR,
+    PORTAL_WLR_CONFIG_NAME,
+    PORTAL_WLR_PORTAL_NAME,
     PROFILE_NAME,
     PROFILE_ROOT,
     UDEV_RULE_PATH,
@@ -61,6 +73,18 @@ class DisplayPaths:
     kwin_input_isolation_script: str = ""
     sunshine_conf: str = ""
     kwin_input_isolation_status_file: str = ""
+    portal_bus_script: str = ""
+    portal_start_script: str = ""
+    portal_bus_address_file: str = ""
+    portal_bus_pid_file: str = ""
+    portal_ready_file: str = ""
+    portal_log_file: str = ""
+    portal_config_home: str = ""
+    portal_routing_conf: str = ""
+    portal_wlr_config: str = ""
+    portal_portals_dir: str = ""
+    portal_wlr_portal: str = ""
+    portal_runtime_dir: str = ""
 
 
 @dataclass
@@ -82,6 +106,10 @@ class DisplayState:
     gpu_card_path: str = ""
     gpu_render_path: str = ""
     renderer_mode: str = "default"
+    capture_method: str = DEFAULT_CAPTURE_METHOD
+    # Sunshine ``capture``/``output_name`` values replaced by portal mode, kept
+    # so switching back (or resetting) restores what the user had.
+    sunshine_capture_override: Optional[dict] = None
     paths: DisplayPaths = field(default_factory=DisplayPaths)
 
     def to_dict(self) -> dict:
@@ -133,9 +161,40 @@ def build_paths(
         sunshine_override_dir=str(override_dir),
         sunshine_override=str(override_dir / "override.conf"),
         kwin_input_isolation_script=str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
+        portal_bus_script=str(BIN_ROOT / "lutristosunshine-portal-bus.sh"),
+        portal_start_script=str(BIN_ROOT / "lutristosunshine-start-portal.sh"),
+        portal_bus_address_file=str(PORTAL_BUS_ADDRESS_PATH),
+        portal_bus_pid_file=str(PORTAL_BUS_PID_PATH),
+        portal_ready_file=str(PORTAL_READY_PATH),
+        portal_log_file=str(PORTAL_LOG_PATH),
+        portal_config_home=str(PORTAL_CONFIG_HOME),
+        portal_routing_conf=str(PORTAL_CONFIG_HOME / "xdg-desktop-portal" / PORTAL_ROUTING_CONF_NAME),
+        portal_wlr_config=str(PORTAL_CONFIG_HOME / "xdg-desktop-portal-wlr" / PORTAL_WLR_CONFIG_NAME),
+        portal_portals_dir=str(PORTAL_CONFIG_HOME / PORTAL_PORTALS_DIRNAME),
+        portal_wlr_portal=str(PORTAL_CONFIG_HOME / PORTAL_PORTALS_DIRNAME / PORTAL_WLR_PORTAL_NAME),
+        portal_runtime_dir=str(PORTAL_RUNTIME_DIR),
         sunshine_conf=str((config_root_fn(effective_unit) if config_root_fn else Path("~/.config/sunshine").expanduser()) / "sunshine.conf"),
         kwin_input_isolation_status_file=str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
     )
+
+
+def with_sunshine_unit(paths: DisplayPaths, unit_name: str) -> DisplayPaths:
+    """Point the unit-derived paths at ``unit_name``, keeping everything else.
+
+    Only the service-override entries depend on the unit name.  Rebuilding every
+    path here would silently escape a redirected layout (tests, temporary
+    installs) back to the real ``~/.config/lutristosunshine`` install.
+    """
+    effective_unit = unit_name or DEFAULT_SUNSHINE_UNIT
+    systemd_user_dir = (
+        Path(paths.systemd_user_dir)
+        if safe_string(paths.systemd_user_dir)
+        else Path("~/.config/systemd/user").expanduser()
+    )
+    override_dir = systemd_user_dir / f"{effective_unit}.d"
+    paths.sunshine_override_dir = str(override_dir)
+    paths.sunshine_override = str(override_dir / "override.conf")
+    return paths
 
 
 def default_state() -> DisplayState:
@@ -161,6 +220,7 @@ def load_state() -> DisplayState:
     state.gpu_card_path = safe_string(state.gpu_card_path)
     state.gpu_render_path = safe_string(state.gpu_render_path)
     state.renderer_mode = safe_string(state.renderer_mode).lower() if safe_string(state.renderer_mode).lower() in {"default", "vulkan"} else "default"
+    state.capture_method = normalized_capture_method(state.capture_method)
     persisted_sunshine_conf = state.paths.sunshine_conf
     state.paths = build_paths(state.sunshine_unit_name)
     if safe_string(persisted_sunshine_conf):
@@ -170,6 +230,12 @@ def load_state() -> DisplayState:
 
 def is_enabled() -> bool:
     return load_state().enabled
+
+
+def normalized_capture_method(value: object) -> str:
+    """Return a supported Sunshine capture method, falling back to wlr."""
+    candidate = safe_string(value).lower()
+    return candidate if candidate in CAPTURE_METHODS else DEFAULT_CAPTURE_METHOD
 
 
 def save_state(state: DisplayState) -> None:

@@ -8,11 +8,13 @@ if [ ! -s "$display_file" ]; then
 fi
 
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+runtime_export_value="$runtime_dir"
 dbus_value="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}"
+@PORTAL_RUNTIME_BLOCK@
 wayland_value="$(cat "$display_file")"
 
 unset DISPLAY
-export XDG_RUNTIME_DIR="$runtime_dir"
+export XDG_RUNTIME_DIR="$runtime_export_value"
 export DBUS_SESSION_BUS_ADDRESS="$dbus_value"
 export WAYLAND_DISPLAY="$wayland_value"
 export SWAYSOCK="@SWAY_SOCKET@"

@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 from display.gpu import configure_gpu
 from display.diagnostics import DisplaySnapshot, as_display_snapshot
 from display.modes import DisplayMode
+from display import portal
 from display.state import is_enabled, load_state
 from display.manager import (
     display_doctor_report,
@@ -17,6 +18,7 @@ from display.manager import (
     refresh_managed_files,
     remove_display,
     restart_display,
+    set_capture_method,
     set_dynamic_mangohud_fps_limit,
     set_renderer_mode,
     set_refresh_rate_sync_mode,
@@ -58,6 +60,42 @@ def configure_renderer_mode() -> int:
     else:
         set_renderer_mode("vulkan")
         print("Renderer set to Vulkan. HDR pass-through enabled (may have less GPU support).")
+
+    print("")
+    if get_yes_no_input("Restart the virtual display for the change to take effect?", default=True):
+        return restart_display()
+    return 0
+
+
+def configure_capture_method() -> int:
+    state = load_state()
+    print("")
+    print("Virtual display capture backend")
+    print("How Sunshine reads the frames from the headless display.")
+    print("wlr: Sunshine captures the headless output directly. Lightest option.")
+    print("portal: Sunshine captures through a private xdg-desktop-portal session.")
+    print("        Standardized API and PipeWire transport; needs the portal packages.")
+    print(f"Current: {portal.capture_method_label(state)}")
+    print("")
+    print("  0. wlr — direct wlroots screencopy (no extra packages)")
+    print("  1. portal — private xdg-desktop-portal + PipeWire session")
+    print("")
+    choice = get_user_input(
+        "Choose capture backend: ",
+        lambda value: value.strip() if value.strip() in {"0", "1"} else (_ for _ in ()).throw(ValueError()),
+        "Enter 0 for wlr or 1 for portal.",
+    )
+    method = portal.CAPTURE_WLR if choice == "0" else portal.CAPTURE_PORTAL
+    previous, _ = set_capture_method(method)
+    if previous == method:
+        print(f"Capture backend already set to {method}.")
+    else:
+        print(f"Capture backend set to {method}.")
+    if method == portal.CAPTURE_PORTAL:
+        print("Sunshine's capture setting is pinned to 'portal' while this is enabled.")
+        print("Input isolation and the virtual display are unchanged.")
+    else:
+        print("Sunshine's capture setting was restored; the portal files were removed.")
 
     print("")
     if get_yes_no_input("Restart the virtual display for the change to take effect?", default=True):
@@ -131,6 +169,11 @@ def hub_attention_items(
         items.append(
             f"{len(blocked_apps)} Sunshine app(s) cannot launch in virtual-display mode. Use 'status' for details."
         )
+    if snapshot.capture_method == portal.CAPTURE_PORTAL and not snapshot.portal_names_active:
+        items.append(
+            snapshot.portal_error
+            or "The private portal session is not serving the virtual display yet."
+        )
     return items
 
 
@@ -142,6 +185,7 @@ def print_hub_overview() -> None:
     print(_format_kv("Display sync:", hub_display_sync_summary(snapshot)))
     print(_format_kv("Display GPU:", snapshot.gpu_status_label))
     print(_format_kv("Display renderer:", snapshot.renderer_status_label))
+    print(_format_kv("Capture backend:", snapshot.capture_method_label))
     attention_items = hub_attention_items(snapshot, blocked_apps, blocked_error)
     if attention_items:
         print(_format_kv("Attention:", badge("CHECK", "warning")))
@@ -215,6 +259,21 @@ def print_dashboard(
     )
     print(_format_kv("Virtual display GPU:", snapshot.gpu_status_label))
     print(_format_kv("Display renderer:", snapshot.renderer_status_label))
+    print(
+        _format_kv(
+            "Capture backend:",
+            f"{snapshot.capture_method_label} {muted('- ' + snapshot.capture_method_summary)}",
+        )
+    )
+    if snapshot.capture_method == portal.CAPTURE_PORTAL:
+        if snapshot.portal_names_active:
+            portal_state = state_text("ready", "success")
+        elif snapshot.portal_bus_active:
+            portal_state = state_text("starting", "warning")
+        else:
+            portal_state = state_text("not running", "warning")
+        portal_note = f" {muted('- ' + snapshot.portal_error)}" if snapshot.portal_error else ""
+        print(_format_kv("Portal session:", f"{portal_state}{portal_note}"))
     if include_blocked_apps:
         blocked_apps, error = blocked_apps_report()
         if error:
@@ -457,8 +516,9 @@ def run_hub() -> int:
         print(f"{accent('4.')} Choose which GPU to use")
         print(f"{accent('5.')} Choose renderer (GLES2 / Vulkan)")
         print(f"{accent('6.')} More tools")
+        print(f"{accent('7.')} Choose capture backend (wlr / portal)")
         print(f"{muted('0.')} Exit")
-        choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6"])
+        choice = get_menu_choice(f"{accent('Choose an action: ')}", ["0", "1", "2", "3", "4", "5", "6", "7"])
         if choice == "0":
             return 0
         if choice == "1":
@@ -503,5 +563,9 @@ def run_hub() -> int:
                 return result
         elif choice == "6":
             result = run_advanced_tools_menu()
+            if result != 0:
+                return result
+        elif choice == "7":
+            result = configure_capture_method()
             if result != 0:
                 return result

@@ -15,6 +15,7 @@ from dataclasses import asdict
 from display.state import DisplayState
 
 from display import audio_policy
+from display import portal
 from display.constants import (
     FALLBACK_FPS,
     FALLBACK_HEIGHT,
@@ -26,6 +27,10 @@ from display.constants import (
     FLATPAK_PORTAL_SWITCH_TIMEOUT,
     FLATPAK_PORTAL_UNIT,
     FLATPAK_VALUE_OPTIONS,
+    HEADLESS_OUTPUT_NAME,
+    PORTAL_BUS_SOCKET_NAME,
+    PORTAL_DESKTOP_NAME,
+    PORTAL_WLR_BACKEND_NAME,
     SUNSHINE_INPUT_NAME_MARKERS,
     SUNSHINE_INPUT_PRODUCT_ID,
     SUNSHINE_INPUT_VENDOR_ID,
@@ -55,7 +60,17 @@ _TEMPLATE_FILES = {
     "set_resolution_script": "set_resolution.sh",
     "reset_resolution_script": "reset_resolution.sh",
     "sunshine_override": "sunshine_override.conf",
+    "portal_bus_script": "portal_bus.sh",
+    "portal_start_script": "portal_start.sh",
 }
+
+
+# Portal shell scripts are only rendered (and kept on disk) in portal capture
+# mode; display.portal owns the portal config files themselves.
+_PORTAL_TEMPLATE_KEYS = (
+    "portal_bus_script",
+    "portal_start_script",
+)
 
 
 def _conditional_blocks(state: DisplayState) -> Dict[str, str]:
@@ -68,7 +83,14 @@ def _conditional_blocks(state: DisplayState) -> Dict[str, str]:
         "gpu_env_vars_block": "",
         "gpu_launch_env_vars_block": "",
         "renderer_env_vars_block": "",
+        "portal_setup_block": "",
+        "portal_cleanup_block": "",
+        "portal_bus_start_block": "",
+        "portal_daemon_block": "",
+        "portal_runtime_block": "",
     }
+    if portal.portal_capture_enabled(state):
+        blocks.update(_portal_blocks(state))
     if state.dynamic_mangohud_fps_limit:
         refresh_mode = normalized_refresh_rate_sync_mode(
             state.refresh_rate_sync_mode
@@ -138,6 +160,110 @@ fi
     return blocks
 
 
+def _portal_blocks(state: DisplayState) -> Dict[str, str]:
+    """Conditional shell blocks for the private portal stack.
+
+    The wrapper owns the bus and the portal daemons so they start before
+    Sunshine (Sunshine probes the capture backend at startup and would fail
+    with ``capture = portal`` against a portal that is not up yet).
+    """
+    paths = state.paths
+    return {
+        "portal_setup_block": f"""
+portal_bus_script="{paths.portal_bus_script}"
+portal_start_script="{paths.portal_start_script}"
+portal_bus_address_file="{paths.portal_bus_address_file}"
+portal_bus_pid_file="{paths.portal_bus_pid_file}"
+portal_ready_file="{paths.portal_ready_file}"
+portal_runtime_dir="{paths.portal_runtime_dir}"
+
+stop_portal_bus() {{
+    if [ -s "$portal_bus_pid_file" ]; then
+        kill "$(cat "$portal_bus_pid_file")" >/dev/null 2>&1 || true
+        rm -f "$portal_bus_pid_file"
+    fi
+    rm -f "$portal_bus_address_file" "$portal_ready_file"
+    rm -rf "$portal_runtime_dir"
+}}
+""".rstrip(),
+        "portal_cleanup_block": """    stop_child "$portal_pid"
+    stop_portal_bus""",
+        "portal_bus_start_block": '"$portal_bus_script"',
+        "portal_daemon_block": """setsid "$portal_start_script" &
+portal_pid=$!
+
+for _ in $(seq 1 150); do
+    if [ -s "$portal_ready_file" ]; then
+        break
+    fi
+    if ! kill -0 "$portal_pid" 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
+if [ ! -s "$portal_ready_file" ]; then
+    echo "Virtual display portal stack did not become ready." >&2
+    exit 1
+fi
+""".rstrip(),
+        "portal_runtime_block": f"""portal_address_file="{paths.portal_bus_address_file}"
+portal_runtime_dir="{paths.portal_runtime_dir}"
+if [ -s "$portal_address_file" ]; then
+    portal_bus_address="$(cat "$portal_address_file")"
+    portal_bus_socket="${{portal_bus_address#unix:path=}}"
+    if [ ! -S "$portal_bus_socket" ]; then
+        echo "Virtual display portal bus socket is not ready." >&2
+        exit 1
+    fi
+    # Sunshine carries file capabilities, so the kernel marks it AT_SECURE and
+    # GLib ignores DBUS_SESSION_BUS_ADDRESS: it only accepts the session bus it
+    # finds at $XDG_RUNTIME_DIR/bus.  Hand it a private runtime dir whose `bus`
+    # points at the portal bus, with every other entry linked from the real
+    # runtime dir so Wayland, PipeWire and PulseAudio keep working.
+    #
+    # Directories are mirrored one level deep (real directory, linked entries):
+    # libpulse refuses a runtime dir that is a symlink (pa_make_secure_dir()
+    # fails with "Too many levels of symbolic links"), which would break both
+    # Sunshine's own PulseAudio capture and the managed audio-sink scripts.
+    # Never walk deeper than that level: $XDG_RUNTIME_DIR/doc is a FUSE mount
+    # whose tree can be huge, and crawling it stalls Sunshine's start.
+    # Mount points are linked, never inspected: stat()ing into a FUSE mount whose
+    # daemon is gone (the document portal's $XDG_RUNTIME_DIR/doc) blocks forever.
+    mounted_paths=" "
+    while read -r _ _ _ _ mount_point _; do
+        mounted_paths="$mounted_paths$mount_point "
+    done < /proc/self/mountinfo
+    rm -rf "$portal_runtime_dir"
+    mkdir -m 700 "$portal_runtime_dir"
+    for entry in "$runtime_dir"/* "$runtime_dir"/.[!.]*; do
+        entry_name="$(basename "$entry")"
+        case "$entry_name" in
+            ".[!.]*") continue ;;
+        esac
+        if [ "$entry_name" = "bus" ]; then
+            continue
+        fi
+        case "$mounted_paths" in
+            *" $entry "*) ln -sf "$entry" "$portal_runtime_dir/$entry_name"; continue ;;
+        esac
+        if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+            mkdir -m 700 "$portal_runtime_dir/$entry_name" 2>/dev/null || true
+            for nested in "$entry"/* "$entry"/.[!.]*; do
+                [ -e "$nested" ] || continue
+                ln -sf "$nested" "$portal_runtime_dir/$entry_name/$(basename "$nested")"
+            done
+        else
+            ln -sf "$entry" "$portal_runtime_dir/$entry_name"
+        fi
+    done
+    ln -s "$portal_bus_socket" "$portal_runtime_dir/bus"
+    runtime_export_value="$portal_runtime_dir"
+    dbus_value="$portal_bus_address"
+fi""",
+    }
+
+
 def _sunshine_log_file(state: DisplayState) -> str:
     """Sunshine's own log file, which sits next to sunshine.conf.
 
@@ -171,6 +297,13 @@ def render_managed_files(state: DisplayState) -> Dict[Path, str]:
 
     values = {
         "@SWAY_SOCKET@": state.sway_socket,
+        "@HEADLESS_OUTPUT@": HEADLESS_OUTPUT_NAME,
+        "@HOST_SESSION_BUS_ADDRESS@": portal.host_bus_address(),
+        "@HOST_RUNTIME_DIR@": portal.host_runtime_dir(),
+        "@PORTAL_BUS_SOCKET_NAME@": PORTAL_BUS_SOCKET_NAME,
+        "@PORTAL_PORTALS_DIR@": paths.portal_portals_dir,
+        "@PORTAL_DESKTOP_NAME@": PORTAL_DESKTOP_NAME,
+        "@PORTAL_WLR_BACKEND_NAME@": PORTAL_WLR_BACKEND_NAME,
         "@PROFILE_ROOT@": paths.profile_root,
         "@AUDIO_INJECT_ENV@": audio_policy.render_flatpak_audio_env(
             state.audio_sink, FLATPAK_FLAG_OPTIONS, FLATPAK_VALUE_OPTIONS
@@ -204,12 +337,22 @@ def render_managed_files(state: DisplayState) -> Dict[Path, str]:
         "@GPU_ENV_VARS_BLOCK@": blocks["gpu_env_vars_block"],
         "@GPU_LAUNCH_ENV_VARS_BLOCK@": blocks["gpu_launch_env_vars_block"],
         "@RENDERER_BLOCK@": blocks["renderer_env_vars_block"],
+        "@PORTAL_SETUP_BLOCK@": blocks["portal_setup_block"],
+        "@PORTAL_CLEANUP_BLOCK@": blocks["portal_cleanup_block"],
+        "@PORTAL_BUS_START_BLOCK@": blocks["portal_bus_start_block"],
+        "@PORTAL_DAEMON_BLOCK@": blocks["portal_daemon_block"],
+        "@PORTAL_RUNTIME_BLOCK@": blocks["portal_runtime_block"],
     }
     # Path placeholders: @<PATHS_KEY_UPPER>@ -> concrete path.
     values.update({f"@{key.upper()}@": value for key, value in asdict(paths).items()})
 
     rendered: Dict[Path, str] = {}
+    portal_enabled = portal.portal_capture_enabled(state)
     for path_key, template_name in _TEMPLATE_FILES.items():
+        # Portal files are cleared by display.portal.remove_files() whenever
+        # portal capture is off, so never re-create them in wlr mode.
+        if path_key in _PORTAL_TEMPLATE_KEYS and not portal_enabled:
+            continue
         content = (_SCRIPTS_DIR / template_name).read_text(encoding="utf-8")
         for placeholder, value in values.items():
             content = content.replace(placeholder, value)
