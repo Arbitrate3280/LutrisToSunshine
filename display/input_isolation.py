@@ -3,14 +3,17 @@ import grp
 import json
 import os
 import pwd
+import re
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, TypedDict
 
 from display.constants import (
-    SUNSHINE_INPUT_PRODUCT_ID,
-    SUNSHINE_INPUT_VENDOR_ID,
+    SUNSHINE_INPUT_DEVICES,
+    SUNSHINE_INPUT_NAME_MARKERS,
+    SUNSHINE_INPUT_UDEV_NAME_PATTERNS,
+    SUNSHINE_INPUT_VENDOR_IDS,
 )
 from display.state import DisplayState
 from display.utils import run_command, safe_string
@@ -19,6 +22,12 @@ from display.utils import run_command, safe_string
 class InputDevice(TypedDict):
     name: str
     event_path: str
+
+
+# [Libinput][<vendor hex>][<product hex>][<name>]
+KDE_LIBINPUT_DEVICE_HEADER = re.compile(
+    r"^\[Libinput\]\[([0-9a-fA-F]{1,4})\]\[([0-9a-fA-F]{1,4})\]"
+)
 
 
 class KwinDevice(TypedDict):
@@ -152,7 +161,40 @@ def kwin_input_isolation_status(state: DisplayState) -> KwinInputIsolationStatus
     return status
 
 
+def normalized_input_name(value: str) -> str:
+    return " ".join(safe_string(value).replace("_", " ").lower().split())
+
+
+def is_sunshine_input_name(value: str) -> bool:
+    """Match a device name against the known Sunshine virtual input names."""
+    name = normalized_input_name(value)
+    if not name:
+        return False
+    return any(normalized_input_name(marker) in name for marker in SUNSHINE_INPUT_NAME_MARKERS)
+
+
+def is_sunshine_input_vendor(value: str) -> bool:
+    """Match a USB vendor id against the ones Sunshine registers inputs with."""
+    vendor = safe_string(value).lower().removeprefix("0x")
+    if not vendor:
+        return False
+    try:
+        return int(vendor, 16) in SUNSHINE_INPUT_VENDOR_IDS
+    except ValueError:
+        return False
+
+
+def _sunshine_input_device(name: str, event_path: str) -> InputDevice:
+    return {"name": safe_string(name), "event_path": safe_string(event_path)}
+
+
 def sunshine_virtual_input_devices() -> List[InputDevice]:
+    """List Sunshine's virtual input devices as name plus event node.
+
+    Blocks are matched by name marker or USB vendor id rather than by a single
+    id pair: Sunshine changed both between releases, and its devices report an
+    empty phys, so name and vendor are the only stable handles.
+    """
     devices_path = Path("/proc/bus/input/devices")
     try:
         content = devices_path.read_text(encoding="utf-8")
@@ -160,19 +202,21 @@ def sunshine_virtual_input_devices() -> List[InputDevice]:
         return []
 
     devices: List[InputDevice] = []
+
+    def flush(record: Dict[str, str]) -> None:
+        if not is_sunshine_input_name(record.get("name", "")) and not is_sunshine_input_vendor(
+            record.get("vendor_id", "")
+        ):
+            return
+        event_path = safe_string(record.get("event_path"))
+        if event_path:
+            devices.append(_sunshine_input_device(record.get("name", ""), event_path))
+
     current: Dict[str, str] = {}
     for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line:
-            vendor_id = safe_string(current.get("vendor_id")).lower()
-            product_id = safe_string(current.get("product_id")).lower()
-            if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
-                devices.append(
-                    {
-                        "name": safe_string(current.get("name")),
-                        "event_path": safe_string(current.get("event_path")),
-                    }
-                )
+            flush(current)
             current = {}
             continue
         if line.startswith("I:"):
@@ -183,8 +227,6 @@ def sunshine_virtual_input_devices() -> List[InputDevice]:
                 lowered = key.lower()
                 if lowered == "vendor":
                     current["vendor_id"] = value
-                elif lowered == "product":
-                    current["product_id"] = value
         elif line.startswith('N: Name="') and line.endswith('"'):
             current["name"] = line[len('N: Name="'):-1]
         elif line.startswith("H: Handlers="):
@@ -193,17 +235,36 @@ def sunshine_virtual_input_devices() -> List[InputDevice]:
             if event_name:
                 current["event_path"] = f"/dev/input/{event_name}"
 
-    if current:
-        vendor_id = safe_string(current.get("vendor_id")).lower()
-        product_id = safe_string(current.get("product_id")).lower()
-        if vendor_id == f"{SUNSHINE_INPUT_VENDOR_ID:04x}" and product_id == f"{SUNSHINE_INPUT_PRODUCT_ID:04x}":
-            devices.append(
-                {
-                    "name": safe_string(current.get("name")),
-                    "event_path": safe_string(current.get("event_path")),
-                }
-            )
+    flush(current)
     return devices
+
+
+def sway_input_identifier(vendor_id: int, product_id: int, name: str) -> str:
+    """Build the identifier sway reports for an input device.
+
+    sway formats the USB ids in decimal and turns every space or unprintable
+    character of the device name into an underscore.
+    """
+    identifier_name = "".join(
+        "_" if character == " " or not character.isprintable() else character
+        for character in safe_string(name)
+    )
+    return f"{int(vendor_id)}:{int(product_id)}:{identifier_name}"
+
+
+def sway_input_block() -> str:
+    """Render the sway input stanzas for every known Sunshine virtual device."""
+    lines = ["input * events disabled"]
+    pointers = []
+    for vendor_id, product_id, name in SUNSHINE_INPUT_DEVICES:
+        identifier = sway_input_identifier(vendor_id, product_id, name)
+        lines.append(f'input "{identifier}" events enabled')
+        if "mouse" in normalized_input_name(name):
+            pointers.append(identifier)
+    lines.append("")
+    for identifier in pointers:
+        lines.append(f'input "{identifier}" accel_profile flat')
+    return "\n".join(lines)
 
 
 def udev_rule(isolation_mode: Optional[str] = None) -> str:
@@ -218,9 +279,15 @@ def udev_rule(isolation_mode: Optional[str] = None) -> str:
     if group_name:
         sunshine_input_permissions.append(f'GROUP="{group_name}"')
     sunshine_input_clause = ", ".join(sunshine_input_permissions)
-    return f"""# Managed by LutrisToSunshine display.
-ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{SUNSHINE_INPUT_VENDOR_ID:04x}", ATTRS{{id/product}}=="{SUNSHINE_INPUT_PRODUCT_ID:04x}", {sunshine_input_clause}
-"""
+    # Names keep the rule working when Sunshine changes its USB ids; the vendor
+    # clause covers devices whose name no longer carries a known marker.
+    name_pattern = "|".join(SUNSHINE_INPUT_UDEV_NAME_PATTERNS)
+    vendor_pattern = "|".join(f"{vendor_id:04x}" for vendor_id in SUNSHINE_INPUT_VENDOR_IDS)
+    return (
+        "# Managed by LutrisToSunshine display.\n"
+        f'ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{name}}=="{name_pattern}", {sunshine_input_clause}\n'
+        f'ACTION=="add|change", SUBSYSTEM=="input", ATTRS{{id/vendor}}=="{vendor_pattern}", {sunshine_input_clause}\n'
+    )
 
 
 def install_udev_rule(state: DisplayState) -> bool:
@@ -247,8 +314,9 @@ def remove_udev_rule(state: DisplayState) -> bool:
 
 
 def clean_kde_libinput_config() -> None:
-    vendor = f"{SUNSHINE_INPUT_VENDOR_ID:04x}"
-    product = f"{SUNSHINE_INPUT_PRODUCT_ID:04x}"
+    known_devices = {
+        (vendor_id, product_id) for vendor_id, product_id, _name in SUNSHINE_INPUT_DEVICES
+    }
     for path in [
         Path("~/.config/kcminputrc").expanduser(),
         Path("~/.config/kdedefaults/kcminputrc").expanduser(),
@@ -267,12 +335,14 @@ def clean_kde_libinput_config() -> None:
                 skip_next = False
                 changed = True
                 continue
-            stripped = line.strip()
-            # Match [Libinput][beef][dead][... passthrough]
-            if stripped.startswith("[Libinput]") and f"[{vendor}][{product}]" in stripped:
-                skip_next = True
-                changed = True
-                continue
+            # Match [Libinput][1209][0003][libvirtualhid Mouse (Absolute)]
+            match = KDE_LIBINPUT_DEVICE_HEADER.match(line.strip())
+            if match:
+                device = (int(match.group(1), 16), int(match.group(2), 16))
+                if device in known_devices:
+                    skip_next = True
+                    changed = True
+                    continue
             cleaned.append(line)
         if changed:
             try:

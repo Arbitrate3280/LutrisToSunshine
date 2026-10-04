@@ -5,7 +5,7 @@
 - `config/`: constants such as API defaults and color codes.
 - `launchers/`: per-launcher integrations (`lutris.py`, `heroic.py`, `bottles.py`, `steam.py`, `ryubing.py`, `retroarch.py`) that list games and expose launch commands.
 - `sunshine/`: Sunshine API helpers for installation detection, token management, and app creation. `sunshine/installation.py` owns Sunshine installation resolution: package/systemd probes, user choice on ambiguity, config root, binary resolution, and the install audit. Flatpak, native, and AppImage detection live in `sunshine/installation.py`. `sunshine/connection.py` owns server context, auth, and HTTP transport; `sunshine/catalog.py` owns app reads/writes and display reconciliation.
-- `display/`: virtual display orchestration. `display/manager.py` is the lifecycle orchestrator (state, prompts, `setup_display`/`remove_display`/`start_display`/`stop_display`). `display/sunshine_service.py` owns Sunshine service-unit policy and the public service operations the manager calls into. `display/utils.py` holds neutral, module-agnostic helpers shared across the display package.
+- `display/`: virtual display orchestration. `display/manager.py` is the lifecycle orchestrator (state, prompts, `setup_display`/`remove_display`/`start_display`/`stop_display`). `display/sunshine_service.py` owns Sunshine service-unit policy and the public service operations the manager calls into. `display/input_isolation.py` owns Sunshine's virtual input policy: the managed udev rule, KWin integration, detection of Sunshine's uinput devices, and the sway input block. `display/utils.py` holds neutral, module-agnostic helpers shared across the display package.
 - `utils/`: shared helpers for input handling, command execution, parsing, and SteamGridDB downloads.
 - `requirements.txt`: Python runtime deps (`requests`, `Pillow`). No bundled tests yet.
 
@@ -43,6 +43,7 @@
 - If adding tests, place them under `tests/` and document the runner; aim for coverage of parsing and command-building functions.
 - Tests of `display/manager.py` should patch public seams on `display/sunshine_service` (e.g. `sunshine_unit`, `start_sunshine_unit`, `stop_sunshine_unit`, `stop_sunshine`, `is_sunshine_service_active`, `cleanup_managed_overrides`). Reserve `sunshine_service._systemctl_user` patching for tests that explicitly cover `display/sunshine_service` itself (e.g. `tests/test_display_sunshine_installation.py`).
 - Probe/installation tests patch `sunshine.installation` at the defining module (never at a consumer import); persistence tests point `detect_sunshine_config_root` at a temp dir rather than the real home directory.
+- Do not hardcode Sunshine's virtual input ids or names outside `display/constants.py`. Match them by name marker or vendor id so a Sunshine update cannot silently cut off streamed input; `display/scripts/sync_sunshine_input.py.template` is what enables the real identifiers at runtime because sway matches input identifiers exactly.
 
 ## Security & Configuration Tips
 - Sunshine auth tokens and SteamGridDB API keys are stored under `~/.config/sunshine/` (or Flatpak-equivalent `.var/app/...`). Do not commit these files.

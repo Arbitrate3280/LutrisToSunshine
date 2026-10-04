@@ -1,0 +1,133 @@
+#!@PYTHON_EXECUTABLE@
+"""Enable the managed sway input rules for Sunshine's virtual input devices.
+
+Sunshine creates its uinput devices while starting, so the static sway.conf
+block cannot always name them: an update may change the USB ids or the device
+names. Once the devices are visible to sway, enable each one by the exact
+identifier sway reports, and warn when sway cannot open them at all, which
+means the managed udev rule does not grant this user access.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+SWAY_SOCKET = "@SWAY_SOCKET@"
+TIMEOUT_SECONDS = @SUNSHINE_INPUT_SYNC_TIMEOUT@
+VENDOR_IDS = @SUNSHINE_INPUT_VENDOR_IDS@
+NAME_MARKERS = @SUNSHINE_INPUT_NAME_MARKERS@
+
+
+def normalize(value):
+    return " ".join(str(value).replace("_", " ").lower().split())
+
+
+def is_sunshine_input(device):
+    name = normalize(device.get("name") or "")
+    if any(normalize(marker) in name for marker in NAME_MARKERS):
+        return True
+    return device.get("vendor") in VENDOR_IDS
+
+
+def sway_sunshine_inputs():
+    try:
+        result = subprocess.run(
+            ["swaymsg", "-t", "get_inputs"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        devices = json.loads(result.stdout or "[]")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+    return [d for d in devices if isinstance(d, dict) and is_sunshine_input(d)]
+
+
+def sunshine_devices_exist():
+    """Fallback diagnosis: /proc sees devices sway could not open."""
+    try:
+        with open("/proc/bus/input/devices", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return False
+    vendors = {f"{vendor:04x}" for vendor in VENDOR_IDS}
+    for line in lines:
+        if line.startswith("I:"):
+            fields = dict(token.partition("=")[::2] for token in line.split()[1:])
+            if fields.get("Vendor", "").lower() in vendors:
+                return True
+        elif line.startswith('N: Name="'):
+            name = normalize(line[len('N: Name="'):].rstrip('"'))
+            if any(normalize(marker) in name for marker in NAME_MARKERS):
+                return True
+    return False
+
+
+def main():
+    os.environ["SWAYSOCK"] = SWAY_SOCKET
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    devices = []
+    while True:
+        if not os.path.exists(SWAY_SOCKET):
+            print(
+                f"lts-input: sway socket {SWAY_SOCKET} is gone; skipping input sync.",
+                file=sys.stderr,
+            )
+            return
+        devices = sway_sunshine_inputs()
+        if devices or time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+
+    if not devices:
+        if sunshine_devices_exist():
+            print(
+                "lts-input: sway cannot open the Sunshine input devices; rerun "
+                "'python3 lutristosunshine.py display enable' to reinstall the "
+                "managed udev rule.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"lts-input: no Sunshine input device appeared within {TIMEOUT_SECONDS}s.",
+                file=sys.stderr,
+            )
+        return
+
+    enabled = []
+    failed = []
+    for device in devices:
+        identifier = device.get("identifier")
+        if not identifier or identifier in enabled or identifier in failed:
+            continue
+        try:
+            completed = subprocess.run(
+                ["swaymsg", "input", identifier, "events", "enabled"],
+                capture_output=True,
+                timeout=10,
+            )
+            ok = completed.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        if not ok:
+            failed.append(identifier)
+            continue
+        enabled.append(identifier)
+        if "mouse" in normalize(device.get("name") or ""):
+            # Best effort: accel only matters for pointer motion.
+            try:
+                subprocess.run(
+                    ["swaymsg", "input", identifier, "accel_profile", "flat"],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    print(f"lts-input: enabled {len(enabled)} Sunshine input device(s) in sway.")
+    if failed:
+        print(f"lts-input: sway rejected: {' '.join(failed)}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

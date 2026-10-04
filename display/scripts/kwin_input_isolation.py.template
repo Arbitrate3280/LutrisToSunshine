@@ -12,9 +12,8 @@ STATUS_PATH = Path('@KWIN_INPUT_ISOLATION_STATUS_FILE@')
 SERVICE_CANDIDATES = ["org.kde.KWin", "org.kde.KWin.InputDevice"]
 ROOT_PATHS = ["/org/kde/KWin/InputDevice", "/org/kde/KWin"]
 DEVICE_INTERFACE = "org.kde.KWin.InputDevice"
-SUNSHINE_VENDOR_ID = @SUNSHINE_VENDOR_ID@
-SUNSHINE_PRODUCT_ID = @SUNSHINE_PRODUCT_ID@
-NAME_MARKERS = @NAME_MARKERS@
+SUNSHINE_VENDOR_IDS = @SUNSHINE_INPUT_VENDOR_IDS@
+NAME_MARKERS = @SUNSHINE_INPUT_NAME_MARKERS@
 STOP = False
 
 
@@ -274,11 +273,14 @@ def device_details(service, path):
 def is_sunshine_device(info):
     name = normalize_name(info.get("name"))
     vendor = normalize_hex(info.get("vendor"))
-    product = normalize_hex(info.get("product"))
-    vendor_match = vendor == f"{SUNSHINE_VENDOR_ID:04x}"
-    product_match = product == f"{SUNSHINE_PRODUCT_ID:04x}"
+    vendor_match = False
+    if vendor:
+        try:
+            vendor_match = int(vendor, 16) in SUNSHINE_VENDOR_IDS
+        except ValueError:
+            vendor_match = False
     name_match = any(normalize_name(marker) in name for marker in NAME_MARKERS)
-    return name_match or (vendor_match and product_match)
+    return name_match or vendor_match
 
 
 def kwin_service():

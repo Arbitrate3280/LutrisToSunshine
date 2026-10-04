@@ -5,6 +5,7 @@ audio_cleanup_script="@AUDIO_CLEANUP_SCRIPT@"
 kwin_input_isolation_script="@KWIN_INPUT_ISOLATION_SCRIPT@"
 sway_start_script="@SWAY_START_SCRIPT@"
 sunshine_start_script="@SUNSHINE_START_SCRIPT@"
+sync_input_script="@SYNC_INPUT_SCRIPT@"
 display_file="@WAYLAND_DISPLAY_FILE@"
 kwin_input_isolation_status_file="@KWIN_INPUT_ISOLATION_STATUS_FILE@"
 sway_socket="@SWAY_SOCKET@"
@@ -13,6 +14,7 @@ dbus_value="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime_dir/bus}"
 pulse_server_value="${PULSE_SERVER:-}"
 pulse_clientconfig_value="${PULSE_CLIENTCONFIG:-}"
 kwin_input_isolation_pid=""
+sync_input_pid=""
 sway_pid=""
 sunshine_pid=""
 sunshine_status=0
@@ -42,6 +44,7 @@ cleanup() {
     local exit_code=$?
     stop_child "$sunshine_pid"
     stop_child "$kwin_input_isolation_pid"
+    stop_child "$sync_input_pid"
     stop_child "$sway_pid"
     rm -f "$kwin_input_isolation_status_file" "$display_file"
     "$audio_cleanup_script" >/dev/null 2>&1 || true
@@ -73,6 +76,12 @@ kwin_input_isolation_pid=$!
 
 setsid "$sunshine_start_script" &
 sunshine_pid=$!
+
+# Sunshine creates its virtual input devices while starting, so the sway input
+# rules are synced once they exist. It never blocks the stream: sway is already
+# running and the script only issues input commands.
+setsid python3 "$sync_input_script" &
+sync_input_pid=$!
 wait "$sunshine_pid"
 sunshine_status=$?
 exit "$sunshine_status"

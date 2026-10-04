@@ -6,6 +6,7 @@ display.manager; conditional blocks are computed here exactly as before.
 """
 from __future__ import annotations
 
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -27,9 +28,10 @@ from display.constants import (
     FLATPAK_PORTAL_UNIT,
     FLATPAK_VALUE_OPTIONS,
     SUNSHINE_INPUT_NAME_MARKERS,
-    SUNSHINE_INPUT_PRODUCT_ID,
-    SUNSHINE_INPUT_VENDOR_ID,
+    SUNSHINE_INPUT_SYNC_TIMEOUT_SECONDS,
+    SUNSHINE_INPUT_VENDOR_IDS,
 )
+from display.input_isolation import sway_input_block
 from display.modes import (
     format_refresh_rate_hz,
     normalized_custom_display_mode,
@@ -48,6 +50,7 @@ _TEMPLATE_FILES = {
     "sunshine_start_script": "sunshine_start.sh",
     "sunshine_wrapper_script": "sunshine_wrapper.sh",
     "kwin_input_isolation_script": "kwin_input_isolation.py.template",
+    "sync_input_script": "sync_sunshine_input.py.template",
     "headless_prep_script": "headless_prep.sh",
     "launch_app_script": "launch_app.sh",
     "resolve_stream_fps_script": "resolve_stream_fps.sh",
@@ -195,9 +198,12 @@ def render_managed_files(state: DisplayState) -> Dict[Path, str]:
         "@SUNSHINE_COMMAND@": shlex.quote(sunshine_command),
         "@PYTHON_EXECUTABLE@": sys.executable or "/usr/bin/env python3",
         "@KWIN_INPUT_ISOLATION_STATUS_FILE@": paths.kwin_input_isolation_status_file,
-        "@SUNSHINE_VENDOR_ID@": str(SUNSHINE_INPUT_VENDOR_ID),
-        "@SUNSHINE_PRODUCT_ID@": str(SUNSHINE_INPUT_PRODUCT_ID),
-        "@NAME_MARKERS@": repr(SUNSHINE_INPUT_NAME_MARKERS),
+        # JSON so the same value can be embedded in a shell script and in the
+        # Python helper without shell-mangling the literal.
+        "@SUNSHINE_INPUT_VENDOR_IDS@": json.dumps(list(SUNSHINE_INPUT_VENDOR_IDS)),
+        "@SUNSHINE_INPUT_NAME_MARKERS@": json.dumps(SUNSHINE_INPUT_NAME_MARKERS),
+        "@SUNSHINE_INPUT_BLOCK@": sway_input_block(),
+        "@SUNSHINE_INPUT_SYNC_TIMEOUT@": str(SUNSHINE_INPUT_SYNC_TIMEOUT_SECONDS),
         "@MANGOHUD_FPS_LIMIT_BLOCK@": blocks["mangohud_fps_limit_block"],
         "@MANGOHUD_ENV_APPEND_BLOCK@": blocks["mangohud_env_append_block"],
         "@GPU_DETECTION_BLOCK@": blocks["gpu_detection_block"],

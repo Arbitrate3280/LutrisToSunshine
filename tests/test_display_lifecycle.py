@@ -167,6 +167,225 @@ H: Handlers=sysrq kbd event29
             ],
         )
 
+    def test_sunshine_virtual_input_devices_detects_libvirtualhid_entries(self) -> None:
+        # What current Sunshine builds register: one vendor, a product id per
+        # device kind, and no matching phys for the managed udev rule to use.
+        input_listing = """
+I: Bus=0003 Vendor=1209 Product=0002 Version=0001
+N: Name="libvirtualhid Keyboard"
+P: Phys=
+H: Handlers=sysrq kbd event23 rfkill
+
+I: Bus=0003 Vendor=1209 Product=0003 Version=0001
+N: Name="libvirtualhid Mouse"
+P: Phys=
+H: Handlers=mouse1 event24
+
+I: Bus=0003 Vendor=1209 Product=0003 Version=0001
+N: Name="libvirtualhid Mouse (Absolute)"
+P: Phys=
+H: Handlers=mouse2 event25 js0
+
+I: Bus=0003 Vendor=1234 Product=5678 Version=0001
+N: Name="Other device"
+H: Handlers=kbd event2
+"""
+        with patch("pathlib.Path.read_text", return_value=input_listing):
+            devices = input_isolation.sunshine_virtual_input_devices()
+        self.assertEqual(
+            devices,
+            [
+                {"name": "libvirtualhid Keyboard", "event_path": "/dev/input/event23"},
+                {"name": "libvirtualhid Mouse", "event_path": "/dev/input/event24"},
+                {"name": "libvirtualhid Mouse (Absolute)", "event_path": "/dev/input/event25"},
+            ],
+        )
+
+    def test_sunshine_virtual_input_devices_detects_unknown_ids_by_name(self) -> None:
+        # A future Sunshine may pick new ids; the name markers still catch it.
+        input_listing = """
+I: Bus=0003 Vendor=beef Product=0009 Version=0001
+N: Name="libvirtualhid Pen"
+H: Handlers=event31
+"""
+        with patch("pathlib.Path.read_text", return_value=input_listing):
+            devices = input_isolation.sunshine_virtual_input_devices()
+        self.assertEqual(
+            devices,
+            [{"name": "libvirtualhid Pen", "event_path": "/dev/input/event31"}],
+        )
+
+    def test_sunshine_virtual_input_devices_ignores_trailing_entry_without_event(self) -> None:
+        input_listing = """
+I: Bus=0003 Vendor=1209 Product=0002 Version=0001
+N: Name="libvirtualhid Keyboard"
+H: Handlers=sysrq kbd event23 rfkill
+"""
+        with patch("pathlib.Path.read_text", return_value=input_listing):
+            devices = input_isolation.sunshine_virtual_input_devices()
+        self.assertEqual(
+            devices,
+            [{"name": "libvirtualhid Keyboard", "event_path": "/dev/input/event23"}],
+        )
+
+    def test_udev_rule_matches_sunshine_devices_by_name_and_vendor(self) -> None:
+        rule = input_isolation.udev_rule()
+        # Current Sunshine devices carry an empty phys, so the name clause is
+        # the only handle that can grant this user access to them. udev matches
+        # "|" alternatives within a single value, so one clause per handle.
+        self.assertIn('ATTRS{name}=="libvirtualhid*|*_passthrough*"', rule)
+        self.assertIn('ATTRS{id/vendor}=="1209|beef"', rule)
+        self.assertEqual(rule.count("ACTION="), 2)
+
+    def test_sway_input_block_enables_events_for_known_sunshine_devices(self) -> None:
+        block = input_isolation.sway_input_block()
+        # sway matches identifiers exactly and reports the USB ids in decimal.
+        self.assertIn('input "4617:2:libvirtualhid_Keyboard" events enabled', block)
+        self.assertIn('input "4617:3:libvirtualhid_Mouse" events enabled', block)
+        self.assertIn('input "4617:3:libvirtualhid_Mouse_(Absolute)" events enabled', block)
+        self.assertIn('input "48879:57005:Mouse_passthrough" events enabled', block)
+        self.assertTrue(block.startswith("input * events disabled"))
+        self.assertIn('input "4617:3:libvirtualhid_Mouse" accel_profile flat', block)
+        self.assertNotIn("libvirtualhid_Keyboard\" accel_profile", block)
+
+    def test_rendered_sway_config_disables_host_input_and_enables_sunshine(self) -> None:
+        state = manager._default_state()
+        rendered = scripts_render.render_managed_files(state)
+        sway_config = rendered[Path(state.paths.sway_config)]
+        lines = [line for line in sway_config.splitlines() if line.strip()]
+        self.assertEqual(lines[3], "input * events disabled")
+        self.assertIn('input "4617:3:libvirtualhid_Mouse_(Absolute)" events enabled', sway_config)
+
+    def test_sync_input_script_enables_detected_devices_in_sway(self) -> None:
+        state = manager._default_state()
+        rendered = scripts_render.render_managed_files(state)
+        script = rendered[Path(state.paths.sync_input_script)]
+        # The script must ask sway for the identifiers sway itself reports
+        # instead of recomputing them from the USB ids.
+        self.assertIn('["swaymsg", "-t", "get_inputs"]', script)
+        self.assertIn('["swaymsg", "input", identifier, "events", "enabled"]', script)
+        self.assertIn('["swaymsg", "input", identifier, "accel_profile", "flat"]', script)
+        self.assertIn('NAME_MARKERS = ["libvirtualhid"', script)
+        self.assertIn("VENDOR_IDS = [4617, 48879]", script)
+        self.assertIn(f'SWAY_SOCKET = "{state.sway_socket}"', script)
+        self.assertNotIn("@", script)
+
+    def test_sunshine_wrapper_starts_the_input_sync_script(self) -> None:
+        state = manager._default_state()
+        rendered = scripts_render.render_managed_files(state)
+        wrapper = rendered[Path(state.paths.sunshine_wrapper_script)]
+        self.assertIn(f'sync_input_script="{state.paths.sync_input_script}"', wrapper)
+        self.assertIn('setsid python3 "$sync_input_script" &', wrapper)
+        self.assertIn('stop_child "$sync_input_pid"', wrapper)
+
+    def test_kwin_helper_matches_libvirtualhid_vendor_and_names(self) -> None:
+        state = manager._default_state()
+        rendered = scripts_render.render_managed_files(state)
+        script = rendered[Path(state.paths.kwin_input_isolation_script)]
+        self.assertIn("SUNSHINE_VENDOR_IDS = [4617, 48879]", script)
+        self.assertIn("int(vendor, 16) in SUNSHINE_VENDOR_IDS", script)
+        self.assertNotIn("@", script)
+
+    def test_clean_kde_libinput_config_removes_every_known_sunshine_device(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        base = Path(tempdir.name)
+        config_dir = base / ".config"
+        config_dir.mkdir()
+        kcm = config_dir / "kcminputrc"
+        kcm.write_text(
+            "[Libinput][1209][3][libvirtualhid Mouse (Absolute)][0003/0003]\n"
+            "Enabled=false\n"
+            "[Libinput][beef][dead][Sunshine Passthrough][0000/0000]\n"
+            "Enabled=false\n"
+            "[Libinput][046d][c534][Logitech Mouse][0001/0001]\n"
+            "Enabled=true\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"HOME": str(base)}, clear=False):
+            input_isolation.clean_kde_libinput_config()
+        cleaned = kcm.read_text(encoding="utf-8")
+        self.assertNotIn("1209", cleaned)
+        self.assertNotIn("beef", cleaned)
+        self.assertIn("[Libinput][046d][c534][Logitech Mouse]", cleaned)
+        self.assertIn("Enabled=true", cleaned)
+
+    def test_unreadable_input_devices_lists_nodes_this_user_cannot_open(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        readable = Path(tempdir.name) / "event0"
+        readable.write_text("", encoding="utf-8")
+        missing = Path(tempdir.name) / "event9"
+        unreadable = diagnostics.unreadable_input_devices(
+            [
+                {"name": "libvirtualhid Mouse", "event_path": str(readable)},
+                {"name": "libvirtualhid Keyboard", "event_path": str(missing)},
+                {"name": "libvirtualhid Pen", "event_path": ""},
+            ]
+        )
+        self.assertEqual(unreadable, [str(missing)])
+
+    def test_display_doctor_warns_when_sunshine_input_nodes_are_unreadable(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        base = Path(tempdir.name)
+        with temp_display_state(manager) as (state, _base):
+            state.enabled = True
+            state.udev_rule_path = str(base / "85-lutristosunshine-sunshine-input.rules")
+            Path(state.udev_rule_path).write_text(input_isolation.udev_rule(), encoding="utf-8")
+            with patched(
+                display_state,
+                load_state=lambda: state,
+            ), patched(
+                diagnostics,
+                missing_dependencies=lambda *args, **kwargs: [],
+            ), patched(
+                input_isolation,
+                sunshine_virtual_input_devices=lambda: [
+                    {"name": "libvirtualhid Mouse", "event_path": str(base / "event24")},
+                    {"name": "libvirtualhid Keyboard", "event_path": str(base / "event23")},
+                ],
+            ), patched(
+                sunshine_service,
+                is_sunshine_service_active=lambda: True,
+            ):
+                report = manager.display_doctor_report()
+
+        check = next(item for item in report["checks"] if item["label"] == "Sunshine input access")
+        self.assertEqual(check["status"], "warn")
+        self.assertIn("no client input, touch included, can reach the game", check["message"])
+        self.assertEqual(report["summary"], "degraded")
+
+    def test_display_doctor_passes_when_sunshine_input_nodes_are_readable(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        base = Path(tempdir.name)
+        readable = base / "event24"
+        readable.write_text("", encoding="utf-8")
+        with temp_display_state(manager) as (state, _base):
+            state.enabled = True
+            state.udev_rule_path = str(base / "85-lutristosunshine-sunshine-input.rules")
+            Path(state.udev_rule_path).write_text(input_isolation.udev_rule(), encoding="utf-8")
+            with patched(
+                display_state,
+                load_state=lambda: state,
+            ), patched(
+                diagnostics,
+                missing_dependencies=lambda *args, **kwargs: [],
+            ), patched(
+                input_isolation,
+                sunshine_virtual_input_devices=lambda: [
+                    {"name": "libvirtualhid Mouse", "event_path": str(readable)},
+                ],
+            ), patched(
+                sunshine_service,
+                is_sunshine_service_active=lambda: True,
+            ):
+                report = manager.display_doctor_report()
+
+        check = next(item for item in report["checks"] if item["label"] == "Sunshine input access")
+        self.assertEqual(check["status"], "pass")
+
     def test_ensure_dependencies_requires_setfacl(self) -> None:
         which = lambda name: None if name == "setfacl" else "/usr/bin/fake"
         missing = diagnostics.missing_dependencies(which_fn=which)

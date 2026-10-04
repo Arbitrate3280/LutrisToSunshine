@@ -29,14 +29,41 @@ FALLBACK_WIDTH = 1920
 FALLBACK_HEIGHT = 1080
 FALLBACK_FPS = 60
 REFRESH_RATE_SYNC_MODES = {"client", "exact", "custom"}
-SUNSHINE_INPUT_VENDOR_ID = 0xBEEF
-SUNSHINE_INPUT_PRODUCT_ID = 0xDEAD
+# Known Sunshine virtual devices, as (vendor, product, name). Used to render
+# static sway rules and clean saved KDE device settings. Runtime sync also
+# enables the identifiers Sunshine actually registers.
+SUNSHINE_INPUT_DEVICES = (
+    (0x1209, 0x0002, "libvirtualhid Keyboard"),
+    (0x1209, 0x0003, "libvirtualhid Mouse"),
+    (0x1209, 0x0003, "libvirtualhid Mouse (Absolute)"),
+    (0xBEEF, 0xDEAD, "Keyboard_passthrough"),
+    (0xBEEF, 0xDEAD, "Mouse_passthrough"),
+    (0xBEEF, 0xDEAD, "Mouse_passthrough (absolute)"),
+    (0xBEEF, 0xDEAD, "Touch_passthrough"),
+    (0xBEEF, 0xDEAD, "Pen_passthrough"),
+)
+# Match by vendor id and by name, so Sunshine can add a device kind without
+# adding another vendor id in a separate list.
+SUNSHINE_INPUT_VENDOR_IDS = tuple(
+    dict.fromkeys(vendor_id for vendor_id, _product_id, _name in SUNSHINE_INPUT_DEVICES)
+)
+# Name fragments that identify Sunshine's virtual devices regardless of the
+# USB ids it happens to use. Compared against the lowercased name with
+# underscores turned into spaces, so "Mouse_passthrough" matches both
+# "Mouse_passthrough" and "Mouse passthrough".
 SUNSHINE_INPUT_NAME_MARKERS = [
+    "libvirtualhid",
     "Keyboard_passthrough",
     "Mouse_passthrough",
     "Touch_passthrough",
     "Pen_passthrough",
 ]
+# How long the sync script waits for Sunshine to register its devices.
+SUNSHINE_INPUT_SYNC_TIMEOUT_SECONDS = 20
+# udev name patterns for the managed rule. udev matches case-sensitively, so
+# these are written the way the device names actually appear ("libvirtualhid
+# Mouse (Absolute)", "Keyboard_passthrough", ...).
+SUNSHINE_INPUT_UDEV_NAME_PATTERNS = ("libvirtualhid*", "*_passthrough*")
 FLATPAK_SPAWN_HOST_PREFIX = ["flatpak-spawn", "--host"]
 FLATPAK_FLAG_OPTIONS = {
     "-d",

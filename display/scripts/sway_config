@@ -2,12 +2,4 @@
 output HEADLESS-1 resolution @FALLBACK_MODE@
 swaybg_command /usr/bin/true
 
-input * events disabled
-input "48879:57005:Keyboard_passthrough" events enabled
-input "48879:57005:Mouse_passthrough" events enabled
-input "48879:57005:Mouse_passthrough_(absolute)" events enabled
-input "48879:57005:Touch_passthrough" events enabled
-input "48879:57005:Pen_passthrough" events enabled
-
-input "48879:57005:Mouse_passthrough" accel_profile flat
-input "48879:57005:Mouse_passthrough_(absolute)" accel_profile flat
+@SUNSHINE_INPUT_BLOCK@

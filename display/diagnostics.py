@@ -8,6 +8,7 @@ only for callers from older releases while production consumers use attrs.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -82,6 +83,7 @@ class DisplaySnapshot:
     kwin_isolation_failed_devices: List[KwinDevice] = field(default_factory=list)
     sunshine_input_devices: List[InputDevice] = field(default_factory=list)
     sunshine_input_device_count: int = 0
+    sunshine_input_unreadable_devices: List[str] = field(default_factory=list)
     portal_handoff_active: bool = False
     current_mangohud_config: str = ""
     last_launch_log_file: str = ""
@@ -265,6 +267,9 @@ def _legacy_snapshot(value: Mapping[str, object]) -> DisplaySnapshot:
     values["kwin_isolation_devices"] = _legacy_devices(value, "kwin_isolation_devices", "path")
     values["kwin_isolation_failed_devices"] = _legacy_devices(value, "kwin_isolation_failed_devices", "path")
     values["sunshine_input_devices"] = _legacy_devices(value, "sunshine_input_devices", "event_path")
+    values["sunshine_input_unreadable_devices"] = _legacy_string_list(
+        value, "sunshine_input_unreadable_devices"
+    )
     return DisplaySnapshot(**values)
 
 
@@ -326,6 +331,24 @@ class CommandRunner(Protocol):
         *,
         check: bool = False,
     ) -> subprocess.CompletedProcess: ...
+
+
+def unreadable_input_devices(devices: Sequence[InputDevice]) -> List[str]:
+    """Event nodes this user cannot open, so no client input can reach the game.
+
+    Sunshine's virtual input nodes are root-owned; only the managed udev rule
+    grants this user access. When Sunshine changes the ids or names it
+    registers, the rule can silently stop matching and the stream loses every
+    input, including touch.
+    """
+    unreadable: List[str] = []
+    for device in devices:
+        event_path = safe_string(device.get("event_path"))
+        if not event_path:
+            continue
+        if not os.access(event_path, os.R_OK):
+            unreadable.append(event_path)
+    return unreadable
 
 
 def _active_launch_status(state: DisplayState) -> Dict[str, str]:
@@ -406,7 +429,12 @@ def _with_derived_status(
     input_mode: str,
     input_devices: List[InputDevice],
 ) -> DisplaySnapshot:
-    if not configured:
+    if snapshot.sunshine_input_unreadable_devices and sunshine_active:
+        next_step = (
+            "Run 'python3 lutristosunshine.py display enable' to reinstall the managed udev "
+            "rule; without it the phone's touch and controls cannot reach the game."
+        )
+    elif not configured:
         next_step = "Run 'python3 lutristosunshine.py display enable' to set up the headless stack."
     elif not sunshine_active:
         next_step = "Run 'python3 lutristosunshine.py display start' to start the managed stack."
@@ -426,7 +454,13 @@ def _with_derived_status(
 
     isolation_level = "success"
     isolation_summary = "rule ready"
-    if input_mode == "kwin-runtime-disable":
+    if snapshot.sunshine_input_unreadable_devices:
+        isolation_level = "error"
+        isolation_summary = (
+            f"{len(snapshot.sunshine_input_unreadable_devices)} of {len(input_devices)} "
+            "Sunshine input device(s) not readable by this user; no client input reaches the game"
+        )
+    elif input_mode == "kwin-runtime-disable":
         if snapshot.kwin_isolation_error:
             isolation_level, isolation_summary = "error", snapshot.kwin_isolation_error
         elif snapshot.kwin_isolation_state == "inactive":
@@ -493,6 +527,7 @@ def display_snapshot(
     input_mode = input_isolation_mode_fn()
     kwin_status = kwin_status_fn(state) if configured else empty_kwin_status_fn()
     input_devices = sunshine_input_devices_fn() if configured else []
+    unreadable_devices = unreadable_input_devices(input_devices)
     current_mode = current_headless_mode_fn(state, sunshine_active, sway_active)
     custom_mode = state.custom_display_mode
     mode_summary = refresh_rate_sync_mode_summary(state.refresh_rate_sync_mode)
@@ -527,6 +562,7 @@ def display_snapshot(
         kwin_isolation_failed_devices=kwin_status.get("failed_devices") or [],
         sunshine_input_devices=input_devices,
         sunshine_input_device_count=len(input_devices),
+        sunshine_input_unreadable_devices=unreadable_devices,
         portal_handoff_active=PORTAL_ACTIVE_PATH.exists(),
         current_mangohud_config=safe_string(active_launch_status.get("mangohud_config")),
         last_launch_log_file=state.paths.last_launch_log_file,
@@ -621,6 +657,24 @@ def _doctor_kwin_check(snapshot: DisplaySnapshot) -> DoctorCheck:
     return DoctorCheck("KWin isolation", status, message)
 
 
+def _doctor_input_access_check(snapshot: DisplaySnapshot) -> DoctorCheck:
+    unreadable = snapshot.sunshine_input_unreadable_devices
+    if unreadable:
+        return DoctorCheck(
+            "Sunshine input access",
+            "warn",
+            f"{len(unreadable)} of {snapshot.sunshine_input_device_count} Sunshine input device(s) "
+            f"are not readable by this user ({', '.join(unreadable)}); no client input, touch "
+            f"included, can reach the game. Rerun the virtual display setup to reinstall the "
+            f"managed udev rule.",
+        )
+    return DoctorCheck(
+        "Sunshine input access",
+        "pass",
+        f"All {snapshot.sunshine_input_device_count} Sunshine input device(s) are readable by this user.",
+    )
+
+
 def _doctor_configured_checks(snapshot: DisplaySnapshot) -> List[DoctorCheck]:
     if not snapshot.configured:
         return [DoctorCheck("Setup", "fail", "Virtual display is not configured.")]
@@ -632,6 +686,7 @@ def _doctor_configured_checks(snapshot: DisplaySnapshot) -> List[DoctorCheck]:
             "pass" if snapshot.udev_rule_present else "warn",
             "Input permissions rule is present." if snapshot.udev_rule_present else "Managed udev rule is missing.",
         ),
+        _doctor_input_access_check(snapshot),
     ]
     if snapshot.input_isolation_mode == "kwin-runtime-disable":
         checks.append(_doctor_kwin_check(snapshot))

@@ -59,6 +59,7 @@ class DisplayPaths:
     sunshine_override_dir: str = ""
     sunshine_override: str = ""
     kwin_input_isolation_script: str = ""
+    sync_input_script: str = ""
     sunshine_conf: str = ""
     kwin_input_isolation_status_file: str = ""
 
@@ -133,6 +134,7 @@ def build_paths(
         sunshine_override_dir=str(override_dir),
         sunshine_override=str(override_dir / "override.conf"),
         kwin_input_isolation_script=str(BIN_ROOT / "lutristosunshine-kwin-input-isolation.py"),
+        sync_input_script=str(BIN_ROOT / "lutristosunshine-sync-sunshine-input.py"),
         sunshine_conf=str((config_root_fn(effective_unit) if config_root_fn else Path("~/.config/sunshine").expanduser()) / "sunshine.conf"),
         kwin_input_isolation_status_file=str(PROFILE_ROOT / "kwin-input-isolation-status.json"),
     )
