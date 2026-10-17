@@ -4,9 +4,9 @@ import shutil
 from typing import Dict, List, Tuple, Optional
 import shlex
 
-from config.types import FaugusSource, GameSelection
+from config.types import DetectHints, FaugusSource, GameSelection
 
-from utils.utils import run_command
+from utils.utils import normalize_detect_hints, path_basename_for_hint, run_command
 
 FAUGUS_FLATPAK_ID = "io.github.Faugus.faugus-launcher"
 
@@ -194,8 +194,19 @@ def list_faugus_games() -> List[Tuple[str, str, str, FaugusSource]]:
     return games
 
 
+def _faugus_detect_hints(runner: FaugusSource) -> Optional[DetectHints]:
+    path = runner.game_path.strip()
+    hints: DetectHints = {}
+    if path:
+        hints["process_name"] = path_basename_for_hint(path)
+        if os.path.isabs(path):
+            hints["exe"] = path
+            hints["install_dir"] = os.path.dirname(path)
+    return normalize_detect_hints(hints)
+
+
 def list_faugus_selections() -> List[GameSelection]:
     return [
-        GameSelection(game_id, name, "Faugus", runner)
+        GameSelection(game_id, name, "Faugus", runner, _faugus_detect_hints(runner))
         for game_id, name, _, runner in list_faugus_games()
     ]

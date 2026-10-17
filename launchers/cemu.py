@@ -5,8 +5,8 @@ import shutil
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from config.types import GameSelection, LauncherSource
-from utils.utils import run_command
+from config.types import DetectHints, GameSelection, LauncherSource
+from utils.utils import normalize_detect_hints, run_command
 
 CEMU_FLATPAK_ID = "info.cemu.Cemu"
 
@@ -188,6 +188,24 @@ def list_cemu_games() -> List[Tuple[str, str]]:
     return games
 
 
+def _cemu_detect_hints() -> Optional[DetectHints]:
+    command = get_cemu_command()
+    if not command:
+        return None
+    if command.startswith("flatpak"):
+        return normalize_detect_hints(
+            {"env_marker": {"key": "FLATPAK_ID", "value": CEMU_FLATPAK_ID}}
+        )
+    if os.path.isabs(command):
+        return None
+    resolved = shutil.which("cemu")
+    return normalize_detect_hints({"exe": resolved or ""})
+
+
 def list_cemu_selections() -> List[GameSelection]:
     source = LauncherSource("Cemu")
-    return [GameSelection(game_id, name, "Cemu", source) for game_id, name in list_cemu_games()]
+    hints = _cemu_detect_hints()
+    return [
+        GameSelection(game_id, name, "Cemu", source, hints)
+        for game_id, name in list_cemu_games()
+    ]

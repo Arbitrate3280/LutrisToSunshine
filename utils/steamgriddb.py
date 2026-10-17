@@ -16,11 +16,31 @@ def validate_api_key(api_key: str) -> bool:
     except requests.RequestException:
         return False
 
-def manage_api_key() -> Optional[str]:
+def read_cover_source_url(image_path: str) -> Optional[str]:
+    """Return the recorded origin URL for a downloaded cover, if any."""
+    try:
+        with open(f"{image_path}.source-url", encoding="utf-8") as file:
+            source_url = file.read().strip()
+    except OSError:
+        return None
+    if source_url.startswith(("http://", "https://")):
+        return source_url
+    return None
+
+def write_cover_source_url(image_path: str, source_url: str) -> None:
+    """Record where a downloaded cover came from (best effort)."""
+    try:
+        with open(f"{image_path}.source-url", "w", encoding="utf-8") as file:
+            file.write(source_url)
+    except OSError:
+        pass
+
+def manage_api_key(*, connection=CONNECTION) -> Optional[str]:
     """Manage the SteamGridDB API key."""
     try:
-        if os.path.exists(CONNECTION.get_api_key_path()):
-            with open(CONNECTION.get_api_key_path(), 'r') as file:
+        key_path = connection.get_api_key_path()
+        if os.path.exists(key_path):
+            with open(key_path, 'r') as file:
                 api_key = file.read().strip()
                 if validate_api_key(api_key):
                     return api_key
@@ -31,7 +51,8 @@ def manage_api_key() -> Optional[str]:
         while True:
             new_key = input("Please enter your SteamGridDB API key: ").strip()
             if validate_api_key(new_key):
-                with open(CONNECTION.get_api_key_path(), 'w') as file:
+                os.makedirs(os.path.dirname(key_path), exist_ok=True)
+                with open(key_path, 'w') as file:
                     file.write(new_key)
                 return new_key
             else:
@@ -39,9 +60,9 @@ def manage_api_key() -> Optional[str]:
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()
 
-def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
+def download_image_from_steamgriddb(game_name: str, api_key: str, *, connection=CONNECTION) -> str:
     """Download game cover image from SteamGridDB or return cached image if available."""
-    image_path = os.path.join(CONNECTION.get_covers_path(), f"{game_name.lower().replace(' ', '-')}.png")
+    image_path = os.path.join(connection.get_covers_path(), f"{game_name.lower().replace(' ', '-')}.png")
 
     if os.path.exists(image_path):
         return image_path
@@ -75,6 +96,7 @@ def download_image_from_steamgriddb(game_name: str, api_key: str) -> str:
         image = Image.open(BytesIO(image_response.content))
         image = image.convert("P", palette=Image.ADAPTIVE, colors=256)
         image.save(image_path, "PNG", optimize=True)
+        write_cover_source_url(image_path, image_url)
 
         return image_path
 

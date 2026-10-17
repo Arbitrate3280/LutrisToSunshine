@@ -62,11 +62,25 @@ class SunshineAppReference(TypedDict):
 LauncherRunner = Union[LauncherSource, FaugusSource, RetroArchSource]
 
 
+class EnvMarkerHint(TypedDict, total=False):
+    key: str
+    value: str
+
+
+class DetectHints(TypedDict, total=False):
+    env_marker: EnvMarkerHint
+    exe: str
+    install_dir: str
+    process_name: str
+    steam_appid: int
+
+
 class GameSelection(NamedTuple):
     game_id: str
     game_name: str
     display_source: str
     source: LauncherRunner
+    detect_hints: Optional[DetectHints] = None
 
 
 CommandBuilder = Callable[[GameSelection], Optional[str]]

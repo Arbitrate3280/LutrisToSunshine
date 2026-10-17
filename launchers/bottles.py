@@ -1,11 +1,11 @@
 import os
 import shlex
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 import yaml
 
-from config.types import GameSelection, LauncherSource
-from utils.utils import run_command
+from config.types import DetectHints, GameSelection, LauncherSource
+from utils.utils import normalize_detect_hints, path_basename_for_hint, run_command
 
 BOTTLES_FLATPAK_ID = "com.usebottles.bottles"
 
@@ -61,26 +61,51 @@ def _iter_gaming_bottles() -> Iterator[Tuple[str, dict]]:
             seen.add(name)
             yield name, config
 
+def _iter_gaming_programs() -> Iterator[Tuple[str, dict]]:
+    """Yield (bottle, program config) for user-added programs of gaming bottles."""
+    for bottle, config in _iter_gaming_bottles():
+        programs = config.get("External_Programs") or {}
+        for program in programs.values():
+            if not isinstance(program, dict) or program.get("removed"):
+                continue
+            if program.get("name"):
+                yield bottle, program
+
+
+def _bottles_detect_hints(program: dict) -> Optional[DetectHints]:
+    hints: DetectHints = {}
+    path = str(program.get("path") or "").strip()
+    folder = str(program.get("folder") or "").strip()
+
+    if path and os.path.isabs(path):
+        hints["exe"] = path
+    if path:
+        hints["process_name"] = path_basename_for_hint(path)
+    if folder and os.path.isabs(folder):
+        hints["install_dir"] = folder
+    return normalize_detect_hints(hints)
+
+
 def list_bottles_games() -> List[Tuple[str, str, str, str]]:
     """List programs of gaming bottles by reading bottle.yml directly instead of
     spawning bottles-cli per bottle. Mirrors `bottles-cli programs` semantics for
     user-added programs (External_Programs minus removed entries).
     ponytail: skips .lnk-auto-discovered and Windows Steam/Epic extras that
     bottles-cli also scans; add if a game only shows in Bottles' library."""
-    games = []
-    for bottle, config in _iter_gaming_bottles():
-        programs = config.get("External_Programs") or {}
-        for program in programs.values():
-            if not isinstance(program, dict) or program.get("removed"):
-                continue
-            program_name = program.get("name")
-            if program_name:
-                games.append((program_name, program_name, "Bottles", bottle))
-    return games
+    return [
+        (program["name"], program["name"], "Bottles", bottle)
+        for bottle, program in _iter_gaming_programs()
+    ]
 
 
 def list_bottles_selections() -> List[GameSelection]:
     return [
-        GameSelection(game_id, name, "Bottles", LauncherSource(bottle))
-        for game_id, name, _, bottle in list_bottles_games()
+        GameSelection(
+            program["name"],
+            program["name"],
+            "Bottles",
+            LauncherSource(bottle),
+            _bottles_detect_hints(program),
+        )
+        for bottle, program in _iter_gaming_programs()
     ]

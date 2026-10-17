@@ -3,8 +3,8 @@ import os
 import shutil
 import shlex
 from typing import List, Tuple, Optional
-from config.types import GameSelection, RetroArchSource
-from utils.utils import run_command
+from config.types import DetectHints, GameSelection, RetroArchSource
+from utils.utils import normalize_detect_hints, run_command
 
 RETROARCH_FLATPAK_ID = "org.libretro.RetroArch"
 
@@ -130,8 +130,23 @@ def list_retroarch_games() -> List[Tuple[str, str, RetroArchSource]]:
     return games
 
 
+def _retroarch_detect_hints() -> Optional[DetectHints]:
+    command = get_retroarch_command()
+    if not command:
+        return None
+    hints: DetectHints = {"process_name": "retroarch"}
+    if command.startswith("flatpak"):
+        hints["env_marker"] = {"key": "FLATPAK_ID", "value": RETROARCH_FLATPAK_ID}
+    else:
+        resolved = shutil.which("retroarch")
+        if resolved:
+            hints["exe"] = resolved
+    return normalize_detect_hints(hints)
+
+
 def list_retroarch_selections() -> List[GameSelection]:
+    hints = _retroarch_detect_hints()
     return [
-        GameSelection(path, name, "RetroArch", core)
+        GameSelection(path, name, "RetroArch", core, hints)
         for path, name, core in list_retroarch_games()
     ]

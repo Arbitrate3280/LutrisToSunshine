@@ -1,18 +1,22 @@
 import json
 import os
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import shlex
-from config.types import GameSelection, LauncherSource
+from config.types import DetectHints, GameSelection, LauncherSource
+from utils.utils import normalize_detect_hints
+
+
+RYUBING_FLATPAK_ID = "io.github.ryubing.Ryujinx"
 
 
 def build_ryubing_command(game: GameSelection) -> str:
-    return shlex.join(["flatpak", "run", "io.github.ryubing.Ryujinx", game.game_id])
+    return shlex.join(["flatpak", "run", RYUBING_FLATPAK_ID, game.game_id])
 
 def detect_ryubing_installation() -> bool:
     """Detect if Ryubing is installed via Flatpak."""
     from utils.utils import run_command
-    return run_command(["flatpak", "info", "io.github.ryubing.Ryujinx"]).returncode == 0
+    return run_command(["flatpak", "info", RYUBING_FLATPAK_ID]).returncode == 0
 
 def get_ryubing_config_path() -> str:
     """Get the Ryubing config file path."""
@@ -56,6 +60,16 @@ def list_ryubing_games() -> List[Tuple[str, str]]:
     return games
 
 
+def _ryubing_detect_hints() -> Optional[DetectHints]:
+    return normalize_detect_hints(
+        {"env_marker": {"key": "FLATPAK_ID", "value": RYUBING_FLATPAK_ID}}
+    )
+
+
 def list_ryubing_selections() -> List[GameSelection]:
     source = LauncherSource("Ryubing")
-    return [GameSelection(game_id, name, "Ryubing", source) for game_id, name in list_ryubing_games()]
+    hints = _ryubing_detect_hints()
+    return [
+        GameSelection(game_id, name, "Ryubing", source, hints)
+        for game_id, name in list_ryubing_games()
+    ]

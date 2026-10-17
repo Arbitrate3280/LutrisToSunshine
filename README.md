@@ -26,14 +26,16 @@ Make sure Sunshine is running, close Lutris before scanning (other launchers can
 python3 lutristosunshine.py
 ```
 
+Imported games carry process/install detection hints (Steam app IDs, Flatpak IDs, executables, install directories, process names) derived from launcher configs, so Punktfunk can reliably recognize a running title.
+
 ### Options
 
 | Flag | What it does |
 |------|-------------|
 | `--all` | Import all detected games without prompts |
 | `--cover` | Download SteamGridDB covers for imported games |
-| `--sunshine-host` | Override the Sunshine/Apollo web UI host |
-| `--sunshine-port` | Override the Sunshine web UI port (usually `47990`) |
+| `--sunshine-host` | Override the Sunshine/Punktfunk management host |
+| `--sunshine-port` | Override the Sunshine/Punktfunk management port (usually `47990`) |
 
 ### Ignoring sources
 

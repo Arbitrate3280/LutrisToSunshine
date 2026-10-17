@@ -12,6 +12,7 @@ from unittest.mock import patch
 from config import settings as tool_settings
 from launchers import intake
 from lutristosunshine import ignore_sources_flow
+from punktfunk.connection import CONNECTION as PUNKTFUNK_CONNECTION
 from sunshine import installation
 from sunshine.connection import CONNECTION
 
@@ -167,6 +168,10 @@ class MainFlowIgnoreWiringTests(unittest.TestCase):
             installation, "resolve_installation", return_value=facts
         ), patch.object(
             CONNECTION, "get_running_servers", return_value=["sunshine"]
+        ), patch.object(
+            PUNKTFUNK_CONNECTION, "get_running_servers", return_value=[]
+        ), patch.object(
+            PUNKTFUNK_CONNECTION, "detect_punktfunk_installation", return_value=False
         ), patch.object(
             CONNECTION, "is_server_running", return_value=True
         ), patch.object(

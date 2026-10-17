@@ -1,9 +1,10 @@
+import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from config.constants import LAUNCHER_NAMES, SOURCE_PRIORITY
-from config.types import GameSelection
+from config.types import DetectHints, GameSelection
 
 
 def handle_interrupt():
@@ -52,6 +53,19 @@ def normalize_game_name_for_dedup(game_name: str) -> str:
     return " ".join(game_name.casefold().split())
 
 
+def normalize_detect_hints(hints: Optional[DetectHints]) -> Optional[DetectHints]:
+    """Drop empty hint fields; return None when nothing useful remains."""
+    if not hints:
+        return None
+    cleaned = {key: value for key, value in hints.items() if value not in (None, "")}
+    return cast(Optional[DetectHints], cleaned or None)
+
+
+def path_basename_for_hint(path: str) -> str:
+    """Best-effort process name for Windows- or POSIX-style hint paths."""
+    return os.path.basename(path.strip().replace("\\", "/"))
+
+
 def get_source_priority(display_source: str) -> int:
     """Return the deduplication priority for a display source.
 
@@ -81,16 +95,14 @@ def dedupe_selected_games_by_name(
     skipped: List[Tuple[GameSelection, GameSelection]] = []
 
     for game in games:
-        _, game_name, display_source, _ = game
-        key = normalize_game_name_for_dedup(game_name)
+        key = normalize_game_name_for_dedup(game.game_name)
         if key not in retained_by_name:
             retained_by_name[key] = game
             order.append(key)
             continue
 
         retained = retained_by_name[key]
-        _, _, retained_source, _ = retained
-        if get_source_priority(display_source) < get_source_priority(retained_source):
+        if get_source_priority(game.display_source) < get_source_priority(retained.display_source):
             skipped.append((retained, game))
             retained_by_name[key] = game
         else:

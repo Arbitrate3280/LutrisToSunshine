@@ -4,12 +4,23 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Protocol, Tuple
 
 from config.constants import LAUNCHER_NAMES
 from config.registry import LAUNCHER_REGISTRY
-from config.types import GameSelection
+from config.types import DetectHints, GameSelection
 from utils.utils import dedupe_selected_games_by_name, normalize_game_name_for_dedup
+
+
+class SubmitGameFn(Protocol):
+    def __call__(
+        self,
+        game_name: str,
+        command: str,
+        image_path: str,
+        *,
+        detect: Optional[DetectHints] = None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -100,7 +111,7 @@ def submit_games(
     api_key: Optional[str],
     default_image: str,
     download_image_fn: Callable[[str, str], str],
-    submit_game_fn: Callable[[str, str, str], None],
+    submit_game_fn: SubmitGameFn,
 ) -> bool:
     """Download covers and submit the selected games as one intake operation."""
     games_added = False
@@ -115,7 +126,7 @@ def submit_games(
                 future = executor.submit(download_image_fn, game.game_name, api_key)
                 futures[future] = game
             else:
-                submit_game_fn(game.game_name, command, default_image)
+                submit_game_fn(game.game_name, command, default_image, detect=game.detect_hints)
                 games_added = True
 
         for future in as_completed(futures):
@@ -129,6 +140,6 @@ def submit_games(
             if not command:
                 print(f"Warning: Unable to determine launch command for {game.game_name}. Skipping.")
                 continue
-            submit_game_fn(game.game_name, command, image_path)
+            submit_game_fn(game.game_name, command, image_path, detect=game.detect_hints)
             games_added = True
     return games_added

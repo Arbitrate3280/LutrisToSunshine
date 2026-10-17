@@ -1,4 +1,4 @@
-"""Sunshine/Apollo connection context, authentication, and HTTP transport."""
+"""Sunshine connection context, authentication, and HTTP transport."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import base64
 import getpass
 import json
 import os
-import shutil
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Tuple
 
@@ -99,40 +98,12 @@ class SunshineConnection:
         host, port = self.get_api_connection(server_name)
         return f"https://{host}:{port}"
 
-    def server_supports_token_auth(self) -> bool:
-        return self.server_name != "apollo"
-
     def get_server_display_name(self) -> str:
-        return "Apollo" if self.server_name == "apollo" else "Sunshine"
-
-    def _get_apollo_process_config_root(self) -> Optional[str]:
-        result = run_command(["pgrep", "-x", "apollo-bin"])
-        if result.returncode != 0:
-            return None
-        for pid in (result.stdout or "").split():
-            try:
-                with open(f"/proc/{pid}/cmdline", "rb") as cmdline_file:
-                    args = [part.decode() for part in cmdline_file.read().split(b"\0") if part]
-            except (OSError, UnicodeDecodeError):
-                continue
-            for arg in reversed(args[1:]):
-                expanded = os.path.expanduser(arg)
-                if expanded.endswith(".conf"):
-                    return os.path.dirname(os.path.realpath(expanded))
-        return None
+        return "Sunshine"
 
     def get_config_root(self) -> str:
         if self.installation_type == "flatpak":
             return os.path.expanduser("~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine")
-        if self.server_name == "apollo":
-            process_root = self._get_apollo_process_config_root()
-            if process_root:
-                return process_root
-            apollo_root = os.path.expanduser("~/.config/apollo")
-            if os.path.isdir(apollo_root):
-                return apollo_root
-            sunshine_root = os.path.expanduser("~/.config/sunshine")
-            return sunshine_root if os.path.isdir(sunshine_root) else apollo_root
         return os.path.expanduser("~/.config/sunshine")
 
     def get_covers_path(self) -> str:
@@ -176,15 +147,12 @@ class SunshineConnection:
         }
         update_setting("servers", servers)
 
-    def detect_apollo_installation(self) -> bool:
-        return shutil.which("apollo") is not None
-
     def get_running_servers(self) -> List[str]:
         result = run_command(["ps", "-A"])
         if result.returncode != 0:
             return []
         output = (result.stdout or "").lower()
-        return [name for name in ("sunshine", "apollo") if name in output]
+        return ["sunshine"] if "sunshine" in output else []
 
     def is_server_running(self, name: Optional[str] = None) -> bool:
         running = self.get_running_servers()
@@ -242,8 +210,6 @@ class SunshineConnection:
             return False
 
     def _validate_token(self, token: str) -> bool:
-        if not self.server_supports_token_auth():
-            return False
         try:
             response = requests.get(f"{self.get_api_url()}/api/apps", headers={"Authorization": token}, verify=False, timeout=10)
             return response.status_code == 200
@@ -251,7 +217,7 @@ class SunshineConnection:
             return False
 
     def get_sunshine_credentials(self) -> Tuple[str, str]:
-        return input("Enter your Sunshine/Apollo username: "), getpass.getpass("Enter your Sunshine/Apollo password: ")
+        return input("Enter your Sunshine username: "), getpass.getpass("Enter your Sunshine password: ")
 
     def get_auth_session(self, allow_prompt: bool = True) -> Optional[requests.Session]:
         if self.auth_session and self._validate_session(self.auth_session):
@@ -263,7 +229,7 @@ class SunshineConnection:
         if not allow_prompt:
             return None
         if not self.is_server_running():
-            print("Error: Sunshine or Apollo is not running. Please start it and try again.")
+            print("Error: Sunshine is not running. Please start it and try again.")
             return None
         username, password = self.get_sunshine_credentials()
         if not username or not password:
@@ -282,9 +248,6 @@ class SunshineConnection:
                     self._save_session_cookies(session)
                     self.auth_session = session
                     return session
-        if not self.server_supports_token_auth():
-            print("Error: Authentication failed. Could not obtain a valid session.")
-            return None
         session = requests.Session()
         session.auth = (username, password)
         if self._validate_session(session):
@@ -296,10 +259,8 @@ class SunshineConnection:
         return None
 
     def get_auth_token(self) -> Optional[str]:
-        if not self.server_supports_token_auth():
-            return None
         if not self.is_server_running():
-            print("Error: Sunshine or Apollo is not running. Please start it and try again.")
+            print("Error: Sunshine is not running. Please start it and try again.")
             return None
         token = self.auth_token or self._load_cached_auth_token()
         if token and self._validate_token(token):
@@ -325,16 +286,15 @@ class SunshineConnection:
     def ensure_authenticated(self, allow_prompt: bool = True) -> bool:
         if self.get_auth_session(allow_prompt=False) is not None:
             return True
-        if self.server_supports_token_auth():
-            token = self.auth_token or self._load_cached_auth_token()
-            if token and self._validate_token(token):
-                self.auth_token = token
-                return True
+        token = self.auth_token or self._load_cached_auth_token()
+        if token and self._validate_token(token):
+            self.auth_token = token
+            return True
         if not allow_prompt:
             return False
         if self.get_auth_session(allow_prompt=True) is not None:
             return True
-        return self.get_auth_token() is not None if self.server_supports_token_auth() else False
+        return self.get_auth_token() is not None
 
     def api_request(
         self,

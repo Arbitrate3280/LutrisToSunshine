@@ -298,7 +298,7 @@ class InstallChoicePersistenceTests(unittest.TestCase):
                     {
                         "servers": {
                             "sunshine": {"host": "192.168.1.10", "port": 47990},
-                            "apollo": {"host": "localhost", "port": 47989},
+                            "punktfunk": {"host": "10.0.0.5", "port": 47990},
                         }
                     }
                 )
@@ -312,7 +312,7 @@ class InstallChoicePersistenceTests(unittest.TestCase):
 
         self.assertEqual(saved["sunshine_install"], "native")
         self.assertEqual(saved["servers"]["sunshine"]["host"], "192.168.1.10")
-        self.assertEqual(saved["servers"]["apollo"], {"host": "localhost", "port": 47989})
+        self.assertEqual(saved["servers"]["punktfunk"], {"host": "10.0.0.5", "port": 47990})
 
     def test_save_creates_missing_settings_dir(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -1,11 +1,14 @@
 import os
 import argparse
 import sys
+from functools import partial
 from typing import Dict, Optional, Tuple
 
 from config.constants import DEFAULT_IMAGE, LAUNCHER_NAMES, SOURCE_COLORS, RESET_COLOR
-from sunshine import catalog
+from sunshine import catalog, installation
 from sunshine.connection import CONNECTION
+from punktfunk import catalog as punktfunk_catalog
+from punktfunk.connection import CONNECTION as PUNKTFUNK_CONNECTION
 from utils.utils import (
     handle_interrupt,
     get_games_found_message,
@@ -14,7 +17,6 @@ from utils.utils import (
 from utils.input import get_menu_choice, get_user_input, get_yes_no_input, get_user_selection, get_required_input, CUSTOM_COMMAND_SELECTION
 from utils.terminal import accent, heading, muted
 from config.settings import load_settings, update_setting
-from sunshine.installation import resolve_installation, save_install_choice
 from utils.steamgriddb import manage_api_key, download_image_from_steamgriddb
 from launchers.lutris import is_lutris_running
 from launchers import intake
@@ -42,12 +44,12 @@ def parse_args(argv=None):
     parser.add_argument(
         "--sunshine-host",
         default="",
-        help="Override the Sunshine/Apollo web UI host used for auth and API calls.",
+        help="Override the Sunshine/Punktfunk management host used for auth and API calls.",
     )
     parser.add_argument(
         "--sunshine-port",
         type=api_port_arg,
-        help="Override the Sunshine/Apollo web UI port used for auth and API calls. Usually 47990.",
+        help="Override the Sunshine/Punktfunk management port used for auth and API calls. Usually 47990.",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -190,28 +192,52 @@ def handle_display_command(args) -> int:
 
 
 
-def add_custom_command_flow() -> None:
+def add_custom_command_flow(
+    *,
+    connection=CONNECTION,
+    catalog_module=catalog,
+) -> None:
     """Prompt for a name + command and add it to the active server."""
     print("")
     print(heading("Add custom command"))
     name = get_required_input("Entry name: ", "Name cannot be empty.")
     command = get_required_input("Command to run: ", "Command cannot be empty.")
 
-    existing = {normalize_game_name_for_dedup(app["name"]) for app in catalog.get_existing_apps()}
+    existing = {
+        normalize_game_name_for_dedup(app["name"])
+        for app in catalog_module.get_existing_apps(connection=connection)
+    }
     if normalize_game_name_for_dedup(name) in existing:
-        print(f"Warning: an entry named '{name}' already exists in {CONNECTION.get_server_display_name()}.")
+        print(f"Warning: an entry named '{name}' already exists in {connection.get_server_display_name()}.")
 
     image_path = DEFAULT_IMAGE
     if get_yes_no_input(f"Download a cover from SteamGridDB for '{name}'? (y/n): "):
-        api_key = manage_api_key()
+        api_key = manage_api_key(connection=connection)
         if api_key:
             try:
-                image_path = download_image_from_steamgriddb(name, api_key)
+                image_path = download_image_from_steamgriddb(name, api_key, connection=connection)
             except Exception as e:
                 print(f"Error downloading image for {name}: {e}")
                 image_path = DEFAULT_IMAGE
 
-    catalog.submit_command(name, command, image_path)
+    catalog_module.submit_command(name, command, image_path, connection=connection)
+
+
+def prompt_running_server(running_servers) -> str:
+    """Prompt the user to pick one of several running streaming hosts."""
+    display_names = {
+        "sunshine": "Sunshine",
+        "punktfunk": "Punktfunk",
+    }
+    labels = [display_names.get(name, name.title()) for name in running_servers]
+    print(f"Multiple streaming hosts are running: {', '.join(labels)}.")
+    for index, label in enumerate(labels, start=1):
+        print(f"{accent(index)}. {label}")
+    choice = get_menu_choice(
+        f"{accent('Choose a host: ')}",
+        [str(index) for index in range(1, len(running_servers) + 1)],
+    )
+    return running_servers[int(choice) - 1]
 
 
 def prompt_install_choice(detected_types) -> Optional[str]:
@@ -314,81 +340,92 @@ def main(argv=None):
     if args.command == "ignore":
         raise SystemExit(ignore_sources_flow())
     try:
-        facts = resolve_installation()
+        facts = installation.resolve_installation()
         sunshine_install_type = facts.install_type
-        if facts.installed and sunshine_install_type is None:
-            if sys.stdin.isatty():
-                sunshine_install_type = prompt_install_choice(facts.detected_types)
-                save_install_choice(sunshine_install_type)
-            else:
-                types = ", ".join(facts.detected_types)
-                print(
-                    f"Multiple Sunshine installs detected: {types}. "
-                    "Run 'python3 lutristosunshine.py' once interactively to pick which one to use."
-                )
-                return 1
 
-        apollo_installed = CONNECTION.detect_apollo_installation()
-        if not facts.installed and not apollo_installed:
-            print("Error: No Sunshine or Apollo installation detected.")
+        punktfunk_installed = PUNKTFUNK_CONNECTION.detect_punktfunk_installation()
+        if not facts.installed and not punktfunk_installed:
+            print("Error: No Sunshine or Punktfunk installation detected.")
             return
 
         running_servers = CONNECTION.get_running_servers()
+        running_servers += [
+            name for name in PUNKTFUNK_CONNECTION.get_running_servers()
+            if name not in running_servers
+        ]
         if not running_servers:
-            print("Error: Sunshine or Apollo is not running. Please start it and try again.")
+            print("Error: No supported streaming host is running. Please start Sunshine or Punktfunk and try again.")
             return
 
-        if "sunshine" in running_servers and "apollo" in running_servers:
-            while True:
-                choice = input("Both Sunshine and Apollo are running. Use (1) Sunshine or (2) Apollo? ").strip().lower()
-                if choice in ("1", "sunshine", "s"):
-                    server_name = "sunshine"
-                    break
-                if choice in ("2", "apollo", "a"):
-                    server_name = "apollo"
-                    break
-                print("Please enter 1 for Sunshine or 2 for Apollo.")
-        else:
-            server_name = running_servers[0]
+        server_name = running_servers[0] if len(running_servers) == 1 else prompt_running_server(running_servers)
 
-        if server_name == "sunshine":
-            if not facts.installed or sunshine_install_type is None:
+        if server_name == "punktfunk":
+            if not punktfunk_installed:
+                print("Error: Punktfunk is not installed.")
+                return
+            if args.sunshine_host or args.sunshine_port is not None:
+                PUNKTFUNK_CONNECTION.set_api_connection(
+                    host=args.sunshine_host or None,
+                    port=args.sunshine_port,
+                )
+            authenticated, auth_error = PUNKTFUNK_CONNECTION.ensure_authenticated()
+            if not authenticated:
+                print(f"Error: Could not authenticate with Punktfunk: {auth_error}")
+                return
+            if args.sunshine_host or args.sunshine_port is not None:
+                PUNKTFUNK_CONNECTION.save_api_connection(
+                    args.sunshine_host or None,
+                    args.sunshine_port,
+                )
+                print(f"Saved {PUNKTFUNK_CONNECTION.get_server_display_name()} management endpoint: {PUNKTFUNK_CONNECTION.get_api_url()}")
+            active_connection = PUNKTFUNK_CONNECTION
+            active_catalog = punktfunk_catalog
+        else:
+            if not facts.installed:
                 print("Error: Sunshine is not installed.")
                 return
+            if sunshine_install_type is None:
+                if sys.stdin.isatty():
+                    sunshine_install_type = prompt_install_choice(facts.detected_types)
+                    installation.save_install_choice(sunshine_install_type)
+                else:
+                    types = ", ".join(facts.detected_types)
+                    print(
+                        f"Multiple Sunshine installs detected: {types}. "
+                        "Run 'python3 lutristosunshine.py' once interactively to pick which one to use."
+                    )
+                    return 1
             CONNECTION.set_installation_type(sunshine_install_type)
-        else:
-            if not apollo_installed:
-                print("Error: Apollo is not installed.")
+
+            CONNECTION.set_server_name(server_name)
+            if args.sunshine_host or args.sunshine_port is not None:
+                CONNECTION.set_api_connection(
+                    host=args.sunshine_host or None,
+                    port=args.sunshine_port,
+                )
+            if not CONNECTION.is_server_running(server_name):
+                print(f"Error: {server_name.title()} is not running. Please start it and try again.")
                 return
-            CONNECTION.set_installation_type("native")
 
-        CONNECTION.set_server_name(server_name)
-        if args.sunshine_host or args.sunshine_port is not None:
-            CONNECTION.set_api_connection(
-                host=args.sunshine_host or None,
-                port=args.sunshine_port,
-            )
-        if not CONNECTION.is_server_running(server_name):
-            print(f"Error: {server_name.title()} is not running. Please start it and try again.")
-            return
+            authenticated = CONNECTION.ensure_authenticated(allow_prompt=True)
+            if not authenticated:
+                authenticated = configure_connection_and_retry_auth(server_name)
 
-        COVERS_PATH = CONNECTION.get_covers_path()
+            if not authenticated:
+                print("Error: Could not obtain valid authentication. Exiting.")
+                return
+
+            if args.sunshine_host or args.sunshine_port is not None:
+                CONNECTION.save_api_connection(
+                    args.sunshine_host or None,
+                    args.sunshine_port,
+                    server_name=server_name,
+                )
+            active_connection = CONNECTION
+            active_catalog = catalog
+
+        COVERS_PATH = active_connection.get_covers_path()
         os.makedirs(COVERS_PATH, exist_ok=True)
-
-        authenticated = CONNECTION.ensure_authenticated(allow_prompt=True)
-        if not authenticated:
-            authenticated = configure_connection_and_retry_auth(server_name)
-
-        if not authenticated:
-            print("Error: Could not obtain valid authentication. Exiting.")
-            return
-
-        if args.sunshine_host or args.sunshine_port is not None:
-            CONNECTION.save_api_connection(
-                args.sunshine_host or None,
-                args.sunshine_port,
-                server_name=server_name,
-            )
 
         detected_launchers = intake.detect_launchers()
         detected_launchers, skipped_sources = intake.apply_ignores(
@@ -411,7 +448,7 @@ def main(argv=None):
             print(f"{muted('0.')} Exit")
             choice = get_menu_choice(f"{accent('Choose an option: ')}", ["0", "1"])
             if choice == "1":
-                add_custom_command_flow()
+                add_custom_command_flow(connection=active_connection, catalog_module=active_catalog)
             return
 
         if detected_launchers["Lutris"] and is_lutris_running():
@@ -429,13 +466,13 @@ def main(argv=None):
             print(f"{muted('0.')} Exit")
             choice = get_menu_choice(f"{accent('Choose an option: ')}", ["0", "1"])
             if choice == "1":
-                add_custom_command_flow()
+                add_custom_command_flow(connection=active_connection, catalog_module=active_catalog)
             return
 
         games_found_message = get_games_found_message(detected_launchers)
         print(games_found_message)
 
-        existing_apps = catalog.get_existing_apps()
+        existing_apps = active_catalog.get_existing_apps(connection=active_connection)
         existing_game_names_normalized = {
             normalize_game_name_for_dedup(app["name"]) for app in existing_apps
         }
@@ -450,7 +487,7 @@ def main(argv=None):
         for idx, game in enumerate(all_games):
             game_name = game.game_name
             status = (
-                f"(already in {CONNECTION.get_server_display_name()})"
+                f"(already in {active_connection.get_server_display_name()})"
                 if _game_name_cache[game_name] in existing_game_names_normalized
                 else ""
             )
@@ -466,7 +503,7 @@ def main(argv=None):
         else:
             selection = get_user_selection([(game.game_id, game.game_name) for game in all_games])
             if selection == CUSTOM_COMMAND_SELECTION:
-                add_custom_command_flow()
+                add_custom_command_flow(connection=active_connection, catalog_module=active_catalog)
                 return
             selected_indices = selection
 
@@ -488,7 +525,7 @@ def main(argv=None):
 
         for invalid_game, reason in selection_result.invalid_games:
             print(
-                f"Error: {reason} for '{invalid_game.game_name}'. Please associate the game with a core in RetroArch before adding it to {CONNECTION.get_server_display_name()}."
+                f"Error: {reason} for '{invalid_game.game_name}'. Please associate the game with a core in RetroArch before adding it to {active_connection.get_server_display_name()}."
             )
 
         if not selected_games:
@@ -496,21 +533,21 @@ def main(argv=None):
             return
 
         download_images = args.cover or get_yes_no_input("Do you want to download images from SteamGridDB? (y/n): ")
-        api_key = manage_api_key() if download_images else None
+        api_key = manage_api_key(connection=active_connection) if download_images else None
 
         games_added = intake.submit_games(
             selected_games,
             download_images=download_images,
             api_key=api_key,
             default_image=DEFAULT_IMAGE,
-            download_image_fn=download_image_from_steamgriddb,
-            submit_game_fn=catalog.submit_command,
+            download_image_fn=partial(download_image_from_steamgriddb, connection=active_connection),
+            submit_game_fn=partial(active_catalog.submit_command, connection=active_connection),
         )
 
         if games_added:
-            print(f"Games added to {CONNECTION.get_server_display_name()} successfully.")
+            print(f"Games added to {active_connection.get_server_display_name()} successfully.")
         else:
-            print(f"No new games were added to {CONNECTION.get_server_display_name()}.")
+            print(f"No new games were added to {active_connection.get_server_display_name()}.")
 
     except (KeyboardInterrupt, EOFError):
         handle_interrupt()

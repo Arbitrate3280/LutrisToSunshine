@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from launchers.bottles import list_bottles_games
+from launchers.bottles import list_bottles_games, list_bottles_selections
 
 
 def _make_bottle(root, name, config_text):
@@ -32,6 +32,15 @@ Environment: application
 External_Programs:
   xyz789:
     name: Not A Game
+"""
+HOST_PATHS_YML = """\
+Name: Gaming
+Environment: gaming
+External_Programs:
+  abc123:
+    name: Small Spaces
+    path: /home/x/Games/SS/SmallSpaces.exe
+    folder: /home/x/Games/SS
 """
 
 
@@ -70,6 +79,30 @@ class TestListBottlesGames(unittest.TestCase):
             self.assertEqual(
                 list_bottles_games(), [("Portal 2", "Portal 2", "Bottles", "Gaming")]
             )
+
+
+class TestBottlesDetectHints(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _selections(self, config_text):
+        root = os.path.join(self.tmp.name, "fp")
+        _make_bottle(root, "Gaming", config_text)
+        with patch("launchers.bottles._bottles_data_roots", return_value=[root]):
+            return list_bottles_selections()
+
+    def test_host_path_hints(self):
+        selections = self._selections(HOST_PATHS_YML)
+        self.assertEqual(selections[0].detect_hints, {
+            "exe": "/home/x/Games/SS/SmallSpaces.exe",
+            "process_name": "SmallSpaces.exe",
+            "install_dir": "/home/x/Games/SS",
+        })
+
+    def test_windows_path_keeps_process_name_only(self):
+        selections = self._selections(GAMING_YML)
+        self.assertEqual(selections[0].detect_hints, {"process_name": "portal2.exe"})
 
 
 if __name__ == "__main__":

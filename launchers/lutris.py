@@ -3,9 +3,12 @@ import os
 import shutil
 import shlex
 import sqlite3
-from typing import Optional, List, Tuple
-from config.types import GameSelection, LauncherSource
-from utils.utils import run_command
+from typing import Dict, Optional, List, Tuple
+
+import yaml
+
+from config.types import DetectHints, GameSelection, LauncherSource
+from utils.utils import normalize_detect_hints, path_basename_for_hint, run_command
 
 LUTRIS_FLATPAK_ID = "net.lutris.Lutris"
 
@@ -48,10 +51,8 @@ def is_lutris_running() -> bool:
             return True
     return False
 
-def _pga_db_candidates() -> List[str]:
-    """Candidate paths for Lutris' PGA database (mirrors lutris.settings.DB_PATH:
-    `pga_path` from any lutris.conf, then the default data/config locations).
-    The active install's locations come first, matching get_lutris_command()."""
+def _lutris_data_dirs() -> List[str]:
+    """Lutris data/config roots, active install first (Flatpak vs native)."""
     home = os.path.expanduser("~")
     native_dirs = (
         os.path.join(home, ".local", "share", "lutris"),
@@ -62,7 +63,15 @@ def _pga_db_candidates() -> List[str]:
         os.path.join(fp, "data", "lutris"),
         os.path.join(fp, "config", "lutris"),
     )
-    data_dirs = flatpak_dirs + native_dirs if _is_flatpak_install() else native_dirs + flatpak_dirs
+    order = flatpak_dirs + native_dirs if _is_flatpak_install() else native_dirs + flatpak_dirs
+    return list(order)
+
+
+def _pga_db_candidates() -> List[str]:
+    """Candidate paths for Lutris' PGA database (mirrors lutris.settings.DB_PATH:
+    `pga_path` from any lutris.conf, then the default data/config locations).
+    The active install's locations come first, matching get_lutris_command()."""
+    data_dirs = _lutris_data_dirs()
     candidates = []
     for conf_dir in data_dirs:
         parser = configparser.ConfigParser()
@@ -77,25 +86,112 @@ def _pga_db_candidates() -> List[str]:
     return candidates
 
 
-def list_lutris_games() -> List[Tuple[str, str]]:
-    """List all games by reading Lutris' PGA database directly — the same rows
-    `lutris -lo --json` returns (lutris.gui.application calls get_games with no
-    filters), without spawning the Lutris runtime."""
+def _list_lutris_rows() -> List[Tuple[str, str, str, str, str]]:
+    """(id, name, executable, directory, configpath) for every PGA row."""
     for path in _pga_db_candidates():
         if not os.path.isfile(path):
             continue
         try:
             db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
-                rows = db.execute("SELECT id, name FROM games").fetchall()
+                rows = db.execute(
+                    "SELECT id, name, executable, directory, configpath FROM games"
+                ).fetchall()
             finally:
                 db.close()
-            return [(str(game_id), name) for game_id, name in rows]
+            return [
+                (
+                    str(game_id),
+                    name or "",
+                    executable or "",
+                    directory or "",
+                    configpath or "",
+                )
+                for game_id, name, executable, directory, configpath in rows
+            ]
         except sqlite3.Error:
             continue
     return []
 
 
+def list_lutris_games() -> List[Tuple[str, str]]:
+    """List all games by reading Lutris' PGA database directly — the same rows
+    `lutris -lo --json` returns (lutris.gui.application calls get_games with no
+    filters), without spawning the Lutris runtime."""
+    return [(game_id, name) for game_id, name, *_ in _list_lutris_rows()]
+
+
+def _lutris_config_dirs() -> List[str]:
+    home = os.path.expanduser("~")
+    return [
+        os.path.join(home, ".config", "lutris"),
+        os.path.join(home, ".var", "app", LUTRIS_FLATPAK_ID, "config", "lutris"),
+    ]
+
+
+def _load_lutris_game_config(configpath: str) -> Dict[str, object]:
+    if not configpath:
+        return {}
+    candidates = [configpath]
+    if not os.path.isabs(configpath):
+        candidates += [os.path.join(conf_dir, configpath) for conf_dir in _lutris_config_dirs()]
+    for candidate in candidates:
+        candidate = os.path.expanduser(candidate)
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError):
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _section(config: Dict[str, object], key: str) -> Dict[str, object]:
+    value = config.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _lutris_detect_hints(
+    executable: str,
+    directory: str,
+    configpath: str,
+) -> Optional[DetectHints]:
+    config = _load_lutris_game_config(configpath)
+    game_config = _section(config, "game")
+    prefix = str(_section(config, "wine").get("prefix") or "").strip()
+
+    exe = str(game_config.get("exe") or "").strip() or executable.strip()
+    if exe:
+        exe = os.path.expanduser(exe)
+        if not os.path.isabs(exe) and prefix:
+            exe = os.path.join(os.path.expanduser(prefix), exe)
+
+    install_dir = directory.strip() or str(game_config.get("working_dir") or "").strip()
+    if install_dir:
+        install_dir = os.path.expanduser(install_dir)
+    elif exe:
+        install_dir = os.path.dirname(exe)
+
+    hints: DetectHints = {}
+    if exe:
+        hints["exe"] = exe
+        hints["process_name"] = path_basename_for_hint(exe)
+    if install_dir:
+        hints["install_dir"] = install_dir
+    return normalize_detect_hints(hints)
+
+
 def list_lutris_selections() -> List[GameSelection]:
     source = LauncherSource("Lutris")
-    return [GameSelection(game_id, name, "Lutris", source) for game_id, name in list_lutris_games()]
+    return [
+        GameSelection(
+            game_id,
+            name,
+            "Lutris",
+            source,
+            _lutris_detect_hints(executable, directory, configpath),
+        )
+        for game_id, name, executable, directory, configpath in _list_lutris_rows()
+    ]

@@ -5,7 +5,8 @@ import shutil
 from typing import List, Optional, Tuple
 import shlex
 
-from config.types import GameSelection, LauncherSource
+from config.types import DetectHints, GameSelection, LauncherSource
+from utils.utils import normalize_detect_hints
 
 SUPPORTED_EXTENSIONS = (".nsp", ".xci", ".nca", ".nro")
 TITLE_ID_PATTERN = re.compile(r"\[([0-9A-Fa-f]{16})\]")
@@ -129,6 +130,22 @@ def list_eden_games() -> List[Tuple[str, str]]:
     return games
 
 
+def _eden_detect_hints() -> Optional[DetectHints]:
+    command = get_eden_command()
+    if not command:
+        return None
+    hints: DetectHints = {"process_name": "eden"}
+    if not os.path.isabs(command):
+        resolved = shutil.which(command)
+        if resolved:
+            hints["exe"] = resolved
+    return normalize_detect_hints(hints)
+
+
 def list_eden_selections() -> List[GameSelection]:
     source = LauncherSource("Eden")
-    return [GameSelection(game_id, name, "Eden", source) for game_id, name in list_eden_games()]
+    hints = _eden_detect_hints()
+    return [
+        GameSelection(game_id, name, "Eden", source, hints)
+        for game_id, name in list_eden_games()
+    ]

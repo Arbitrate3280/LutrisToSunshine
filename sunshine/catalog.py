@@ -15,7 +15,7 @@ from display.command_wrap import (
 )
 from display.constants import FLATPAK_SPAWN_HOST_PREFIX
 from display.state import is_enabled as display_enabled
-from config.types import SunshineApp, SunshineAppReference, SunshinePrepCommand
+from config.types import DetectHints, SunshineApp, SunshineAppReference, SunshinePrepCommand
 from sunshine.connection import CONNECTION, SunshineConnection
 
 
@@ -211,11 +211,14 @@ def submit_command(
     image_path: str,
     *,
     connection: SunshineConnection = CONNECTION,
+    detect: Optional[DetectHints] = None,
     display_enabled_fn: Callable[[], bool] = display_enabled,
     wrap_fn: Callable[[Optional[str], str], Optional[str]] = wrap_command,
     prep_fn: Callable[[bool], List[SunshinePrepCommand]] = get_app_prep_commands,
     api_add_fn: ApiAdder = add_game_to_sunshine_api,
 ) -> None:
+    """Add one app entry. ``detect`` belongs to the shared intake seam and is
+    ignored here: Sunshine has no process-detection hints."""
     enabled = connection.server_name == "sunshine" and display_enabled_fn()
     if enabled:
         command = wrap_fn(command, "cmd") or command
