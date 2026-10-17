@@ -6,7 +6,9 @@ from typing import List, Optional, Tuple
 import shlex
 
 from config.types import DetectHints, GameSelection, LauncherSource
-from utils.utils import normalize_detect_hints
+from utils.utils import normalize_detect_hints, run_command
+
+EDEN_FLATPAK_ID = "dev.eden_emu.eden"
 
 SUPPORTED_EXTENSIONS = (".nsp", ".xci", ".nca", ".nro")
 TITLE_ID_PATTERN = re.compile(r"\[([0-9A-Fa-f]{16})\]")
@@ -33,7 +35,10 @@ def _candidate_home_dirs() -> List[str]:
 
 
 def get_eden_command() -> str:
-    """Get the Eden launch command (native binary or AppImage)."""
+    """Get the Eden launch command (Flatpak, native binary, or AppImage)."""
+    if run_command(["flatpak", "info", EDEN_FLATPAK_ID]).returncode == 0:
+        return f"flatpak run {EDEN_FLATPAK_ID}"
+
     if shutil.which("eden"):
         return "eden"
 
@@ -77,26 +82,44 @@ def _is_base_game_file(file_name: str) -> bool:
     return True
 
 
-def get_eden_game_dirs() -> List[str]:
-    """Get Eden game directories from qt-config.ini."""
+def get_eden_qt_config_paths() -> List[str]:
+    """Candidate qt-config.ini paths, highest priority first."""
+    home = os.path.expanduser("~")
+    xdg_config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    return [
+        os.path.join(home, ".var", "app", EDEN_FLATPAK_ID, "config", "eden", "qt-config.ini"),
+        os.path.join(xdg_config, "eden", "qt-config.ini"),
+    ]
+
+
+def _parse_qt_config_game_dirs(path: str) -> List[str]:
+    """Read game directories from a single qt-config.ini file."""
     game_dirs: List[str] = []
-    config_path = os.path.expanduser("~/.config/eden/qt-config.ini")
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as config:
+            for raw_line in config:
+                line = raw_line.strip()
+                match = re.match(r"Paths\\gamedirs\\\d+\\path=(.+)", line)
+                if not match:
+                    continue
+                game_dir = os.path.expanduser(match.group(1).strip())
+                # Ignore Eden virtual entries like SDMC/UserNAND/SysNAND.
+                if os.path.isabs(game_dir):
+                    game_dirs.append(game_dir)
+    except OSError:
+        pass
+    return game_dirs
 
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8", errors="ignore") as config:
-                for raw_line in config:
-                    line = raw_line.strip()
-                    match = re.match(r"Paths\\gamedirs\\\d+\\path=(.+)", line)
-                    if not match:
-                        continue
-                    path = os.path.expanduser(match.group(1).strip())
-                    # Ignore Eden virtual entries like SDMC/UserNAND/SysNAND.
-                    if os.path.isabs(path):
-                        game_dirs.append(path)
-        except OSError:
-            pass
 
+def get_eden_game_dirs() -> List[str]:
+    """Get Eden game directories from every existing qt-config.ini."""
+    game_dirs: List[str] = []
+    for path in get_eden_qt_config_paths():
+        if not os.path.isfile(path):
+            continue
+        for game_dir in _parse_qt_config_game_dirs(path):
+            if game_dir not in game_dirs:
+                game_dirs.append(game_dir)
     return game_dirs
 
 
@@ -135,7 +158,9 @@ def _eden_detect_hints() -> Optional[DetectHints]:
     if not command:
         return None
     hints: DetectHints = {"process_name": "eden"}
-    if not os.path.isabs(command):
+    if command.startswith("flatpak"):
+        hints["env_marker"] = {"key": "FLATPAK_ID", "value": EDEN_FLATPAK_ID}
+    elif not os.path.isabs(command):
         resolved = shutil.which(command)
         if resolved:
             hints["exe"] = resolved

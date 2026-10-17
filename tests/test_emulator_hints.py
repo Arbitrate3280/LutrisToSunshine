@@ -44,6 +44,13 @@ class EdenHintTests(unittest.TestCase):
             "exe": "/usr/bin/eden",
         })
 
+    @patch("launchers.eden.get_eden_command", return_value="flatpak run dev.eden_emu.eden")
+    def test_flatpak_hints(self, command):
+        self.assertEqual(eden._eden_detect_hints(), {
+            "process_name": "eden",
+            "env_marker": {"key": "FLATPAK_ID", "value": "dev.eden_emu.eden"},
+        })
+
     @patch("launchers.eden.get_eden_command", return_value="/opt/eden/eden.appimage")
     def test_appimage_hints(self, command):
         self.assertEqual(eden._eden_detect_hints(), {"process_name": "eden"})
